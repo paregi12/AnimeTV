@@ -5656,13 +5656,13 @@ const _API={
     }
 
     function fetchHiServer(eid,audio,mirror,cbx){
-      if (mirror!='vidstreaming'){
+      if (mirror!='Vidstreaming'){
         cbx(null);
         return;
       }
       var animeid=tipurl.substring(1);
       var epUri=__HIANIME.getUrl(
-        '/anime/zoro/watch?episodeId='+animeid+'$episode$'+eid+'$'+audio+'&server='+mirror
+        '/anime/zoro/watch?episodeId='+animeid+'$episode$'+eid+'$'+audio+'&server='+mirror.toLowerCase()
       );
       $ap(epUri,function(r){
         console.log(epUri);
@@ -5689,7 +5689,7 @@ const _API={
       // var mirror = ((pb.cfg_data.mirrorserver===true)||(pb.cfg_data.mirrorserver==1))?'vidcloud':'vidstreaming';
       var mirror = 'vidstreaming';
       for (var i=0;i<srv_d.length;i++){
-        if ((i==mrId) && (srv_d[i][2]!='HD-1')){
+        if (i==mrId){
           mirror=srv_d[i][2];
           break;
         }
@@ -5697,25 +5697,26 @@ const _API={
 
       console.warn("Mirror: "+mirror);
 
-      function hiFetched(dax,server_val){
+      function hiFetched(dax,server_val,audio){
         d.ep_servers=null;
         d.ep_streamdata=dax;
         d.stream_vurl  = "";
         d.ep_stream_sel=null;
         d.skip=[];
         d.servers=server_val;
+        d.streamtype=(audio=='dub')?"dub":"softsub";
         runCb(d);
       }
       fetchHiServer(eid,audio,mirror,function(d1){
         if (d1){
-          hiFetched(d1,server_val);
+          hiFetched(d1,server_val,audio);
           return;
         }
         else if (audio=='dub'){
           audio='sub';
           fetchHiServer(eid,audio,mirror,function(d2){
             if (d2){
-              hiFetched(d2,server_val);
+              hiFetched(d2,server_val,audio);
               return;
             }
             fetchServerFallback(d,srv_d,server_val);
@@ -5756,6 +5757,13 @@ const _API={
                 }
               }
             }
+
+            // vidstreaming
+            server_val.softsub.push({n:'Vidstreaming',p:server_val.softsub.length});
+            if (server_val.dub.length>0){
+              server_val.dub.push({n:'Vidstreaming',p:server_val.dub.length});
+            }
+
             hd.innerHTML='';
             fetchServer(d,eid,srv_d,server_val);
             return;
