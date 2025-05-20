@@ -251,26 +251,26 @@ var miruro={
   },
   providers:[
     'animepahe',
-    // 'zoro',
-    // 'animez',
+    'zoro',
+    'animez',
     // 'animekai',
   ],
   providers_mirror_key:[
     'ANIMEPAHE',
-    // 'ZORO',
-    // 'ANIMEZ',
+    'ZORO',
+    'ANIMEZ',
     // 'ANIMEKAI',
   ],
   providers_name:[
     'Animepahe',
-    // 'Zoro Hianime',
-    // 'AnimeZ',
+    'Zoro Hianime',
+    'AnimeZ',
     // 'AnimeKai',
   ],
   providers_features:[
     'Hardsub, Dub, Best Quality, Fast',
-    // 'Softsub, Dub, Multilang',
-    // 'Hardsub, Dub, Fast, Multi Mirror',
+    'Softsub, Dub, Multilang',
+    'Dub Only',//'Hardsub, Dub, Fast, Multi Mirror',
     // 'Hardsub, Dub',
     
   ],
@@ -923,6 +923,9 @@ var miruro={
           };
           if (oe.active){
             dat.out.epactive=i;
+            if (!oe.dub){
+              return 0;
+            }
           }
           dat.out.ep.push(oe);
         }
@@ -984,14 +987,22 @@ var miruro={
       if (r){
         var prov = miruro.providers_mirror_key[miruro.provider];
         if (prov in r){
-          for (var sid in r[prov]){
-            try{
-              if (fetchProviders(prov, r[prov][sid])){
-                foundProvider=true;
-                break;
-              }
-            }catch(e){}
-          }
+          var redo=false;
+          do{
+            redo=false;
+            for (var sid in r[prov]){
+              try{
+                if (fetchProviders(prov, r[prov][sid])){
+                  foundProvider=true;
+                  break;
+                }
+              }catch(e){}
+            }
+            if (prov!='ANIMEPAHE' && !foundProvider){
+              redo=true;
+              prov='ANIMEPAHE';
+            }
+          }while (redo);
         }
       }
 
