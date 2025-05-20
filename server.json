@@ -8,17 +8,17 @@
   "stream_domain2": "megaf.cc",
   "update": "1.1-240624",
 
-  "appnum": 590,
-  "appver": "5.9.0",
+  "appnum": 600,
+  "appver": "6.0.0",
   "appsize": "6.00 MB",
-  "appurl": "https://github.com/amarullz/AnimeTV/releases/download/5.9.0/animetv-5.9.0.apk",
+  "appurl": "https://github.com/amarullz/AnimeTV/releases/download/6.0.0/animetv-6.0.0.apk",
   "appnote": 
-    "- Tweak subtitles styles\n- Add reverse landscape support on playback\n- KAI: Fix subtitle without label (cannot select english)\n- Fix Kickass Search, Anilist Matching and vidstream as default mirror\n- Fix miruro home slideshow",  
+    "- Fix sources and hi, gojo, miruro\n- Fonts and translation updates\n- Fix sources domains",  
 
-  "pcnum": 590,
-  "pcver": "5.9.0",
-  "pcsize": "6.89 MB",
-  "pcurl": "https://github.com/amarullz/AnimeTV/releases/download/5.9.0/animetv-5.9.0.asar.gz",
+  "pcnum": 600,
+  "pcver": "6.0.0",
+  "pcsize": "6.9 MB",
+  "pcurl": "https://github.com/amarullz/AnimeTV/releases/download/6.0.0/animetv-6.0.0.asar.gz",
   "pcnote": 
-    "- Tweak subtitles styles\n- Add reverse landscape support on playback\n- KAI: Fix subtitle without label (cannot select english)\n- Fix Kickass Search, Anilist Matching and vidstream as default mirror\n- Fix miruro home slideshow"  
+    "- Fix sources and hi, gojo, miruro\n- Fonts and translation updates\n- Fix sources domains"
 }
