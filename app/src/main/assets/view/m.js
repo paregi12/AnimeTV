@@ -34,7 +34,7 @@ const __SOURCE_NAME=[
 const __SOURCE_DOMAINS=[
   ['animekai.to' ,'animekai.bz'],
   ['anix.to','anix.ac','anix.vc','anixtv.to'], // rip
-  ['hianime.to','hianime.sx','hianime.nz', 'aniwatchtv.to','hianime.bz'],
+  ['hianime.to','hianime.sx','hianime.nz', 'aniwatchtv.to','hianime.bz','hianimez.is','hianimez.to','hianime.pe'],
   ['aniwatchtv.to'],
   ['animeflix.live','animeflix.gg','animeflix.li'], // rip
   ['kaa.mx','kaas.to','kaas.ro'],
@@ -5618,7 +5618,7 @@ const _API={
       }
     }
 
-    function fetchServerFallback(d, srv_d){
+    function fetchServerFallback(d, srv_d,server_val){
       console.log('HI FALLBACK');
       var dserver={
         'raw':[],
@@ -5648,6 +5648,7 @@ const _API={
             d.stream_vurl  = "";
             d.ep_stream_sel=null;
             d.skip=[];
+            d.servers=server_val;
             runCb(d);
           }
         },1,i);
@@ -5655,6 +5656,10 @@ const _API={
     }
 
     function fetchHiServer(eid,audio,mirror,cbx){
+      if (mirror!='vidstreaming'){
+        cbx(null);
+        return;
+      }
       var animeid=tipurl.substring(1);
       var epUri=__HIANIME.getUrl(
         '/anime/zoro/watch?episodeId='+animeid+'$episode$'+eid+'$'+audio+'&server='+mirror
@@ -5664,9 +5669,12 @@ const _API={
         if (r.ok){
           try{
             var kr = JSON.parse(r.responseText);
+            console.log(kr);
             if ('sources' in kr){
-              cbx(kr);
-              return;
+              if (kr.sources.length>0){
+                cbx(kr);
+                return;
+              }
             }
           }
           catch(e){}
@@ -5675,34 +5683,46 @@ const _API={
       });
     }
 
-    function fetchServer(d,eid,srv_d){
+    function fetchServer(d,eid,srv_d,server_val){
       var audio = (_API.currentStreamType==2||pb.cfg_data.dubaudio)?'dub':'sub';
-      var mirror = ((pb.cfg_data.mirrorserver===true)||(pb.cfg_data.mirrorserver==1))?'vidcloud':'vidstreaming';
-      function hiFetched(dax){
+      var mrId = (pb.cfg_data.mirrorserver===true)?1:pb.cfg_data.mirrorserver;
+      // var mirror = ((pb.cfg_data.mirrorserver===true)||(pb.cfg_data.mirrorserver==1))?'vidcloud':'vidstreaming';
+      var mirror = 'vidstreaming';
+      for (var i=0;i<srv_d.length;i++){
+        if ((i==mrId) && (srv_d[i][2]!='HD-1')){
+          mirror=srv_d[i][2];
+          break;
+        }
+      }
+
+      console.warn("Mirror: "+mirror);
+
+      function hiFetched(dax,server_val){
         d.ep_servers=null;
         d.ep_streamdata=dax;
         d.stream_vurl  = "";
         d.ep_stream_sel=null;
         d.skip=[];
+        d.servers=server_val;
         runCb(d);
       }
       fetchHiServer(eid,audio,mirror,function(d1){
         if (d1){
-          hiFetched(d1);
+          hiFetched(d1,server_val);
           return;
         }
         else if (audio=='dub'){
           audio='sub';
           fetchHiServer(eid,audio,mirror,function(d2){
             if (d2){
-              hiFetched(d2);
+              hiFetched(d2,server_val);
               return;
             }
-            fetchServerFallback(d,srv_d);
+            fetchServerFallback(d,srv_d,server_val);
           });
           return;
         }
-        fetchServerFallback(d,srv_d);
+        fetchServerFallback(d,srv_d,server_val);
       });
     }
 
@@ -5716,17 +5736,28 @@ const _API={
             
 
             var srv_d=[];
+            var server_val={
+              softsub:[],
+              dub:[]
+            };
 
             // pb.cfg_data.mirrorserver
             for (var i=0;i<srv.length;i++){
               var svid=srv[i].getAttribute('data-id');
               var svtp=srv[i].getAttribute('data-type');
+              var svnm=srv[i].querySelector('a.btn').outerText;
               if (svtp=='sub'||svtp=='dub'||svtp=='raw'){
-                srv_d.push([svid,svtp]);
+                srv_d.push([svid,svtp,svnm]);
+                if (svtp=='sub'){
+                  server_val.softsub.push({n:svnm,p:server_val.softsub.length});
+                }
+                else if (svtp=='dub'){
+                  server_val.dub.push({n:svnm,p:server_val.dub.length});
+                }
               }
             }
             hd.innerHTML='';
-            fetchServer(d,eid,srv_d);
+            fetchServer(d,eid,srv_d,server_val);
             return;
           }
           catch(e){
@@ -9916,6 +9947,7 @@ const pb={
 
     if (!dt.ep_servers && dt.ep_streamdata){
       var srm=dt.ep_streamdata;
+      pb.data.servers=dt.servers;
       console.log(srm);
       try{
         dt.stream_vurl =srm.sources[0].url;
