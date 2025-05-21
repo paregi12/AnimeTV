@@ -20,7 +20,8 @@ function kaiCodexInit(keys){
       var o = [];
       var l = n.length;
       for (var i = 0; i < l; i++) {
-          o.push(homeKeys[n.charCodeAt(i)][j].charAt(i));
+          var ky=homeKeys[n.charCodeAt(i)][j];
+          o.push(ky.charAt(i%ky.length));
       }
       n=btoa(o.join(''));
     }
@@ -36,7 +37,8 @@ function kaiCodexInit(keys){
       for (var i = 0; i < l; i++) {
           var c=n.charAt(i);
           for (var k=0;k<homeKeys.length;k++){
-              var ck=homeKeys[k][kl-(j+1)].charAt(i);
+              var ky=homeKeys[k][kl-(j+1)];
+              var ck=ky.charAt(i%ky.length);
               if (ck===c){
                   c=String.fromCharCode(k);
                   break;
