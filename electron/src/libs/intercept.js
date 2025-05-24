@@ -96,7 +96,7 @@ const intercept={
   /* check for update */
   async init_server_vars(){
     let f=await net.fetch(
-      "https://raw.githubusercontent.com/amarullz/AnimeTV/master/server.json?"+((new Date()).getTime()),
+      "https://raw.githubusercontent.com/amarullz/kaicodex/main/shr/server.json?"+((new Date()).getTime()),
       {
         method: "GET",
         bypassCustomProtocolHandlers: false

@@ -5,8 +5,8 @@ const __DNS=('_JSAPI' in window)?_JSAPI.dns():"animekai.to";
 const __SD=('_JSAPI' in window)?_JSAPI.getSd():1;
 
 /* Change Removed Sources */
-if (__SD==2){
-  _JSAPI.setSd(1);
+if (__SD==1 || __SD==2){
+  _JSAPI.setSd(6);
   _JSAPI.reloadHome();
 }
 if (__SD==4){
@@ -2414,13 +2414,121 @@ var kaas={
 /******************* ANIMEKAI *************************/
 if (__SDKAI){
   // AnimeKai Codex
-  $ap('https://raw.githubusercontent.com/amarullz/AnimeTV/refs/heads/master/tools/utils/kai.js?'+$time(),function(r){
-    if (r.ok){
-      try{
-        eval(r.responseText);
-      }catch(e){}
+  // $ap('https://raw.githubusercontent.com/amarullz/kaicodex/refs/heads/main/shr/tools/utils/kai.js?'+$time(),function(r){
+  //   if (r.ok){
+  //     try{
+  //       eval(r.responseText);
+  //     }catch(e){}
+  //   }
+  // });
+
+  function kaiCodexInit(keys){
+  var homeKeys=[];
+  var megaKeys=[];
+  for (var i=0;i<keys.kai.length;i++){
+      homeKeys[i]=[];
+      for (var j=0;j<keys.kai[i].length;j++){
+          homeKeys[i].push(atob(keys.kai[i][j]));
+      }
+  }
+  for (var i=0;i<keys.mega.length;i++){
+      megaKeys[i]=[];
+      for (var j=0;j<keys.mega[i].length;j++){
+          megaKeys[i].push(atob(keys.mega[i][j]));
+      }
+  }
+  function encrypt$(n){
+    n = encodeURIComponent(n);
+    var kl=homeKeys[0].length;
+    for (var j=0;j<kl;j++){
+      var o = [];
+      if (j==kl-3){
+        o=[137, 225, 189, 140, 183, 13, 184, 13, 119, 147];
+      }
+      var l = n.length;
+      for (var i = 0; i < l; i++) {
+          var ky=homeKeys[n.charCodeAt(i)][j];
+          o.push(ky.charAt(i%ky.length));
+      }
+      n=btoa(o.join(''));
     }
-  });
+    return n.replace(/\//g, '_').replace(/\+/g, '-').replace(/\=/g, '');
+  }
+  function decrypt$(n){
+    n = n.replace(/_/g, '/').replace(/-/g, '+');
+    var kl=homeKeys[0].length;
+    for (var j=0;j<kl;j++){
+      n=atob(n);
+      var l = n.length;
+      var o = [];
+      for (var i = 0; i < l; i++) {
+          var c=n.charAt(i);
+          for (var k=0;k<homeKeys.length;k++){
+              var ky=homeKeys[k][kl-(j+1)];
+              var ck=ky.charAt(i%ky.length);
+              if (ck===c){
+                  c=String.fromCharCode(k);
+                  break;
+              }
+          }
+          o.push(c);
+      }
+      n=o.join('')
+    }
+    return decodeURIComponent(n);
+  }
+  function megaDec(n){
+    n=n.replace(/_/g, '/').replace(/-/g, '+');
+    var kl=megaKeys[0].length;
+    for (var j=1;j<kl;j++){
+      console.log("ATOB = "+j+" -> "+n);
+      n=atob(n);
+      var o = [];
+      var l = n.length;
+      for (var i = 0; i < l; i++) {
+          var np=n.charCodeAt(i);
+          var ckey=megaKeys[np][j];
+          o.push(ckey.charCodeAt(i%ckey.length));
+      }
+      n=String.fromCharCode.apply(null,o);
+    }
+    return decodeURIComponent(n);
+  }
+  window.KAICODEX={
+    enc:encrypt$,
+    dec:decrypt$,
+    decMega:megaDec
+  };
+}
+$ap('https://raw.githubusercontent.com/amarullz/kaicodex/refs/heads/main/generated/gen/keys-hash.json?'+$time(),function(r){
+  if (r.ok){
+    var hash=JSON.parse(r.responseText);
+    var cacheArg="?"+$time();
+    if (hash.hash==localStorage.getItem('kaicodex_hash')){
+      cacheArg="";
+      var cachedKey=localStorage.getItem('kaicodex_key');
+      if (cachedKey){
+        try{
+          var keys=JSON.parse(cachedKey);
+          if (keys && keys.kai && keys.mega){
+            kaiCodexInit(keys);
+            return;
+          }
+        }catch(e){}
+      }
+    }
+    $ap('https://raw.githubusercontent.com/amarullz/kaicodex/refs/heads/main/generated/gen/keys.json'+cacheArg,function(r){
+      if (r.ok){
+        kaiCodexInit(JSON.parse(r.responseText));
+        try{
+          localStorage.setItem('kaicodex_hash',hash.hash);
+          localStorage.setItem('kaicodex_key',r.responseText);
+        }catch(e){}
+      }
+    });
+  }
+});
+
 }
 const kai={
   sdns:'megaup.cc',
@@ -2970,15 +3078,7 @@ const kai={
 
 
 /* ANIWAVE & ANIX SOURCE */
-// if (__SD<=2){
-//   $ap('https://raw.githubusercontent.com/amarullz/AnimeTV/master/tools/utils/vrf.js?'+$time(),function(r){
-//     if (r.ok){
-//       try{
-//         eval(r.responseText+"\n\nwindow.VRF=VRF;");
-//       }catch(e){}
-//     }
-//   });
-// }
+
 const wave={
   ns:'https://'+__DNS,
   origin:{
@@ -4596,7 +4696,7 @@ const _API={
   
   html_class:'',
 
-  wallpaper_base:'https://raw.githubusercontent.com/amarullz/AnimeTV/master/tools/wallpaper/',
+  wallpaper_base:'https://raw.githubusercontent.com/amarullz/kaicodex/main/shr/tools/wallpaper/',
   wallpaper_data:[],
   wallpaper_list:function(cb){
     if (_API.wallpaper_data.length>0){
@@ -4618,7 +4718,7 @@ const _API={
 
   rplustxt:"R+",
 
-  ppic_base:'https://raw.githubusercontent.com/amarullz/AnimeTV/master/tools/ppic/',
+  ppic_base:'https://raw.githubusercontent.com/amarullz/kaicodex/main/shr/tools/ppic/',
   ppic_data:[],
   ppic_list:function(cb){
     if (_API.ppic_data.length>0){
@@ -6507,7 +6607,7 @@ const _API={
   },
 
   /* Fetch animetv-info last message */
-  discord_info_url:"https://raw.githubusercontent.com/amarullz/AnimeTV/refs/heads/master/tools/home-info.json",
+  discord_info_url:"https://raw.githubusercontent.com/amarullz/kaicodex/refs/heads/main/shr/tools/home-info.json",
   discordFetch:function(cb){
     $ap(_API.discord_info_url+"?"+$tick(), cb);
   }
@@ -22178,7 +22278,7 @@ const touchHelper={
     }
     window._ELECTRON_CHECK_UPDATE=function(ismenu){
       _JSAPI.storeSet('__noautoupdate','0');
-      $ap('https://raw.githubusercontent.com/amarullz/AnimeTV/refs/heads/master/server.json',function(r){
+      $ap('https://raw.githubusercontent.com/amarullz/kaicodex/refs/heads/main/shr/server.json',function(r){
         if (r.ok){
           try{
             var update=JSON.parse(r.responseText);
