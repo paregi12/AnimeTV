@@ -1,6 +1,6 @@
 {
     "name": "animetv",
-    "version": "6.0.0",
+    "version": "6.0.2",
     "description": "AnimeTV for Desktop",
     "main": "electron/src/animetv.js",
     "scripts": {
