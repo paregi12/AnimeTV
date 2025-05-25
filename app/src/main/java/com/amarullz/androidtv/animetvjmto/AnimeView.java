@@ -430,7 +430,6 @@ import javax.crypto.spec.SecretKeySpec;
     activity = mainActivity;
 
     initSysConfig();
-
     if (BuildConfig.DEBUG) {
       WebView.setWebContentsDebuggingEnabled(true);
     }
@@ -1100,6 +1099,12 @@ import javax.crypto.spec.SecretKeySpec;
         return new WebResourceResponse(http.ctype[0], http.ctype[1], stream);
       } catch (Exception ignored) {}
       return aApi.badRequest;
+    }
+    else if (url.contains("/jquery.min.js") && (Conf.SOURCE_DOMAIN==1)){
+      Log.d(_TAG, "JQUERY REQUEST " + url);
+      return aApi.defaultRequest(view,request,
+          aApi.assetsString("inject/megaup.js"),"inject-html"
+      );
     }
     else if (url.startsWith("https://www.youtube.com/embed/")||url.startsWith(
         "https://www.youtube-nocookie.com/embed/")){

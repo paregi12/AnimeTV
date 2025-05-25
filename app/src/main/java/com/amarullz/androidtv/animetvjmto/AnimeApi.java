@@ -424,6 +424,7 @@ public class AnimeApi extends WebViewClient {
       String str;
       while ((str = br.readLine()) != null) {
         sb.append(str);
+        sb.append("\n");
       }
       str=sb.toString();
       br.close();
@@ -759,7 +760,7 @@ public class AnimeApi extends WebViewClient {
 
       // Inject
       if (inject!=null) {
-        if (injectContentType=="inject-html"){
+        if (Objects.equals(injectContentType, "inject-html")){
           injectString(http.body, inject);
         }
         else {

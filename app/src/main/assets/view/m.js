@@ -2773,7 +2773,8 @@ window.KAICODEX={
         },kai.sdns);
       }
       else{
-        MEGAUP.ifr=$n('iframe',{display:'none'},{src:url,frameborder:'0'},pb.pb,'');
+        MEGAUP.ifr=$n('iframe','',{src:url,frameborder:'0'},pb.pb,'');
+        MEGAUP.ifr.style.display='none';
         window.addEventListener('message',function(e) {
           var pd=JSON.parse(e.data);
           if (pd){
