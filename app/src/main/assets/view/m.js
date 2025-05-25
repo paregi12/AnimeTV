@@ -2796,6 +2796,9 @@ window.KAICODEX={
             }
           }
         });
+        try{
+          pb.pb_track_pos.innerHTML='PREPARING ENCRYPTION 🤩';
+        }catch(e){}
       }
     }
   };

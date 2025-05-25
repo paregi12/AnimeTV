@@ -83,5 +83,6 @@ _trueWindow.decryptMega=null;
         parent.postMessage(JSON.stringify({
             megaupcmd:"initial"
         }),'*');
+        document.body.innerHTML='';
     }
 })(_trueWindow.$);
