@@ -86,7 +86,9 @@ const intercept={
   /* init constant strings & register protocol */
   playerInjectString:"",
   youtubeInjectString:"",
+  megaupInjectString:"",
   init(){
+    intercept.megaupInjectString=common.readfile(common.injectPath("megaup.js"));
     intercept.playerInjectString=common.readfile(common.injectPath("view_player.html"));
     intercept.youtubeInjectString=common.readfile(common.injectPath("yt.html"));
     protocol.handle('https', intercept.handler);
@@ -276,6 +278,11 @@ const intercept={
         p = p.split('?')[0];
         p = p.split('#')[0];
         return net.fetch(common.viewRequest(p));
+      }
+
+      /* https://megaup.cc/e/ */
+      else if (req.url.endsWith("/jquery.min.js") && (common.main.vars.sd==1)){
+        return intercept.fetchInject(req.url, req, intercept.megaupInjectString, true);
       }
 
       else if (url.pathname.startsWith('/__cache_subtitle')){
