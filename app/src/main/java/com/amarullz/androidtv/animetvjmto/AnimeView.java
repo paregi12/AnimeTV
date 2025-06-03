@@ -34,7 +34,6 @@ import android.view.LayoutInflater;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
@@ -60,16 +59,12 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
-import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.TrackGroup;
-import androidx.media3.common.Tracks;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.dash.DashMediaSource;
-import androidx.media3.exoplayer.source.LoadEventInfo;
-import androidx.media3.exoplayer.source.MediaLoadData;
 import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 import androidx.media3.exoplayer.source.TrackGroupArray;
@@ -92,7 +87,6 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.MalformedURLException;
@@ -232,6 +226,8 @@ import javax.crypto.spec.SecretKeySpec;
 
   @SuppressLint("SetJavaScriptEnabled")
   public void webviewInitConfig(WebView wv){
+    wv.setWebViewClient(this);
+
     WebSettings webSettings = wv.getSettings();
 
     webSettings.setJavaScriptEnabled(true);
@@ -259,7 +255,6 @@ import javax.crypto.spec.SecretKeySpec;
     webSettings.setGeolocationEnabled(false);
 
     wv.addJavascriptInterface(new JSViewApi(), "_JSAPI");
-    wv.setWebViewClient(this);
     wv.setLayerType(View.LAYER_TYPE_HARDWARE, null);
   }
 
@@ -920,10 +915,20 @@ import javax.crypto.spec.SecretKeySpec;
     Uri uri = request.getUrl();
     String url = uri.toString();
     String host = uri.getHost();
+
     String accept = request.getRequestHeaders().get("Accept");
     String path=uri.getPath();
     if (path==null) {
       path = "/";
+    }
+
+
+
+    if (host.contains("animekai.bz") && !request.isForMainFrame()){
+      Log.d(_TAG, "ANIMEKAI REQUEST :: " + url);
+      if (path.contains("manifest") || path.contains("/challenge-platform/")) {
+        return aApi.badRequest;
+      }
     }
 
     if (host==null||accept==null) return aApi.badRequest;
@@ -1101,7 +1106,7 @@ import javax.crypto.spec.SecretKeySpec;
       return aApi.badRequest;
     }
     else if (url.contains("/jquery.min.js") && (Conf.SOURCE_DOMAIN==1)){
-      Log.d(_TAG, "JQUERY REQUEST " + url);
+      Log.d(_TAG, "ANIMEKAI REQUEST JQUERY REQUEST " + url);
       return aApi.defaultRequest(view,request,
           aApi.assetsString("inject/megaup.js"),"inject-html"
       );

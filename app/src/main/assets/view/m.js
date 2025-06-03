@@ -2413,15 +2413,7 @@ var kaas={
 
 /******************* ANIMEKAI *************************/
 if (__SDKAI){
-  // AnimeKai Codex
-  // $ap('https://raw.githubusercontent.com/amarullz/kaicodex/refs/heads/main/shr/tools/utils/kai.js?'+$time(),function(r){
-  //   if (r.ok){
-  //     try{
-  //       eval(r.responseText);
-  //     }catch(e){}
-  //   }
-  // });
-
+  const _CODEXURL='https://c-kai-8090.amarullz.com/';
   window.KAICODEX={
     reqIdn:0,
     reqCbs:{},
@@ -2430,68 +2422,136 @@ if (__SDKAI){
   };
 
   /* init home */
-  (function(){
-    window.KAICODEX.ifr=$n('iframe','',{src:"https://animekai.to/home",frameborder:'0'},document.body,'');
-    window.addEventListener('message',function(e) {
-      var pd=JSON.parse(e.data);
-      if (pd){
-        console.log(["KAI ONMESSAGE", pd])
-        if ('kaicmd' in pd){
-          if (pd.kaicmd=='initial'){
-            window.KAICODEX.initialized=true;
-          }
-          else if (pd.kaicmd=='codexresult'){
-            if (pd.kaiid in KAICODEX.reqCbs){
-              var cb=KAICODEX.reqCbs[pd.kaiid];
-              try{
-                cb(pd.data);
-              }catch(e){
-                cb(null);
+  if (_ISELECTRON){
+    /* init home */
+    (function(){
+      window.KAICODEX.ifr=$n('iframe','',{src:"https://animekai.to/home",frameborder:'0'},document.body,'');
+      window.addEventListener('message',function(e) {
+        var pd=JSON.parse(e.data);
+        if (pd){
+          console.log(["KAI ONMESSAGE", pd])
+          if ('kaicmd' in pd){
+            if (pd.kaicmd=='initial'){
+              window.KAICODEX.initialized=true;
+            }
+            else if (pd.kaicmd=='codexresult'){
+              if (pd.kaiid in KAICODEX.reqCbs){
+                var cb=KAICODEX.reqCbs[pd.kaiid];
+                try{
+                  cb(pd.data);
+                }catch(e){
+                  cb(null);
+                }
+                delete KAICODEX.reqCbs[pd.kaiid];
               }
-              delete KAICODEX.reqCbs[pd.kaiid];
             }
           }
         }
-      }
-    });
-    window.KAICODEX.enc=function(txt,cbDec){
-      if (!window.KAICODEX.initialized){
-        setTimeout(function(){
-          window.KAICODEX.enc(txt,cbDec);
-        },500);
-        return;
-      }
-      var currId = ++window.KAICODEX.reqIdn;
-      window.KAICODEX.reqCbs[currId]=cbDec;
-      window.KAICODEX.ifr.contentWindow.postMessage(JSON.stringify({
-        kaicmd:'encrypt',
-        kaiid:currId,
-        data:txt
-      }),'*');
-    };
-    window.KAICODEX.dec=function(txt,cbDec){
-      if (!window.KAICODEX.initialized){
-        setTimeout(function(){
-          window.KAICODEX.dec(txt,cbDec);
-        },500);
-        return;
-      }
-      var currId = ++window.KAICODEX.reqIdn;
-      window.KAICODEX.reqCbs[currId]=cbDec;
-      window.KAICODEX.ifr.contentWindow.postMessage(JSON.stringify({
-        kaicmd:'decrypt',
-        kaiid:currId,
-        data:txt
-      }),'*');
-    };
-  })();
+      });
+      window.KAICODEX.enc=function(txt,cbDec){
+        if (!window.KAICODEX.initialized){
+          setTimeout(function(){
+            window.KAICODEX.enc(txt,cbDec);
+          },500);
+          return;
+        }
+        var currId = ++window.KAICODEX.reqIdn;
+        window.KAICODEX.reqCbs[currId]=cbDec;
+        window.KAICODEX.ifr.contentWindow.postMessage(JSON.stringify({
+          kaicmd:'encrypt',
+          kaiid:currId,
+          data:txt
+        }),'*');
+      };
+      window.KAICODEX.dec=function(txt,cbDec){
+        if (!window.KAICODEX.initialized){
+          setTimeout(function(){
+            window.KAICODEX.dec(txt,cbDec);
+          },500);
+          return;
+        }
+        var currId = ++window.KAICODEX.reqIdn;
+        window.KAICODEX.reqCbs[currId]=cbDec;
+        window.KAICODEX.ifr.contentWindow.postMessage(JSON.stringify({
+          kaicmd:'decrypt',
+          kaiid:currId,
+          data:txt
+        }),'*');
+      };
+    })();
+  }
+  else{
+    /* non electron home codex */
+    (function(){
+      window.KAICODEX.enc=function(txt,cbDec){
+        $ap(_CODEXURL+"?f=e",function(r){
+          if (r.ok){
+            cbDec(r.responseText);
+            return;
+          }
+          cbDec(null);
+        },{
+          'Content-Type':'text/plain',
+          'X-Post-Body':txt
+        });
+      };
+      window.KAICODEX.dec=function(txt,cbDec){
+        $ap(_CODEXURL+"?f=d",function(r){
+          if (r.ok){
+            cbDec(r.responseText);
+            return;
+          }
+          cbDec(null);
+        },{
+          'Content-Type':'text/plain',
+          'X-Post-Body':txt
+        });
+      };
+    })();
+  }
 
   /* Presistent MegaUp Decrypt */
+  window.MEGAUPURL={
+    decMega:function(url, cbDec){
+      var megaId=url.split('/');
+      megaId=megaId[megaId.length-1];
+      var megaUrl="/media/"+megaId;
+      kai.req(megaUrl,function(r2){
+        if (r2.ok){
+          try{
+            var rs2=JSON.parse(r2.responseText);
+            $ap(_CODEXURL+"?f=m",function(r){
+              if (r.ok){
+                try{
+                  cbDec(JSON.parse(r.responseText));
+                  return;
+                }catch(e){}
+              }
+              cbDec(null);
+            },{
+              'Content-Type':'text/plain',
+              'X-Post-Body':rs2.result
+            });
+            return;
+          }catch(e){}
+        }
+        cbDec(null);
+      },kai.sdns);
+    }
+  };
+
   window.MEGAUP={
     reqIdn:0,
     reqCbs:{},
     ifr:null,
     decMega:function(url, cbDec){
+      /* 
+      if (megaupurl){
+        window.MEGAUPURL.decMega(url,cbDec);
+        return;
+      }
+      */
+
       var megaId=url.split('/');
       megaId=megaId[megaId.length-1];
       var megaUrl="/media/"+megaId;
@@ -2542,7 +2602,6 @@ if (__SDKAI){
       }
     }
   };
-
 
 }
 const kai={
@@ -4063,6 +4122,22 @@ function $a(uri, cb, hdr, pd){
   /* Post Request */
   var ispost=false;
   var postdata='';
+
+  if (hdr && ('X-Post-Body' in hdr)){
+    if (_ISELECTRON){
+      hdr.post=hdr['X-Post-Body'];
+      delete hdr['X-Post-Body'];
+    }
+    else{
+      hdr['X-Post-Prox']='text/plain';
+      if ('Content-Type' in hdr){
+        hdr['X-Post-Prox']=hdr['Content-Type'];
+      }
+      hdr['Post-Body']=hdr['X-Post-Body'];
+      delete hdr['X-Post-Body'];
+    }
+  }
+
   try{
     if (hdr && hdr!==1){
       if ('post' in hdr){
