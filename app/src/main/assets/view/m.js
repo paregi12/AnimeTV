@@ -4123,20 +4123,22 @@ function $a(uri, cb, hdr, pd){
   var ispost=false;
   var postdata='';
 
-  if (hdr && ('X-Post-Body' in hdr)){
-    if (_ISELECTRON){
-      hdr.post=hdr['X-Post-Body'];
-      delete hdr['X-Post-Body'];
-    }
-    else{
-      hdr['X-Post-Prox']='text/plain';
-      if ('Content-Type' in hdr){
-        hdr['X-Post-Prox']=hdr['Content-Type'];
+  try{
+    if (hdr && (hdr!==1) && ('X-Post-Body' in hdr)){
+      if (_ISELECTRON){
+        hdr.post=hdr['X-Post-Body'];
+        delete hdr['X-Post-Body'];
       }
-      hdr['Post-Body']=hdr['X-Post-Body'];
-      delete hdr['X-Post-Body'];
+      else{
+        hdr['X-Post-Prox']='text/plain';
+        if ('Content-Type' in hdr){
+          hdr['X-Post-Prox']=hdr['Content-Type'];
+        }
+        hdr['Post-Body']=hdr['X-Post-Body'];
+        delete hdr['X-Post-Body'];
+      }
     }
-  }
+  }catch(e){}
 
   try{
     if (hdr && hdr!==1){
