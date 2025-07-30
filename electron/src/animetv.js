@@ -77,9 +77,10 @@ const main={
       backgroundColor: '#000000',
       icon:common.path("/tools/logo-design/animetv-logo/animetv-logo-square.png"),
       webPreferences: {
-        webSecurity: false,
+        webSecurity: true,
         nodeIntegration: true,
         nodeIntegrationInSubFrames:true,
+        nodeIntegrationInWorker: true,
         contextIsolation: true,
         sandbox: false,
         preload: common.path("/electron/src/preload.js"),

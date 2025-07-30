@@ -280,7 +280,7 @@ const intercept={
         return net.fetch(common.viewRequest(p));
       }
 
-      /* https://megaup.cc/e/ */
+      /* https://megaup.site/e/ */
       else if (req.url.endsWith("/jquery.min.js") && (common.main.vars.sd==1)){
         return intercept.fetchInject(req.url, req, intercept.megaupInjectString, true);
       }
@@ -490,7 +490,7 @@ const intercept={
       else if (url.hostname.includes("rosebudemphasizelesson.com")||
         url.hostname.includes("simplewebanalysis.com")||
         url.hostname.includes("addthis.com")||
-        url.hostname.includes("amung.us")||
+        // url.hostname.includes("amung.us")||
         url.hostname.includes("www.googletagmanager.com")||
         url.hostname.includes("megastatics.com")||
         url.hostname.includes("ontosocietyweary.com")||

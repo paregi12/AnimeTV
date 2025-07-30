@@ -13,6 +13,10 @@ if (__SD==4){
   _JSAPI.setSd(3);
   _JSAPI.reloadHome();
 }
+if (__SD==7){
+  _JSAPI.setSd(1);
+  _JSAPI.reloadHome();
+}
 
 /* Source Constants */
 const __SDKAI=(__SD==1);
@@ -2605,7 +2609,7 @@ if (__SDKAI){
 
 }
 const kai={
-  sdns:'megaup.cc',
+  sdns:'megaup.site',
   dns:'animekai.to',
   req(u,cb,vdns){
     if (!vdns){
@@ -4760,7 +4764,7 @@ const _API={
         if (
           !__SD7 && !__SD8 && !__SDKAI &&
           (src_ori.indexOf("#dash")==-1)
-          && (src_ori.indexOf("megaup.cc")==-1)
+          && (src_ori.indexOf("megaup.site")==-1)
           && (src_ori.indexOf("prxy.miruro.to")==-1)
           && (src_ori.indexOf("mp4upload.com")==-1)
           && (src_ori.indexOf("netmagcdn.com")==-1)
@@ -15570,7 +15574,9 @@ const home={
       if (!seldomain){
         seldomain=__SOURCE_DOMAINS[i][0];
       }
-      if ((i==4)||(i==1)||(i==3)) {
+
+      /* SKIP THIS SOURCES */
+      if ((i==4)||(i==1)||(i==3)||(i==6)) {
         /* Parental will not work on source 5 */
         continue;
       }
