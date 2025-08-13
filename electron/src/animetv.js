@@ -50,6 +50,9 @@ const main={
     var dw = mainDisplay.size.width * 3 / 4;
     var dh = mainDisplay.size.height * 3 / 4;
 
+    app.userAgentFallback = common.UAG;
+    app.userAgentOverride = common.UAG;
+
     /* init values */
     if ('__sd' in common.config){
       main.vars.sd=common.config.__sd;

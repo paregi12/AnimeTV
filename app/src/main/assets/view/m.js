@@ -41,7 +41,7 @@ const __SOURCE_DOMAINS=[
   ['hianime.to','hianime.sx','hianime.nz', 'aniwatchtv.to','hianime.bz','hianimez.is','hianimez.to','hianime.pe'],
   ['aniwatchtv.to'],
   ['animeflix.live','animeflix.gg','animeflix.li'], // rip
-  ['kaa.mx' /*,'kaas.to','kaas.ro'*/ ],
+  ['kaa.mx' ,'kaa.to' /*,'kaas.ro'*/ ],
   ['api.gojo.wtf'],
   ['www.miruro.tv']
 ];
@@ -2409,7 +2409,7 @@ var kaas={
         return;
       },
       {
-        "X-Ref-Prox":"https://www1.kickassanime.mx/"
+        "X-Ref-Prox":"https://kaa.to/"
       });
     }
   }
