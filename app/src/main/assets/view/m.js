@@ -31,6 +31,12 @@ var _USE_TOUCH=true;
 var _TOUCH=false;
 var _ISELECTRON=('isElectron' in _JSAPI);
 
+/* no-kai on electron */
+if (__SD==1 && _ISELECTRON){
+  _JSAPI.setSd(3);
+  setTimeout(function(){ _JSAPI.reloadHome(); },500);
+}
+
 const __SOURCE_NAME=[
   'AnimeKAI', 'Anix', 'Hianime', 'Aniwatch', 'Animeflix', 'KickAss', 'Gojo', 'Miruro'
 ];
@@ -1878,7 +1884,7 @@ var kaas={
               hasod=true;
               od=di;
             }
-          }
+          }/*
           else if (di.name=='BirdStream'){
             bs=di;
             view_data.servers[stid].push(
@@ -1888,7 +1894,7 @@ var kaas={
               hasod=true;
               od=di;
             }
-          }
+          }*/
           else if (di.name=='CatStream'){
             bs=di;
             view_data.servers[stid].push(
@@ -10302,6 +10308,10 @@ const pb={
               if (r.responseText){
                 try{
                   var jv=JSON.parse(r.responseText);
+
+                  pb.data.stream_vurl = jv.sources[0].file;
+                  cb(pb.data.stream_vurl);
+
                   /* Load Intro / Outro */
                   try{
                     var st=jv.intro.start;
@@ -10345,7 +10355,6 @@ const pb={
         $a('/__cache_subtitle/clear?t='+$tick(),function(r){
           setTimeout(initSubtitle,500);
         });
-        
       }
       cb(null);
       return;
@@ -15576,7 +15585,7 @@ const home={
       }
 
       /* SKIP THIS SOURCES */
-      if ((i==4)||(i==1)||(i==3)||(i==6)) {
+      if ((i==4)||(i==1)||(i==3)||(i==6)||(i==0 && _ISELECTRON)) {
         /* Parental will not work on source 5 */
         continue;
       }
