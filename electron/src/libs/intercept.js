@@ -280,7 +280,7 @@ const intercept={
         return net.fetch(common.viewRequest(p));
       }
 
-      /* https://megaup.site/e/ */
+      /* https://megaup.live/e/ */
       else if (req.url.endsWith("/jquery.min.js") && (common.main.vars.sd==1)){
         return intercept.fetchInject(req.url, req, intercept.megaupInjectString, true);
       }

@@ -32,7 +32,7 @@ public class Conf {
   // History
   // * vidplay.site
   public static String STREAM_DOMAIN = "krussdomi.com"; // "vid2a41.site";
-  public static String STREAM_DOMAIN1 = "megaup.site";
+  public static String STREAM_DOMAIN1 = "megaup.live";
   public static String STREAM_DOMAIN2 = "megaf.cc";
 
   public static String SOURCE_DOMAIN_USED = "";

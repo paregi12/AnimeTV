@@ -171,7 +171,7 @@ _trueWindow.decryptKai=null;
     /* CHECK CURRENT URL */
     var hookDone=null;
     var hookFn=null;
-    if (location.host=="megaup.site"){
+    if (location.host=="megaup.live"){
         hookDone=function(u,o){
             return ((typeof u === 'string') && (u.startsWith("/media")));
         };
