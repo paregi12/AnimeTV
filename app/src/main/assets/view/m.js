@@ -32,10 +32,10 @@ var _TOUCH=false;
 var _ISELECTRON=('isElectron' in _JSAPI);
 
 /* no-kai on electron */
-if (__SD==1 && _ISELECTRON){
-  _JSAPI.setSd(3);
-  setTimeout(function(){ _JSAPI.reloadHome(); },500);
-}
+// if (__SD==1 && _ISELECTRON){
+//   _JSAPI.setSd(3);
+//   setTimeout(function(){ _JSAPI.reloadHome(); },500);
+// }
 
 const __SOURCE_NAME=[
   'AnimeKAI', 'Anix', 'Hianime', 'Aniwatch', 'Animeflix', 'KickAss', 'Gojo', 'Miruro'
@@ -2424,6 +2424,7 @@ var kaas={
 /******************* ANIMEKAI *************************/
 if (__SDKAI){
   const _CODEXURL='https://c-kai-8090.amarullz.com/';
+  const _CODEXMEGAURL='https://enc-dec.app/api';
   window.KAICODEX={
     reqIdn:0,
     reqCbs:{},
@@ -2432,7 +2433,7 @@ if (__SDKAI){
   };
 
   /* init home */
-  if (_ISELECTRON){
+  if (_ISELECTRON && false){
     /* init home */
     (function(){
       window.KAICODEX.ifr=$n('iframe','',{src:"https://animekai.to/home",frameborder:'0'},document.body,'');
@@ -2521,6 +2522,40 @@ if (__SDKAI){
   }
 
   /* Presistent MegaUp Decrypt */
+  window.MEGAUP={
+    decMega:function(url, cbDec){
+      var megaId=url.split('/');
+      megaId=megaId[megaId.length-1];
+      var megaUrl="/media/"+megaId;
+      kai.req(megaUrl,function(r2){
+        if (r2.ok){
+          try{
+            var rs2=JSON.parse(r2.responseText);
+            $ap(_CODEXMEGAURL+"/dec-mega",function(r){
+              if (r.ok){
+                try{
+                  console.log(r.responseText);
+                  cbDec(JSON.parse(r.responseText));
+                  return;
+                }catch(e){}
+              }
+              cbDec(null);
+            },{
+              'Content-Type':'application/json',
+              'X-Post-Body':JSON.stringify({
+                "text":rs2['result'],
+                'agent':navigator.userAgent
+              })
+            });
+            return;
+          }catch(e){}
+        }
+        cbDec(null);
+      },kai.sdns);
+    }
+  };
+
+  /* Presistent MegaUp Decrypt */
   window.MEGAUPURL={
     decMega:function(url, cbDec){
       var megaId=url.split('/');
@@ -2550,7 +2585,7 @@ if (__SDKAI){
     }
   };
 
-  window.MEGAUP={
+  window.MEGAUP_LEGACY={
     reqIdn:0,
     reqCbs:{},
     ifr:null,
@@ -9704,18 +9739,34 @@ const pb={
         });
       }
       else if (__SDKAI){
+        var kaiHaveData=null;
         kai.loadVideo(pb.data,function(v){
+          if (v){
+            kaiHaveData=v;
+          }
           if (!v){
-            pb.playback_error(
-              'PLAYBACK ERROR',
-              "Loading video from source failed.\nTry changing mirror or check source server."
-            );
+            if (!kaiHaveData){
+              pb.playback_error(
+                'PLAYBACK ERROR',
+                "Loading video from source failed.\nTry changing mirror or check source server."
+              );
+              return;
+            }
+            v=kaiHaveData;
+            console.log(["KAI HAVE DATA:",v]);
             return;
           }
+
+          if ('result' in v){
+            v=v['result'];
+          }
+
+          console.log(["KAI PLAY VIDEO", v]);
 
           /* init subtitle */
           vtt.clear();
           pb.subtitles=[];
+
           if ('tracks' in v){
             var stidx={};
             var n=v.tracks.length;
@@ -15585,7 +15636,7 @@ const home={
       }
 
       /* SKIP THIS SOURCES */
-      if ((i==4)||(i==1)||(i==3)||(i==6)||(i==0 && _ISELECTRON)) {
+      if ((i==4)||(i==1)||(i==3)||(i==6)) {
         /* Parental will not work on source 5 */
         continue;
       }
