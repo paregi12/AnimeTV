@@ -2494,7 +2494,7 @@ if (__SDKAI){
   else{
     /* non electron home codex */
     (function(){
-      window.KAICODEX.enc=function(txt,cbDec){
+      window.KAICODEX.enc_fb=function(txt,cbDec){
         $ap(_CODEXURL+"?f=e",function(r){
           if (r.ok){
             cbDec(r.responseText);
@@ -2506,7 +2506,7 @@ if (__SDKAI){
           'X-Post-Body':txt
         });
       };
-      window.KAICODEX.dec=function(txt,cbDec){
+      window.KAICODEX.dec_fb=function(txt,cbDec){
         $ap(_CODEXURL+"?f=d",function(r){
           if (r.ok){
             cbDec(r.responseText);
@@ -2518,6 +2518,44 @@ if (__SDKAI){
           'X-Post-Body':txt
         });
       };
+
+      if (true){
+        window.KAICODEX.enc=function(txt,cbDec){
+          $ap(_CODEXMEGAURL+"/enc-kai?text="+encodeURIComponent(txt),function(r){
+            if (r.ok){
+              try{
+                var rs=JSON.parse(r.responseText);
+                cbDec(rs.result);
+                return;
+              }catch(e){}
+            }
+            // fallback
+            window.KAICODEX.enc_fb(txt,cbDec);
+          });
+        };
+        window.KAICODEX.dec=function(txt,cbDec){
+          $ap(_CODEXMEGAURL+"/dec-kai",function(r){
+            if (r.ok){
+              try{
+                var rs=JSON.parse(r.responseText);
+                cbDec(JSON.stringify(rs.result));
+                return;
+              }catch(e){}
+            }
+            // fallback
+            window.KAICODEX.dec_fb(txt,cbDec);
+          },{
+            'Content-Type':'application/json',
+            'X-Post-Body':JSON.stringify({
+              "text":txt
+            })
+          });
+        };
+      }
+      else{
+        window.KAICODEX.enc=window.KAICODEX.enc_fb;
+        window.KAICODEX.dec=window.KAICODEX.dec_fb;
+      }
     })();
   }
 
@@ -2737,6 +2775,7 @@ const kai={
         title_jp:'',
         synopsis:'',
         genres:[],
+        genre:'',
         quality:null,
         ep:0,
         rating:'',
@@ -2818,7 +2857,10 @@ const kai={
       }catch(e){}
       try{
         var gn=d.querySelectorAll('div.genre a');
+        var genretxt=[];
         for (var i=0;i<gn.length;i++){
+          genretxt.push(gn[i].textContent.trim());
+          o.genre=genretxt.join(', ');
           var gd={
             name:gn[i].textContent.trim(),
             val:null
@@ -2829,9 +2871,20 @@ const kai={
         }
       }catch(e){}
       try{
+        var sst=d.querySelector('div.detail div+div');
+        if (sst){
+          var sstt=sst.textContent.trim().split(':');
+          if (sstt[0].trim().toLowerCase()=='status'){
+            o.status=sstt[1].trim();
+          }
+        }
+      }catch(e){}
+      try{
         o.rating=d.querySelector('span.ttrating').textContent.trim();
       }catch(e){}
       tipOut.tip=o;
+
+      console.log(o);
 
       tipOut.n++;
       tipFinalize();
