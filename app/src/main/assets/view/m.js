@@ -40,14 +40,14 @@ var _ISELECTRON=('isElectron' in _JSAPI);
 const __SOURCE_NAME=[
   'AnimeKAI', 'Anix', 'Hianime', 'Aniwatch', 'Animeflix', 'KickAss', 'Gojo', 'Miruro'
 ];
-
+// https://kickass-anime.ro/
 const __SOURCE_DOMAINS=[
   ['animekai.to' ,'animekai.bz','animekai.ac','animekai.cc'],
   ['anix.to','anix.ac','anix.vc','anixtv.to'], // rip
   ['hianime.to','hianime.sx','hianime.nz', 'aniwatchtv.to','hianime.bz','hianimez.is','hianimez.to','hianime.pe'],
   ['aniwatchtv.to'],
   ['animeflix.live','animeflix.gg','animeflix.li'], // rip
-  ['kaa.mx' ,'kaa.to' /*,'kaas.ro'*/ ],
+  ['kickass-anime.ro','kickass-anime.ru' /*'kaa.mx' ,'kaa.to' */ /*,'kaas.ro'*/ ],
   ['api.gojo.wtf'],
   ['www.miruro.tv']
 ];
@@ -2247,6 +2247,12 @@ var kaas={
     "X-Org-Prox":"https://vidco.pro",
     "X-NoH-Proxy":"true"
   },
+  deArray:function(el){
+    if (Array.isArray(el)){
+      return el[1];
+    }
+    return el;
+  },
   streamGet:function(url, type, cb){
     var vidUrl=new URL(url);
     var vidMid=(type=='duckstream')?'mid':'id';
@@ -2260,6 +2266,89 @@ var kaas={
     var vidUag=navigator.userAgent;
 
     /* Load Source Data */
+    function streamProcessData(srcData){
+      if (srcData){
+        try{
+          if ('manifest' in srcData){
+            try{
+              console.log("DEC DATA: "+JSON.stringify(srcData));
+              cb(srcData);
+            }catch(ee){
+              console.warn("Err streamGet cb: "+ee);
+            }
+            return true;
+          }
+          else{
+            var encData=srcData.data.split(':');
+            var decData=_JSAPI.aesDec(
+              encData[0],
+              vidKey,
+              encData[1]
+            );
+            console.warn(JSON.stringify(["AESDEC",encData[0],
+            vidKey,
+            encData[1], decData]));
+            var data=JSON.parse(decData);
+            data.server_type=type;
+            data.server_url=url;
+            try{
+              cb(data);
+            }catch(ee){
+              console.warn("Err streamGet cb: "+ee);
+            }
+            return true;
+          }
+        }catch(e){}
+      }
+      else{
+        try{
+          var kk=$n('div','',0,0,r.responseText);
+          var ast=kk.querySelector('astro-island[ssr]');
+          if (ast){
+            srcData=JSON.parse(ast.getAttribute('props'));
+            console.log(srcData);
+            if ('manifest' in srcData){
+              try{
+                try{
+                  var subs=[];
+                  for (var i=0;i<srcData.subtitles[1].length;i++){
+                    var k=srcData.subtitles[1][i][1];
+                    var psh={
+                      "name":k.name[1],
+                      "language":k.language[1],
+                      "src":k.src[1]
+                    };
+                    if (psh.language=='en'){
+                      subs.unshift(psh);
+                    }
+                    else{
+                      subs.push(psh);
+                    }
+                  }
+                  srcData.subtitles=subs;
+                }catch(ext){}
+                srcData.vttabs=true;
+                srcData.manifest=srcData.manifest[1];
+                srcData.isDash=true;
+                if (srcData.manifest.indexOf("http")!=0){
+                  srcData.manifest="https:"+srcData.manifest;
+                  srcData.isDash=false;
+                }
+                else{
+                  srcData.manifest=srcData.manifest.replace('https:////','https://');
+                }
+                console.log("DEC DATA: "+JSON.stringify(srcData));
+                cb(srcData);
+              }catch(ee){
+                console.warn("Err streamGet cb: "+ee);
+              }
+              return true;
+            }
+          }
+        }catch(e){}
+      }
+      return false;
+    }
     function streamLoadSource(sourceUrl){
       $ap(sourceUrl,function(r){
         if (r.ok){
@@ -2269,85 +2358,8 @@ var kaas={
           }catch(e){
             srcData=null;
           }
-          if (srcData){
-            try{
-              if ('manifest' in srcData){
-                try{
-                  console.log("DEC DATA: "+JSON.stringify(srcData));
-                  cb(srcData);
-                }catch(ee){
-                  console.warn("Err streamGet cb: "+ee);
-                }
-                return;
-              }
-              else{
-                var encData=srcData.data.split(':');
-                var decData=_JSAPI.aesDec(
-                  encData[0],
-                  vidKey,
-                  encData[1]
-                );
-                console.warn(JSON.stringify(["AESDEC",encData[0],
-                vidKey,
-                encData[1], decData]));
-                var data=JSON.parse(decData);
-                data.server_type=type;
-                data.server_url=url;
-                try{
-                  cb(data);
-                }catch(ee){
-                  console.warn("Err streamGet cb: "+ee);
-                }
-                return;
-              }
-            }catch(e){}
-          }
-          else{
-            try{
-              var kk=$n('div','',0,0,r.responseText);
-              var ast=kk.querySelector('astro-island[ssr]');
-              if (ast){
-                srcData=JSON.parse(ast.getAttribute('props'));
-                console.log(srcData);
-                if ('manifest' in srcData){
-                  try{
-                    try{
-                      var subs=[];
-                      for (var i=0;i<srcData.subtitles[1].length;i++){
-                        var k=srcData.subtitles[1][i][1];
-                        var psh={
-                          "name":k.name[1],
-                          "language":k.language[1],
-                          "src":k.src[1]
-                        };
-                        if (psh.language=='en'){
-                          subs.unshift(psh);
-                        }
-                        else{
-                          subs.push(psh);
-                        }
-                      }
-                      srcData.subtitles=subs;
-                    }catch(ext){}
-                    srcData.vttabs=true;
-                    srcData.manifest=srcData.manifest[1];
-                    srcData.isDash=true;
-                    if (srcData.manifest.indexOf("http")!=0){
-                      srcData.manifest="https:"+srcData.manifest;
-                      srcData.isDash=false;
-                    }
-                    else{
-                      srcData.manifest=srcData.manifest.replace('https:////','https://');
-                    }
-                    console.log("DEC DATA: "+JSON.stringify(srcData));
-                    cb(srcData);
-                  }catch(ee){
-                    console.warn("Err streamGet cb: "+ee);
-                  }
-                  return;
-                }
-              }
-            }catch(e){}
+          if (streamProcessData(srcData)){
+            return;
           }
         }
         cb(null);
@@ -2386,7 +2398,7 @@ var kaas={
     }
 
     console.log("KAAS LOAD TYPE: "+type+" => "+url);
-    if (vidBird){
+    if (false /*vidBird*/){
       try{
         var sourceUrl = url.replace("player.php", "source.php");
         console.log("KAAS BIRDSTREAM SOURCE URL: "+sourceUrl);
@@ -2399,14 +2411,45 @@ var kaas={
         if (r.ok){
           try{
             var d=$n('div','',0,0,r.responseText);
-            var k=d.querySelector('#player + script').innerHTML.trim();
-            var ku=k.substring(k.indexOf('=')+1).trim();
-            var playerConfig=JSON.parse(eval("JSON.stringify("+ku+")"));
-            var sourceUrl=generateSourceUrl(playerConfig);
             try{
-              streamLoadSource(sourceUrl);
-            }catch(ee){}
-            return;
+              var k=d.querySelector('#player + script').innerHTML.trim();
+              var ku=k.substring(k.indexOf('=')+1).trim();
+              var playerConfig=JSON.parse(eval("JSON.stringify("+ku+")"));
+              var sourceUrl=generateSourceUrl(playerConfig);
+              try{
+                streamLoadSource(sourceUrl);
+              }catch(ee){}
+              return;
+            }
+            catch(e){
+              try{
+                var astro=d.querySelector('astro-island[props]');
+                var ku=JSON.parse(astro.getAttribute("props"));
+                if (ku){
+                  ku.manifest=kaas.deArray(ku.manifest);
+                  if (ku.manifest.indexOf("https://")!=0){
+                    ku.manifest="https:"+ku.manifest;
+                  }
+
+                  if ('subtitles' in ku){
+                    ku.subtitles=kaas.deArray(ku.subtitles);
+                    for (var i=0;i<ku.subtitles.length;i++){
+                      ku.subtitles[i]=kaas.deArray(ku.subtitles[i]);
+                      for (var j in ku.subtitles[i]){
+                        ku.subtitles[i][j]=kaas.deArray(ku.subtitles[i][j]);
+                      }
+                    }
+                  }
+                  ku.vttabs=true;
+                  console.log(ku);
+                  if (streamProcessData(ku)){
+                    return;
+                  }
+                }
+              }catch(ke){
+                console.warn(e);    
+              }
+            }
           }catch(e){
             console.warn(e);
           }
