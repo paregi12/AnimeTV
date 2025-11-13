@@ -2731,7 +2731,7 @@ if (__SDKAI){
 
 }
 const kai={
-  sdns:'megaup.live',
+  sdns:'4spromax.site' /*megaup.live*/,
   dns:'animekai.to',
   req(u,cb,vdns){
     if (!vdns){
@@ -4901,7 +4901,7 @@ const _API={
         if (
           !__SD7 && !__SD8 && !__SDKAI &&
           (src_ori.indexOf("#dash")==-1)
-          && (src_ori.indexOf("megaup.live")==-1)
+          && (src_ori.indexOf("4spromax.site" /*"megaup.live"*/ )==-1)
           && (src_ori.indexOf("prxy.miruro.to")==-1)
           && (src_ori.indexOf("mp4upload.com")==-1)
           && (src_ori.indexOf("netmagcdn.com")==-1)
