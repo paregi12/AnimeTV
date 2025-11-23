@@ -19922,10 +19922,33 @@ query ($weekStart: Int, $weekEnd: Int, $page: Int, $perPage: Int) {
         };
 
         if (tp==2){
-          _JSAPI.storeSet(_API.user_prefix+"anilist_auth",JSON.stringify(dt));
-          console.log("ANILIST-ONLOGIN: "+JSON.stringify(dt));
-          _API.showToast("AniList login sucessfull...");
-          _API.reload();
+          if ('user' in d){
+            _JSAPI.storeSet(_API.user_prefix+"anilist_auth",JSON.stringify(dt));
+            console.log("ANILIST-ONLOGIN: "+JSON.stringify(dt));
+            _API.showToast("AniList login sucessfull...");
+            _API.reload();
+          }
+          else{
+            _MAL.altoken = d.tk;
+            _MAL.alreq(`query {
+                Viewer {
+                    id
+                    name
+                }
+            }`,{},function(c){
+              if ('data' in c && 'Viewer' in c.data){
+                dt.user=c.data.Viewer.name;
+                dt.uid=c.data.Viewer.id;
+                _JSAPI.storeSet(_API.user_prefix+"anilist_auth",JSON.stringify(dt));
+                console.log("ANILIST-ONLOGIN: "+JSON.stringify(dt));
+                _API.showToast("AniList login sucessfull...");
+                _API.reload();
+              }
+              else{
+                _API.showToast("AniList login failed...");
+              }
+            });
+          }
         }
         else{
           _JSAPI.storeSet(_API.user_prefix+"mal_auth",JSON.stringify(dt));
