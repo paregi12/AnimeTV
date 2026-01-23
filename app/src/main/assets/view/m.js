@@ -42,7 +42,7 @@ const __SOURCE_NAME=[
 ];
 // https://kickass-anime.ro/
 const __SOURCE_DOMAINS=[
-  ['animekai.to' ,'animekai.bz','animekai.ac','animekai.cc'],
+  ['animekai.to' ,'animekai.vc','animekai.nl','animekai.im','animekai.la'],
   ['anix.to','anix.ac','anix.vc','anixtv.to'], // rip
   ['hianime.to','hianime.sx','hianime.nz', 'aniwatchtv.to','hianime.bz','hianimez.is','hianimez.to','hianime.pe'],
   ['aniwatchtv.to'],
@@ -15732,7 +15732,7 @@ const home={
       }
 
       /* SKIP THIS SOURCES */
-      if ((i==4)||(i==1)||(i==3)||(i==6)) {
+      if ((i==4)||(i==1)||(i==3)||(i==6)||(i==7)) {
         /* Parental will not work on source 5 */
         continue;
       }
