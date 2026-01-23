@@ -710,8 +710,15 @@ import javax.crypto.spec.SecretKeySpec;
           settings.put("Origin", "https://" + Conf.SOURCE_DOMAIN5_API);
         }
         else if (Conf.SOURCE_DOMAIN==1) {
-          settings.put("Origin", "https://" + Conf.STREAM_DOMAIN1);
-          settings.put("Referer", "https://" + Conf.STREAM_DOMAIN1+"/");
+          // SOURCE_DOMAINS
+          settings.put("Referer", "https://" + Conf.SOURCE_DOMAINS[1] + "/");
+//          if (host.contains(Conf.STREAM_DOMAIN2)) {
+//
+//          }
+//          else {
+//            settings.put("Origin", "https://" + Conf.STREAM_DOMAIN1);
+//            settings.put("Referer", "https://" + Conf.STREAM_DOMAIN1 + "/");
+//          }
         }
         else if (Conf.SOURCE_DOMAIN==3||Conf.SOURCE_DOMAIN==4) {
           settings.put("Origin", "https://" + Conf.STREAM_DOMAIN3);
