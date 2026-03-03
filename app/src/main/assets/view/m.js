@@ -42,7 +42,7 @@ const __SOURCE_NAME=[
 ];
 // https://kickass-anime.ro/
 const __SOURCE_DOMAINS=[
-  ['animekai.to' ,'animekai.vc','animekai.nl','animekai.im','animekai.la'],
+  ['animekai.to','animekai.fi','animekai.fo','animekai.gs','animekai.la','anikai.to'],
   ['anix.to','anix.ac','anix.vc','anixtv.to'], // rip
   ['hianime.to','hianime.sx','hianime.nz', 'aniwatchtv.to','hianime.bz','hianimez.is','hianimez.to','hianime.pe'],
   ['aniwatchtv.to'],
