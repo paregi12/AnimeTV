@@ -38,16 +38,16 @@ var _ISELECTRON=('isElectron' in _JSAPI);
 // }
 
 const __SOURCE_NAME=[
-  'AnimeKAI', 'Anix', 'Hianime', 'Aniwatch', 'Animeflix', 'KickAss', 'Gojo', 'Miruro'
+  'AnimeKAI', 'Anix', 'Aniwatch', 'Aniwatch', 'Animeflix', 'KickAss', 'Gojo', 'Miruro'
 ];
 // https://kickass-anime.ro/
 const __SOURCE_DOMAINS=[
-  ['animekai.to' ,'animekai.vc','animekai.nl','animekai.im','animekai.la'],
+  ['animekai.to' ,'anikai.to','animekai.fo','animekai.gs','animekai.fi','animekai.la'],
   ['anix.to','anix.ac','anix.vc','anixtv.to'], // rip
-  ['hianime.to','hianime.sx','hianime.nz', 'aniwatchtv.to','hianime.bz','hianimez.is','hianimez.to','hianime.pe'],
+  ['aniwatchtv.to'],
   ['aniwatchtv.to'],
   ['animeflix.live','animeflix.gg','animeflix.li'], // rip
-  ['kickass-anime.ro','kickass-anime.ru' /*'kaa.mx' ,'kaa.to' */ /*,'kaas.ro'*/ ],
+  ['kaa.lt'], //,'kickass-anime.ru' /*'kaa.mx' ,'kaa.to' */ /*,'kaas.ro'*/ ],
   ['api.gojo.wtf'],
   ['www.miruro.tv']
 ];
@@ -231,6 +231,9 @@ function SD_SETTINGS(n, cb){
 }
 function SD_LOAD_DOMAIN(){
     __SD_DOMAIN=_JSAPI.storeGet(SD_CFGNAME(__SD),"");
+    if (__SD3){
+      __SD_DOMAIN=__SOURCE_DOMAINS[2][1];
+    }
     _JSAPI.setSdomain(__SD_DOMAIN);
     console.log("SD Domain: "+__SD_DOMAIN);
 }
@@ -1677,7 +1680,7 @@ var kaas={
     // }
     // else{
       kaas.filterData=null;// kaa.mx
-      furi="/__proxy/https://kaa.mx"+jpath+"?"+enc(jsv);
+      furi="/__proxy/https://kaa.lt"+jpath+"?"+enc(jsv);
       // furi="/__proxy/https://"+__DNS+jpath+"?"+enc(jsv);
     // }
     console.warn("KAAS FILTER = "+furi+" / "+kaas.filterData);

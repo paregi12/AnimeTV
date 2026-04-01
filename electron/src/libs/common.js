@@ -31,10 +31,10 @@ const common={
     "animekai.to", /* default */
     "animekai.to",
     "anix.to",
-    "hianime.to",
+    "aniwatchtv.to",
     "aniwatchtv.to",
     "animeflix.live",
-    "kaa.mx",
+    "kaa.lt",
     "api.gojo.wtf",
     "www.miruro.tv"
   ],
