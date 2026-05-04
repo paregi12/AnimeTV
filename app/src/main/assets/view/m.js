@@ -26,6 +26,8 @@ const __SD6=(__SD==6);
 const __SD7=(__SD==7);
 const __SD8=(__SD==8);
 
+// pahe anime => document.querySelectorAll('.content-wrapper .tab-content .row div a[title]');
+
 /* is touch screen */
 var _USE_TOUCH=true;
 var _TOUCH=false;
@@ -246,6 +248,30 @@ function $(i){
 /* MIRURO SOURCE */
 var _miruro_api_key = "12RmYtJexlqnNym38z4ahwy+g1g0la/El8nkkMOVtiQ=";
 var miruro={
+  paheAnime:null,
+  paheInit:function(cb){
+    if (miruro.paheAnime){
+      requestAnimationFrame(cb());
+    }
+    else{
+      $ap('https://animepahe.com/anime',function(r){
+        if (r.ok){
+          try{
+            console.log(r);
+            cb();
+            return;
+          }catch(e){}
+        }
+        cb();
+      },{
+        "X-Org-Prox":"https://animepahe.com",
+        "X-Ref-Prox":"https://animepahe.com/",
+        'Pragma':'no-cache',
+        'Cache-Control':'no-cache'
+      });
+    }
+  },
+
   providerKey:function(){
     return _API.user_prefix+'_miruro_provider';
   },
@@ -1047,6 +1073,10 @@ var miruro={
       // miruro.req("dio",urljson,function(k){
 
       console.log(k);
+
+      miruro.paheInit(function(){
+      });
+
       var detailurl="/api/episodes?malId="+k.malId+"&ongoing="+(k.ongoing?"true":"false");
       miruro.req("www",detailurl,function(k){
         if (k) dat.cov=k;
@@ -2734,7 +2764,7 @@ if (__SDKAI){
 
 }
 const kai={
-  sdns:'4spromax.site' /*megaup.live*/,
+  sdns:'megaup.nl' /*'4spromax.site'*/ /*megaup.live*/,
   dns:'animekai.to',
   req(u,cb,vdns){
     if (!vdns){
@@ -4904,7 +4934,7 @@ const _API={
         if (
           !__SD7 && !__SD8 && !__SDKAI &&
           (src_ori.indexOf("#dash")==-1)
-          && (src_ori.indexOf("4spromax.site" /*"megaup.live"*/ )==-1)
+          && (src_ori.indexOf("megaup.nl", /*"4spromax.site"*/ /*"megaup.live"*/ )==-1)
           && (src_ori.indexOf("prxy.miruro.to")==-1)
           && (src_ori.indexOf("mp4upload.com")==-1)
           && (src_ori.indexOf("netmagcdn.com")==-1)
@@ -15735,7 +15765,7 @@ const home={
       }
 
       /* SKIP THIS SOURCES */
-      if ((i==4)||(i==1)||(i==3)||(i==6)||(i==7)) {
+      if ((i==4)||(i==1)||(i==2)||(i==3)||(i==6) ||(i==7)) {
         /* Parental will not work on source 5 */
         continue;
       }
