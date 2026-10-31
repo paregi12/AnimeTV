@@ -41,6 +41,7 @@ public class GotakuProxy {
     private boolean isRunning = false;
     private ExecutorService threadPool;
     private final OkHttpClient httpClient;
+    private volatile Boolean counterFullPath = null;
 
     private static final Pattern URI_REGEX = Pattern.compile("URI=\"([^\"]+)\"");
 
@@ -145,13 +146,16 @@ public class GotakuProxy {
             String sbStr = uri.getQueryParameter("sb");
             int segmentBytes = (sbStr != null) ? Integer.parseInt(sbStr) : 0;
             boolean isM3u8 = "1".equals(uri.getQueryParameter("m3u8"));
+            boolean isPlain = "1".equals(uri.getQueryParameter("plain"));
 
             if (upstreamUrl == null || !upstreamUrl.startsWith("http")) {
                 sendResponse(out, "HTTP/1.1 400 Bad Request\r\n\r\n", null);
                 return;
             }
 
-            if (isM3u8) {
+            if (isPlain) {
+                servePassthrough(out, upstreamUrl, rangeStart);
+            } else if (isM3u8) {
                 serveManifest(out, upstreamUrl, keySeed, segmentBytes);
             } else {
                 serveSegment(out, upstreamUrl, keySeed, segmentBytes, rangeStart);
@@ -188,8 +192,16 @@ public class GotakuProxy {
                     String token = httpUri.getQueryParameter("token");
                     if (token == null) {
                         String p = httpUri.getPath();
-                        String[] segs = p != null ? p.split("/") : new String[0];
-                        token = segs.length > 3 ? segs[3] : "";
+                        if (p != null) {
+                            String[] segs = p.split("/");
+                            java.util.List<String> validSegs = new java.util.ArrayList<>();
+                            for (String s : segs) {
+                                if (!s.isEmpty()) validSegs.add(s);
+                            }
+                            token = validSegs.size() > 3 ? validSegs.get(3) : "";
+                        } else {
+                            token = "";
+                        }
                     }
                     byte[] plKey = GotakuCrypto.hkdfSha256(keySeedBytes, token.getBytes(StandardCharsets.UTF_8),
                             "pl|v1".getBytes(StandardCharsets.UTF_8), 32);
@@ -323,16 +335,40 @@ public class GotakuProxy {
 
             byte[] keyBytes = (keySeed != null && !keySeed.isEmpty()) ? GotakuCrypto.b64UrlDecode(keySeed) : null;
             Cipher cipher = null;
+            java.io.BufferedInputStream bis = new java.io.BufferedInputStream(body.byteStream());
+
             if (keyBytes != null && segmentBytes > 0 && rangeStart < segmentBytes) {
-                cipher = GotakuCrypto.createSegmentCipher(keyBytes, url, true, rangeStart);
+                if (rangeStart == 0) {
+                    bis.mark(512);
+                    byte[] head = new byte[384];
+                    int headLen = bis.read(head);
+                    bis.reset();
+
+                    boolean isPlain = (headLen > 0) && GotakuCrypto.looksLikeMedia(head);
+                    if (!isPlain) {
+                        if (counterFullPath == null && headLen >= 189) {
+                            for (boolean cand : new boolean[]{false, true}) {
+                                byte[] dec = GotakuCrypto.decryptPrefix(head, url, keyBytes, cand, segmentBytes);
+                                if (dec != null && GotakuCrypto.looksLikeMedia(dec)) {
+                                    counterFullPath = cand;
+                                    break;
+                                }
+                            }
+                        }
+                        boolean useFullPath = (counterFullPath != null) ? counterFullPath : false;
+                        cipher = GotakuCrypto.createSegmentCipher(keyBytes, url, useFullPath, rangeStart);
+                    }
+                } else {
+                    boolean useFullPath = (counterFullPath != null) ? counterFullPath : false;
+                    cipher = GotakuCrypto.createSegmentCipher(keyBytes, url, useFullPath, rangeStart);
+                }
             }
 
-            InputStream inStream = body.byteStream();
             byte[] buf = new byte[8192];
             int read;
             long currentPos = rangeStart;
 
-            while ((read = inStream.read(buf)) != -1) {
+            while ((read = bis.read(buf)) != -1) {
                 if (cipher != null && currentPos < segmentBytes) {
                     int toXor = (int) Math.min(read, segmentBytes - currentPos);
                     byte[] keystream = cipher.update(new byte[toXor]);
@@ -347,6 +383,59 @@ public class GotakuProxy {
             resp.close();
         } catch (Exception e) {
             Log.w(TAG, "serveSegment error: " + e.getMessage());
+        }
+    }
+
+    private void servePassthrough(OutputStream out, String url, long rangeStart) {
+        try {
+            Request.Builder reqB = new Request.Builder().url(url)
+                    .header("Accept", "*/*")
+                    .header("Referer", "https://gotaku.to/");
+            if (rangeStart > 0) {
+                reqB.header("Range", "bytes=" + rangeStart + "-");
+            }
+            Response resp = httpClient.newCall(reqB.build()).execute();
+            if (!resp.isSuccessful()) {
+                sendResponse(out, "HTTP/1.1 " + resp.code() + " Error\r\n\r\n", null);
+                resp.close();
+                return;
+            }
+
+            ResponseBody body = resp.body();
+            if (body == null) {
+                resp.close();
+                return;
+            }
+
+            long contentLength = body.contentLength();
+            String codeStr = (resp.code() == 206) ? "206 Partial Content" : "200 OK";
+            String cType = resp.header("Content-Type");
+            if (cType == null) cType = "application/octet-stream";
+
+            StringBuilder headerSb = new StringBuilder();
+            headerSb.append("HTTP/1.1 ").append(codeStr).append("\r\n")
+                    .append("Content-Type: ").append(cType).append("\r\n")
+                    .append("Accept-Ranges: bytes\r\n");
+            if (contentLength > 0) {
+                headerSb.append("Content-Length: ").append(contentLength).append("\r\n");
+            }
+            String contentRange = resp.header("Content-Range");
+            if (contentRange != null) {
+                headerSb.append("Content-Range: ").append(contentRange).append("\r\n");
+            }
+            headerSb.append("Access-Control-Allow-Origin: *\r\n\r\n");
+            out.write(headerSb.toString().getBytes(StandardCharsets.UTF_8));
+
+            InputStream inStream = body.byteStream();
+            byte[] buf = new byte[8192];
+            int read;
+            while ((read = inStream.read(buf)) != -1) {
+                out.write(buf, 0, read);
+            }
+            out.flush();
+            resp.close();
+        } catch (Exception e) {
+            Log.w(TAG, "servePassthrough error: " + e.getMessage());
         }
     }
 

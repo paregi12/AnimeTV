@@ -188,38 +188,61 @@ public class GotakuCrypto {
         return new String(plain, StandardCharsets.UTF_8);
     }
 
+    public static String getUrlId(String url, boolean fullPath) {
+        try {
+            int qIdx = url.indexOf('?');
+            String clean = (qIdx != -1) ? url.substring(0, qIdx) : url;
+            int schemeIdx = clean.indexOf("://");
+            String pathOnly = (schemeIdx != -1) ? clean.substring(schemeIdx + 3) : clean;
+            int firstSlash = pathOnly.indexOf('/');
+            String path = (firstSlash != -1) ? pathOnly.substring(firstSlash) : "";
+
+            String[] rawSegments = path.split("/");
+            java.util.List<String> segments = new java.util.ArrayList<>();
+            for (String s : rawSegments) {
+                if (!s.isEmpty()) segments.add(s);
+            }
+            int drop = fullPath ? 0 : 2;
+            StringBuilder sb = new StringBuilder();
+            for (int i = drop; i < segments.size(); i++) {
+                if (sb.length() > 0) sb.append('/');
+                sb.append(segments.get(i));
+            }
+            String res = sb.toString();
+            int dot = res.lastIndexOf('.');
+            return (dot != -1) ? res.substring(0, dot) : res;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     public static byte[] segmentCounter(String url, boolean fullPath) {
         try {
-            String urlId;
-            if (fullPath) {
-                int firstSlash = url.indexOf("://");
-                String path = (firstSlash != -1) ? url.substring(firstSlash + 3) : url;
-                int slashIdx = path.indexOf('/');
-                urlId = (slashIdx != -1) ? path.substring(slashIdx + 1) : path;
-            } else {
-                int qIdx = url.indexOf('?');
-                String clean = (qIdx != -1) ? url.substring(0, qIdx) : url;
-                String[] parts = clean.split("/");
-                StringBuilder sb = new StringBuilder();
-                for (int i = 4; i < parts.length; i++) {
-                    if (sb.length() > 0) sb.append('/');
-                    sb.append(parts[i]);
-                }
-                urlId = sb.toString();
-            }
-            int dot = urlId.lastIndexOf('.');
-            if (dot != -1) {
-                urlId = urlId.substring(0, dot);
-            }
+            String urlId = getUrlId(url, fullPath);
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] hash = md.digest(urlId.getBytes(StandardCharsets.UTF_8));
-
             byte[] counter = new byte[16];
             System.arraycopy(hash, 0, counter, 0, 8);
             return counter;
         } catch (Exception e) {
             Log.e(TAG, "segmentCounter failed", e);
             return new byte[16];
+        }
+    }
+
+    public static byte[] decryptPrefix(byte[] data, String url, byte[] key, boolean fullPath, int encryptedLength) {
+        try {
+            Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(segmentCounter(url, fullPath)));
+            int n = Math.min(data.length, encryptedLength);
+            byte[] ks = cipher.doFinal(new byte[n]);
+            byte[] out = new byte[data.length];
+            for (int i = 0; i < data.length; i++) {
+                out[i] = (i < n) ? (byte) (data[i] ^ ks[i]) : data[i];
+            }
+            return out;
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -247,7 +270,16 @@ public class GotakuCrypto {
 
     public static boolean looksLikeMedia(byte[] bytes) {
         if (bytes == null || bytes.length < 188) return false;
-        // MPEG-TS sync byte 0x47 every 188 bytes
-        return bytes[0] == 0x47 && (bytes.length < 189 || bytes[188] == 0x47);
+        if ((bytes[0] & 0xFF) == 0x47) {
+            for (int i = 188; i < bytes.length; i += 188) {
+                if ((bytes[i] & 0xFF) != 0x47) return false;
+            }
+            return true;
+        }
+        if (bytes.length >= 8) {
+            String magic = new String(bytes, 4, 4, StandardCharsets.ISO_8859_1);
+            return "ftyp".equals(magic) || "styp".equals(magic) || "moof".equals(magic);
+        }
+        return false;
     }
 }
