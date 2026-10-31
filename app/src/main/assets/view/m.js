@@ -408,6 +408,207 @@ var gotaku = {
       }
       cb(null);
     }, gotaku.getFilterOrigin());
+  },
+  _cbs: {},
+  _cbId: 0,
+  callNative: function(method, arg, cb) {
+    var id = ++gotaku._cbId;
+    gotaku._cbs[id] = cb;
+    if (!window._gotakuCb) {
+      window._gotakuCb = function(cbId, data) {
+        var fn = gotaku._cbs[cbId];
+        if (fn) {
+          delete gotaku._cbs[cbId];
+          var out = data;
+          if (typeof data === 'string') {
+            try { out = JSON.parse(data); } catch (e) { out = data; }
+          }
+          fn(out);
+        }
+      };
+    }
+    if (typeof _JSAPI !== 'undefined' && _JSAPI && _JSAPI[method + 'Async']) {
+      _JSAPI[method + 'Async'](arg, id);
+    } else if (typeof _JSAPI !== 'undefined' && _JSAPI && _JSAPI[method]) {
+      var syncRes = _JSAPI[method](arg);
+      try {
+        var parsed = syncRes ? JSON.parse(syncRes) : null;
+        cb(parsed);
+      } catch (e) {
+        cb(null);
+      }
+    } else {
+      cb(null);
+    }
+  },
+  getView: function(url, f) {
+    var uid = ++_API.viewid;
+    var ux = (url + '').split('#');
+    var epTarget = (ux.length >= 2 && ux[1]) ? toInt(ux[1]) : 1;
+    var id = gotaku.getAnimeId(ux[0]);
+    if (!id) {
+      f({ status: false }, uid);
+      return uid;
+    }
+
+    var tipData = null;
+    var epData = null;
+    var finished = false;
+
+    function finish() {
+      if (finished || !tipData || !epData) return;
+      finished = true;
+
+      var epList = [];
+      var episodes = (epData && epData.data) ? epData.data : (Array.isArray(epData) ? epData : []);
+      for (var i = 0; i < episodes.length; i++) {
+        var ep = episodes[i];
+        var epNum = (ep.number !== undefined && ep.number !== null) ? ep.number : (i + 1);
+        var oe = {
+          ep: epNum,
+          url: "/title/" + id + "#" + epNum,
+          active: (epTarget == epNum),
+          filler: !!ep.is_filler,
+          title: ep.name ? ("Episode " + epNum + " - " + ep.name) : ("Episode " + epNum),
+          epId: ep.id,
+          has_sub: (ep.sub !== undefined) ? !!ep.sub : true,
+          has_dub: !!ep.dub,
+          streams: []
+        };
+        if (oe.has_sub) oe.streams.push({ provider: 'Gotaku Sub', id: ep.id });
+        if (oe.has_dub) {
+          oe.streams.push({ provider: 'Gotaku Dub', id: ep.id });
+          oe.dub = oe.streams.length;
+        }
+        epList.push(oe);
+      }
+
+      var activeIdx = 0;
+      for (var j = 0; j < epList.length; j++) {
+        if (epList[j].active) {
+          activeIdx = j;
+          break;
+        }
+      }
+      if (epList.length > 0) {
+        epList[activeIdx].active = true;
+      }
+
+      var o = {
+        idMal: tipData.malId,
+        anilistId: tipData.anilistId,
+        title: tipData.title,
+        title_jp: tipData.title_jp,
+        synopsis: tipData.synopsis,
+        genres: tipData.genres,
+        quality: null,
+        banner: tipData.banner,
+        rating: tipData.rating,
+        ttid: id,
+        url: "/title/" + id,
+        poster: tipData.poster,
+        status: true,
+        epavail: epList.length,
+        epdub: (epList.length > 0 && epList[0].has_dub) ? epList.length : 0,
+        type: tipData.type || "TV",
+        genre: tipData.genre,
+        info: {
+          type: { val: "_" + (tipData.type || "TV"), name: tipData.type || "TV" },
+          rating: tipData.rating,
+          quality: null
+        },
+        ep: epList,
+        epactive: activeIdx,
+        servers: { dub: [], sub: [], softsub: [] },
+        streamtype: "sub",
+        stream_url: {}
+      };
+
+      if (epList.length > 0) {
+        var currEp = epList[activeIdx];
+        if (currEp.has_sub) {
+          o.servers.sub.push(pb.serverobj('Gotaku Sub', 0));
+          o.servers.softsub.push(pb.serverobj('Gotaku Soft', 0));
+        }
+        if (currEp.has_dub) {
+          o.servers.dub.push(pb.serverobj('Gotaku Dub', 0));
+        }
+      }
+
+      f(o, uid);
+    }
+
+    gotaku.getTooltip(id, function(tip) {
+      tipData = tip || {
+        title: id,
+        title_jp: id,
+        synopsis: "",
+        genres: [],
+        genre: "",
+        rating: "",
+        poster: null,
+        banner: null,
+        malId: null,
+        anilistId: null
+      };
+      finish();
+    }, url, 1);
+
+    var d = __SD_DOMAIN || gotaku.dns;
+    var epUrl = "https://" + d + "/api/v1/titles/" + id + "/episodes?k=8";
+    gotaku.callNative('gotakuFetchAndDecrypt', epUrl, function(res) {
+      epData = res || { data: [] };
+      finish();
+    });
+
+    return uid;
+  },
+  loadVideo: function(dt, f) {
+    if (!dt || !dt.ep || dt.epactive === undefined) {
+      f(null);
+      return;
+    }
+    var oe = dt.ep[dt.epactive];
+    if (!oe || !oe.epId) {
+      f(null);
+      return;
+    }
+
+    var reqType = "hard_sub";
+    if (dt.streamtype == "dub" || _API.currentStreamType == 2 || (pb.cfg_data && pb.cfg_data.dubaudio)) {
+      if (oe.has_dub) {
+        reqType = "dub";
+        dt.streamtype = "dub";
+      }
+    } else if (dt.streamtype == "softsub" || _API.currentStreamType == 1) {
+      reqType = "soft_sub";
+      dt.streamtype = "softsub";
+    }
+
+    var d = __SD_DOMAIN || gotaku.dns;
+    var embedApiUrl = "https://" + d + "/api/v1/episodes/" + oe.epId + "/embed?type=" + reqType + "&k=8";
+    gotaku.callNative('gotakuFetchAndDecrypt', embedApiUrl, function(embedRes) {
+      if (!embedRes || !embedRes.data || !embedRes.data.url) {
+        f(null);
+        return;
+      }
+      var embedUrl = embedRes.data.url;
+      var skipInfo = embedRes.data.skip;
+
+      gotaku.callNative('gotakuResolveStream', embedUrl, function(manifest) {
+        if (!manifest || (!manifest.proxy_url && !manifest.source)) {
+          f(null);
+          return;
+        }
+        var playUrl = (!_ISELECTRON && manifest.proxy_url) ? manifest.proxy_url : manifest.source;
+        var v = {
+          url: playUrl,
+          subtitles: manifest.subtitles || [],
+          skip: skipInfo
+        };
+        f(v);
+      });
+    });
   }
 };
 
@@ -5882,6 +6083,9 @@ const _API={
     else if (__SD8){
       return miruro.getView(url,f);
     }
+    else if (__SD9){
+      return gotaku.getView(url,f);
+    }
     else if (__SDKAI){
       return kai.getView(url,f);
     }
@@ -7778,6 +7982,8 @@ const vtt={
       hdr=gojo.subtitle_origin;
     }else if (__SD8){
       hdr=miruro.add_headers;
+    }else if (__SD9){
+      hdr=gotaku.subtitle_origin;
     }
     $ap(sub.u,function(r){
       if (r.ok){
@@ -10242,6 +10448,46 @@ const pb={
               pb.init_video_mp4upload('https:'+b.hls);
             }
           });
+      }
+      else if (__SD9){
+        gotaku.loadVideo(pb.data, function(v){
+          if (!v || !v.url){
+            pb.playback_error(
+              'PLAYBACK ERROR',
+              "Loading video from source failed.\nTry changing mirror or check source server."
+            );
+            return;
+          }
+          pb.data.skip = [[0, 0], [0, 0]];
+          if (v.skip) {
+            if (v.skip.intro && v.skip.intro.length >= 2) {
+              pb.data.skip[0] = [v.skip.intro[0], v.skip.intro[1]];
+            }
+            if (v.skip.outro && v.skip.outro.length >= 2) {
+              pb.data.skip[1] = [v.skip.outro[0], v.skip.outro[1]];
+            }
+          }
+          vtt.clear();
+          pb.subtitles = [];
+          if (v.subtitles && v.subtitles.length) {
+            for (var i = 0; i < v.subtitles.length; i++) {
+              var tk = v.subtitles[i];
+              var subUrl = tk.url || tk.file;
+              if (subUrl) {
+                pb.subtitles.push({
+                  u: subUrl,
+                  d: (i == 0) ? 1 : 0,
+                  l: (tk.label || tk.language || tk.lang || 'English').toLowerCase().trim(),
+                  i: (tk.label || tk.language || tk.lang || 'English').toLowerCase().trim()
+                });
+              }
+            }
+            vtt.init(pb.subtitles);
+          }
+          pb.updateStreamTypeInfo();
+          pb.init_video_mp4upload(v.url);
+          pb.cfg_update_el();
+        });
       }
       else{
         /* GET SERVER WAVE-ANIX */

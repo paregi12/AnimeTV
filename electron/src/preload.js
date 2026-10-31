@@ -24,6 +24,117 @@ const { remote, contextBridge, ipcRenderer } = require("electron");
 const send = (m, a) => ipcRenderer.send(m, a);
 const on = (m, c) => ipcRenderer.on(m, c);
 const CryptoJS = require("crypto-js");
+const crypto = require("crypto");
+const zlib = require("zlib");
+const https = require("https");
+
+const GOTAKU_API_SEED = Buffer.from([
+  169, 97, 13, 229, 137, 106, 199, 91, 124, 53, 130, 103, 235, 216, 204,
+  41, 161, 207, 4, 157, 109, 106, 130, 5, 57, 176, 155, 55, 18, 148, 80, 128
+]);
+const GOTAKU_MANIFEST_SEED = Buffer.from("458e5403c40a73332706df406193dd6b040a2ea97a6bb59b52b294a61006e6ef", "hex");
+
+function gotakuB64UrlEncode(buf) {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function gotakuB64UrlDecode(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  return Buffer.from(str, 'base64');
+}
+
+function gotakuHkdfSha256(ikm, salt, info, length) {
+  if (!salt || salt.length === 0) salt = Buffer.alloc(32);
+  const prk = crypto.createHmac('sha256', salt).update(ikm).digest();
+  let prev = Buffer.alloc(0);
+  const buffers = [];
+  let currentLen = 0;
+  let i = 1;
+  while (currentLen < length) {
+    const hmac = crypto.createHmac('sha256', prk);
+    hmac.update(prev);
+    if (info && info.length > 0) hmac.update(info);
+    hmac.update(Buffer.from([i]));
+    prev = hmac.digest();
+    buffers.push(prev);
+    currentLen += prev.length;
+    i++;
+  }
+  return Buffer.concat(buffers).subarray(0, length);
+}
+
+function gotakuDecryptApi(buf) {
+  if (buf.length <= 29 || buf[0] !== 8) return null;
+  const iv = buf.subarray(1, 13);
+  const ciphertext = buf.subarray(13, buf.length - 16);
+  const tag = buf.subarray(buf.length - 16);
+  const key = gotakuHkdfSha256(GOTAKU_API_SEED, Buffer.alloc(0), Buffer.from("api-seal|v1"), 32);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const compressed = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return zlib.inflateSync(compressed).toString('utf8');
+}
+
+function gotakuHttpFetch(url, headers) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: headers || {} }, (res) => {
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
+      res.on('end', () => resolve({ status: res.statusCode, data: Buffer.concat(chunks) }));
+    }).on('error', reject);
+  });
+}
+
+async function gotakuElectronFetchAndDecrypt(url) {
+  const res = await gotakuHttpFetch(url, {
+    'Referer': 'https://gotaku.to/',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'application/json, text/plain, */*'
+  });
+  return gotakuDecryptApi(res.data);
+}
+
+async function gotakuElectronResolveStream(embedUrl) {
+  if (embedUrl.startsWith('//')) embedUrl = 'https:' + embedUrl;
+  else if (embedUrl.startsWith('/')) embedUrl = 'https://gotaku.to' + embedUrl;
+
+  const htmlRes = await gotakuHttpFetch(embedUrl, {
+    'Referer': 'https://gotaku.to/',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+  });
+  const html = htmlRes.data.toString('utf8');
+  const baseMatch = html.match(/data-manifest-base="([^"]+)"/);
+  const stampMatch = html.match(/data-manifest-stamp="([^"]+)"/);
+  if (!baseMatch || !stampMatch) return null;
+
+  const manifestBase = baseMatch[1];
+  const stamp = stampMatch[1];
+  const nonce = crypto.randomBytes(16);
+  const payload = JSON.stringify({ nonce: gotakuB64UrlEncode(nonce), stamp: stamp });
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', GOTAKU_MANIFEST_SEED, iv);
+  const ct = Buffer.concat([cipher.update(payload, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const reqPath = gotakuB64UrlEncode(Buffer.concat([iv, ct, tag]));
+
+  const manifestRes = await gotakuHttpFetch(manifestBase + '/' + reqPath, {
+    'Referer': embedUrl,
+    'Accept': 'text/plain',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+  });
+  const encManifest = manifestRes.data.toString('utf8').trim();
+  const blob = gotakuB64UrlDecode(encManifest);
+  const mIv = blob.subarray(0, 12);
+  const mCt = blob.subarray(12, blob.length - 16);
+  const mTag = blob.subarray(blob.length - 16);
+  const mKey = gotakuHkdfSha256(GOTAKU_MANIFEST_SEED, nonce, Buffer.from("manifest-resp|v1"), 32);
+
+  const mDecipher = crypto.createDecipheriv('aes-256-gcm', mKey, mIv);
+  mDecipher.setAuthTag(mTag);
+  const mPlain = Buffer.concat([mDecipher.update(mCt), mDecipher.final()]).toString('utf8');
+  return mPlain;
+}
 
 /* Versions */
 var versions;
@@ -237,6 +348,22 @@ const api={
 
   getGotakuProxyPort(){ return 0; },
   getGotakuProxyUrl(u, k, s){ return u; },
+  gotakuFetchAndDecrypt(url) { return null; },
+  gotakuFetchAndDecryptAsync(url, cbnum) {
+    gotakuElectronFetchAndDecrypt(url).then(res => {
+      if (window._gotakuCb) window._gotakuCb(cbnum, res);
+    }).catch(() => {
+      if (window._gotakuCb) window._gotakuCb(cbnum, null);
+    });
+  },
+  gotakuResolveStream(embedUrl) { return null; },
+  gotakuResolveStreamAsync(embedUrl, cbnum) {
+    gotakuElectronResolveStream(embedUrl).then(res => {
+      if (window._gotakuCb) window._gotakuCb(cbnum, res);
+    }).catch(() => {
+      if (window._gotakuCb) window._gotakuCb(cbnum, null);
+    });
+  },
 
   /* will not implemented */
   malLogin(){},

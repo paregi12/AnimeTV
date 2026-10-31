@@ -86,9 +86,13 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import com.amarullz.androidtv.animetvjmto.utils.GotakuCrypto;
+
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLDecoder;
@@ -101,6 +105,8 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
@@ -1469,6 +1475,132 @@ import javax.crypto.spec.SecretKeySpec;
     @JavascriptInterface
     public String getGotakuProxyUrl(String originalUrl, String keySeed, int segmentBytes) {
       return GotakuProxy.getInstance().createProxyPlaylistUrl(originalUrl, keySeed, segmentBytes);
+    }
+
+    public String gotakuFetchAndDecryptSync(String url) {
+      try {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestProperty("User-Agent", Conf.USER_AGENT);
+        conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+        conn.setRequestProperty("Referer", "https://gotaku.to/");
+        conn.setConnectTimeout(10000);
+        conn.setReadTimeout(10000);
+        InputStream in = conn.getInputStream();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int read;
+        while ((read = in.read(buf)) != -1) {
+          baos.write(buf, 0, read);
+        }
+        in.close();
+        byte[] bytes = baos.toByteArray();
+        return GotakuCrypto.decryptApi(bytes, GotakuCrypto.DEFAULT_API_VERSION, GotakuCrypto.DEFAULT_API_SEED, GotakuCrypto.DEFAULT_HKDF_INFO);
+      } catch (Exception e) {
+        Log.e(_TAG, "gotakuFetchAndDecrypt error: " + e.getMessage());
+        return null;
+      }
+    }
+
+    public String gotakuResolveStreamSync(String embedUrl) {
+      try {
+        if (embedUrl.startsWith("//")) {
+          embedUrl = "https:" + embedUrl;
+        } else if (embedUrl.startsWith("/")) {
+          embedUrl = "https://gotaku.to" + embedUrl;
+        }
+        HttpURLConnection conn = (HttpURLConnection) new URL(embedUrl).openConnection();
+        conn.setRequestProperty("User-Agent", Conf.USER_AGENT);
+        conn.setRequestProperty("Referer", "https://gotaku.to/");
+        conn.setConnectTimeout(10000);
+        conn.setReadTimeout(10000);
+        InputStream in = conn.getInputStream();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int read;
+        while ((read = in.read(buf)) != -1) {
+          baos.write(buf, 0, read);
+        }
+        in.close();
+        String html = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+
+        Pattern basePat = Pattern.compile("data-manifest-base=\"([^\"]+)\"");
+        Pattern stampPat = Pattern.compile("data-manifest-stamp=\"([^\"]+)\"");
+        Matcher baseMat = basePat.matcher(html);
+        Matcher stampMat = stampPat.matcher(html);
+        if (!baseMat.find() || !stampMat.find()) {
+          return null;
+        }
+        String base = baseMat.group(1);
+        String stamp = stampMat.group(1);
+
+        byte[] nonce = GotakuCrypto.newNonce();
+        String reqPath = GotakuCrypto.encryptManifest(stamp, nonce);
+        if (reqPath == null) return null;
+
+        HttpURLConnection mConn = (HttpURLConnection) new URL(base + "/" + reqPath).openConnection();
+        mConn.setRequestProperty("User-Agent", Conf.USER_AGENT);
+        mConn.setRequestProperty("Referer", embedUrl);
+        mConn.setRequestProperty("Accept", "text/plain");
+        mConn.setConnectTimeout(10000);
+        mConn.setReadTimeout(10000);
+        InputStream mIn = mConn.getInputStream();
+        ByteArrayOutputStream mBaos = new ByteArrayOutputStream();
+        while ((read = mIn.read(buf)) != -1) {
+          mBaos.write(buf, 0, read);
+        }
+        mIn.close();
+        String encBody = new String(mBaos.toByteArray(), StandardCharsets.UTF_8).trim();
+
+        String manifestJson = GotakuCrypto.decryptManifest(encBody, nonce);
+        if (manifestJson == null) return null;
+
+        JSONObject mObj = new JSONObject(manifestJson);
+        String source = mObj.optString("source");
+        String keySeed = mObj.optString("keySeed");
+        int segmentBytes = 0;
+        if (mObj.has("obf")) {
+          JSONObject obf = mObj.getJSONObject("obf");
+          segmentBytes = obf.optInt("segmentBytes", 0);
+        }
+        String proxyUrl = GotakuProxy.getInstance().createProxyPlaylistUrl(source, keySeed, segmentBytes);
+        mObj.put("proxy_url", proxyUrl);
+        return mObj.toString();
+      } catch (Exception e) {
+        Log.e(_TAG, "gotakuResolveStream error: " + e.getMessage());
+        return null;
+      }
+    }
+
+    @JavascriptInterface
+    public String gotakuFetchAndDecrypt(String url) {
+      return gotakuFetchAndDecryptSync(url);
+    }
+
+    @JavascriptInterface
+    public void gotakuFetchAndDecryptAsync(String url, int cbnum) {
+      AsyncTask.execute(() -> {
+        String res = gotakuFetchAndDecryptSync(url);
+        String jsSafe = res != null ? JSONObject.quote(res) : "null";
+        activity.runOnUiThread(() ->
+            webView.evaluateJavascript("if (window._gotakuCb) window._gotakuCb(" + cbnum + ", " + jsSafe + ");", null)
+        );
+      });
+    }
+
+    @JavascriptInterface
+    public String gotakuResolveStream(String embedUrl) {
+      return gotakuResolveStreamSync(embedUrl);
+    }
+
+    @JavascriptInterface
+    public void gotakuResolveStreamAsync(String embedUrl, int cbnum) {
+      AsyncTask.execute(() -> {
+        String res = gotakuResolveStreamSync(embedUrl);
+        String jsSafe = res != null ? res : "null";
+        activity.runOnUiThread(() ->
+            webView.evaluateJavascript("if (window._gotakuCb) window._gotakuCb(" + cbnum + ", " + jsSafe + ");", null)
+        );
+      });
     }
 
     @JavascriptInterface
