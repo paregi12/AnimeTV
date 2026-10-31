@@ -1,9 +1,9 @@
 package com.amarullz.androidtv.animetvjmto;
 
 public class Conf {
-  public static String DOMAIN = "animekai.to";
+  public static String DOMAIN = "gotaku.to";
   public static String[] SOURCE_DOMAINS={
-      "animekai.to", /* default */
+      "gotaku.to", /* default */
       "animekai.to",
       "anix.to",
       "aniwatchtv.to",
@@ -12,7 +12,7 @@ public class Conf {
       "gotaku.to"
   };
   public static String SOURCE_DOMAIN5_API = "api.animeflix.dev";
-  public static int SOURCE_DOMAIN = 1;
+  public static int SOURCE_DOMAIN = 9;
 
   public static void updateSource(int num){
     SOURCE_DOMAIN=num;

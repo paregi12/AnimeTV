@@ -1,20 +1,12 @@
 /* Body */
 const body=document.body;
 /* const _DNS="9anime.to"; */
-const __DNS=('_JSAPI' in window)?_JSAPI.dns():"animekai.to";
-const __SD=('_JSAPI' in window)?_JSAPI.getSd():1;
+const __DNS=('_JSAPI' in window)?_JSAPI.dns():"gotaku.to";
+const __SD=('_JSAPI' in window)?_JSAPI.getSd():9;
 
 /* Change Removed Sources */
-if (/*__SD==1 ||*/ __SD==2){
-  _JSAPI.setSd(6);
-  _JSAPI.reloadHome();
-}
-if (__SD==4){
-  _JSAPI.setSd(3);
-  _JSAPI.reloadHome();
-}
-if (__SD==7){
-  _JSAPI.setSd(1);
+if (__SD==1 || __SD==2 || __SD==4 || __SD==5 || __SD==6 || __SD==7){
+  _JSAPI.setSd(9);
   _JSAPI.reloadHome();
 }
 
@@ -16253,7 +16245,7 @@ const home={
       }
 
       /* SKIP THIS SOURCES */
-      if ((i==4)||(i==1)||(i==2)||(i==3)||(i==6) ||(i==7)) {
+      if ((i==0)||(i==1)||(i==2)||(i==3)||(i==4)||(i==5)||(i==6)||(i==7)) {
         /* Parental will not work on source 5 */
         continue;
       }

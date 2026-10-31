@@ -131,7 +131,7 @@ const main={
     profile_prefix:'',
     stream_server:0,
     stream_type:0,
-    sd:1,
+    sd:9,
     httpclient:0,
     sd_domain:'',
     fullscreen:false,
