@@ -500,6 +500,11 @@ var gotaku = {
         epList[activeIdx].active = true;
       }
 
+      var dubCount = 0;
+      for (var k = 0; k < epList.length; k++) {
+        if (epList[k].has_dub) dubCount++;
+      }
+
       var o = {
         idMal: tipData.malId,
         anilistId: tipData.anilistId,
@@ -515,7 +520,7 @@ var gotaku = {
         poster: tipData.poster,
         status: true,
         epavail: epList.length,
-        epdub: (epList.length > 0 && epList[0].has_dub) ? epList.length : 0,
+        epdub: dubCount,
         type: tipData.type || "TV",
         genre: tipData.genre,
         info: {
@@ -534,10 +539,23 @@ var gotaku = {
         var currEp = epList[activeIdx];
         if (currEp.has_sub) {
           o.servers.sub.push(pb.serverobj('Gotaku Sub', 0));
-          o.servers.softsub.push(pb.serverobj('Gotaku Soft', 0));
+          o.stream_url.hard = currEp.epId;
         }
         if (currEp.has_dub) {
           o.servers.dub.push(pb.serverobj('Gotaku Dub', 0));
+          o.stream_url.dub = currEp.epId;
+        }
+
+        var preferDub = (_API.currentStreamType == 2) || (pb.cfg_data && pb.cfg_data.dubaudio && !_API.currentStreamTypeValue);
+        if (preferDub && currEp.has_dub) {
+          o.streamtype = "dub";
+          o.playingStreamType = 2;
+        } else if (currEp.has_sub) {
+          o.streamtype = "sub";
+          o.playingStreamType = 0;
+        } else if (currEp.has_dub) {
+          o.streamtype = "dub";
+          o.playingStreamType = 2;
         }
       }
 
@@ -580,40 +598,71 @@ var gotaku = {
       return;
     }
 
+    dt.servers = { dub: [], sub: [], softsub: [] };
+    dt.stream_url = {};
+    if (oe.has_sub) {
+      dt.servers.sub.push(pb.serverobj('Gotaku Sub', 0));
+      dt.stream_url.hard = oe.epId;
+    }
+    if (oe.has_dub) {
+      dt.servers.dub.push(pb.serverobj('Gotaku Dub', 0));
+      dt.stream_url.dub = oe.epId;
+    }
+
+    var preferDub = (_API.currentStreamType == 2) || (pb.cfg_data && pb.cfg_data.dubaudio && !_API.currentStreamTypeValue);
     var reqType = "hard_sub";
-    if (dt.streamtype == "dub" || _API.currentStreamType == 2 || (pb.cfg_data && pb.cfg_data.dubaudio)) {
-      if (oe.has_dub) {
-        reqType = "dub";
-        dt.streamtype = "dub";
-      }
-    } else if (dt.streamtype == "softsub" || _API.currentStreamType == 1) {
-      reqType = "soft_sub";
-      dt.streamtype = "softsub";
+
+    if (preferDub && oe.has_dub) {
+      reqType = "dub";
+      dt.streamtype = "dub";
+      dt.playingStreamType = 2;
+    } else if (oe.has_sub) {
+      reqType = "hard_sub";
+      dt.streamtype = "sub";
+      dt.playingStreamType = 0;
+    } else if (oe.has_dub) {
+      reqType = "dub";
+      dt.streamtype = "dub";
+      dt.playingStreamType = 2;
     }
 
     var d = __SD_DOMAIN || gotaku.dns;
     var embedApiUrl = "https://" + d + "/api/v1/episodes/" + oe.epId + "/embed?type=" + reqType + "&k=8";
     gotaku.callNative('gotakuFetchAndDecrypt', embedApiUrl, function(embedRes) {
       if (!embedRes || !embedRes.data || !embedRes.data.url) {
+        var fallbackType = (reqType == "dub" && oe.has_sub) ? "hard_sub" : null;
+        if (fallbackType) {
+          var fbUrl = "https://" + d + "/api/v1/episodes/" + oe.epId + "/embed?type=" + fallbackType + "&k=8";
+          gotaku.callNative('gotakuFetchAndDecrypt', fbUrl, function(fbRes) {
+            if (!fbRes || !fbRes.data || !fbRes.data.url) {
+              f(null);
+              return;
+            }
+            dt.streamtype = "sub";
+            dt.playingStreamType = 0;
+            gotaku.resolveAndPlay(fbRes.data.url, fbRes.data.skip, f);
+          });
+          return;
+        }
         f(null);
         return;
       }
-      var embedUrl = embedRes.data.url;
-      var skipInfo = embedRes.data.skip;
-
-      gotaku.callNative('gotakuResolveStream', embedUrl, function(manifest) {
-        if (!manifest || (!manifest.proxy_url && !manifest.source)) {
-          f(null);
-          return;
-        }
-        var playUrl = (!_ISELECTRON && manifest.proxy_url) ? manifest.proxy_url : manifest.source;
-        var v = {
-          url: playUrl,
-          subtitles: manifest.subtitles || [],
-          skip: skipInfo
-        };
-        f(v);
-      });
+      gotaku.resolveAndPlay(embedRes.data.url, embedRes.data.skip, f);
+    });
+  },
+  resolveAndPlay: function(embedUrl, skipInfo, f) {
+    gotaku.callNative('gotakuResolveStream', embedUrl, function(manifest) {
+      if (!manifest || (!manifest.proxy_url && !manifest.source)) {
+        f(null);
+        return;
+      }
+      var playUrl = (!_ISELECTRON && manifest.proxy_url) ? manifest.proxy_url : manifest.source;
+      var v = {
+        url: playUrl,
+        subtitles: manifest.subtitles || [],
+        skip: skipInfo
+      };
+      f(v);
     });
   }
 };
@@ -10995,7 +11044,7 @@ const pb={
         if (sel_id>-1){
           var epd=pb.data.ep[sel_id];
           action_value=epd.url;
-          if (__SD3||__SD5||__SD6){
+          if (__SD3||__SD5||__SD6||__SD9){
             action_value='>'+epd.url;
           }
           pb.action_handler(action_value,';1');
@@ -12659,7 +12708,7 @@ const pb={
         var d=pb.data.ep[i];
         var adh='';
         var action_value=d.url;
-        if (__SD3||__SD5||__SD6){
+        if (__SD3||__SD5||__SD6||__SD9){
           action_value='>'+d.url;
         }
         var hl=$n('div',d.active?'playing':'',{action:action_value,arg:pb.tip_value+';1'},pb.pb_episodes.P,special(d.ep)+adh);
