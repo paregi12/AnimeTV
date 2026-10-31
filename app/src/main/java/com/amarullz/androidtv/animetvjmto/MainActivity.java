@@ -143,6 +143,7 @@ public class MainActivity extends FragmentActivity {
     initRefreshRate();
     initBluetooth();
     updateInstance(savedInstanceState);
+    GotakuProxy.getInstance().startServer();
     aView=new AnimeView(this);
 //    initCastService();
   }
@@ -303,6 +304,12 @@ public class MainActivity extends FragmentActivity {
     ARG_TIP= intent.getStringExtra("viewtip");
     ARG_POS= intent.getStringExtra("viewpos");
     aView.updateArgs();
+  }
+
+  @Override
+  protected void onDestroy() {
+    GotakuProxy.getInstance().stopServer();
+    super.onDestroy();
   }
 
   /* BLUETOOTH MEDIA KEY HANDLER */

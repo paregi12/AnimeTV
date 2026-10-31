@@ -235,6 +235,9 @@ const api={
   asyncPrompt(message, cbnum){},
 
 
+  getGotakuProxyPort(){ return 0; },
+  getGotakuProxyUrl(u, k, s){ return u; },
+
   /* will not implemented */
   malLogin(){},
   checkUpdate(){},

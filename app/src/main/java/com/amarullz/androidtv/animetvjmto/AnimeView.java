@@ -1462,6 +1462,16 @@ import javax.crypto.spec.SecretKeySpec;
     }
 
     @JavascriptInterface
+    public int getGotakuProxyPort() {
+      return GotakuProxy.getInstance().getPort();
+    }
+
+    @JavascriptInterface
+    public String getGotakuProxyUrl(String originalUrl, String keySeed, int segmentBytes) {
+      return GotakuProxy.getInstance().createProxyPlaylistUrl(originalUrl, keySeed, segmentBytes);
+    }
+
+    @JavascriptInterface
     public void showToast(String txt){
       activity.runOnUiThread(() ->
           Toast.makeText(activity,txt,Toast.LENGTH_SHORT).show()
