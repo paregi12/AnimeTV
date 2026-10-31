@@ -262,11 +262,12 @@ var gotaku = {
     "X-NoH-Proxy": "true"
   },
   genres: {
-    "_tv": "TV", "_movie": "MOVIE", "_ova": "OVA", "_ona": "ONA", "_special": "SPECIAL",
-    "Action": 1, "Adventure": 2, "Avant Garde": 3, "Award Winning": 4, "Boys Love": 5,
-    "Comedy": 6, "Drama": 7, "Ecchi": 19, "Erotica": 20, "Fantasy": 8, "Girls Love": 9,
-    "Gourmet": 10, "Horror": 11, "Mystery": 12, "Romance": 13, "Sci-Fi": 14,
-    "Slice of Life": 15, "Sports": 16, "Supernatural": 17, "Suspense": 18
+    "_tv": "TV", "_movie": "MOVIE", "_ova": "OVA", "_ona": "ONA", "_special": "SPECIAL", "_music": "MUSIC",
+    "action": 1, "adventure": 2, "avant_garde": 3, "avant-garde": 3, "award_winning": 4, "award-winning": 4,
+    "boys_love": 5, "boys-love": 5, "comedy": 6, "drama": 7, "ecchi": 19, "erotica": 20, "fantasy": 8,
+    "girls_love": 9, "girls-love": 9, "gourmet": 10, "hentai": 21, "horror": 11, "mystery": 12, "romance": 13,
+    "sci-fi": 14, "sci_fi": 14, "slice_of_life": 15, "slice-of-life": 15, "sports": 16, "supernatural": 17,
+    "suspense": 18, "thriller": 18
   },
   getAnimeId: function(url) {
     if (!url) return "";
@@ -292,7 +293,7 @@ var gotaku = {
     var params = ["limit=28", "page=" + enc(p)];
     var nq = (q || '').trim();
     if (nq) {
-      params.push("query=" + enc(nq));
+      params.push("q=" + enc(nq));
     }
     var sortVal = "latest";
     if (sort == 1) sortVal = "trending_week";
@@ -302,18 +303,22 @@ var gotaku = {
 
     if (genres && genres.length) {
       for (var i = 0; i < genres.length; i++) {
-        var gKey = genres[i];
+        var gKey = (genres[i] + '').toLowerCase().trim();
         if (gKey.charAt(0) == '_') {
           var tVal = gotaku.genres[gKey];
           if (tVal) params.push("type=" + enc(tVal));
         } else {
-          var gId = gotaku.genres[gKey];
-          if (gId) params.push("genre=" + enc(gId));
+          var cleanKey = gKey.replace(/ /g, '_').replace(/-/g, '_');
+          var gId = gotaku.genres[gKey] || gotaku.genres[cleanKey] || gotaku.genres[gKey.replace(/_/g, ' ')];
+          if (gId) params.push("genre[]=" + enc(gId));
         }
       }
     }
     if (year) {
       params.push("year=" + enc(year));
+    }
+    if (ses) {
+      params.push("season=" + enc((ses + '').toUpperCase()));
     }
     var d = __SD_DOMAIN ? __SD_DOMAIN : gotaku.dns;
     return "/__proxy/https://" + d + "/api/v1/titles?" + params.join("&");
@@ -339,6 +344,7 @@ var gotaku = {
           d.ep = epInfo.latest_sub || epInfo.latest_dub || epInfo.total || 0;
           d.type = u.format || "TV";
           d.rating = u.score ? (u.score + "") : "";
+          d.adult = (u.is_adult === true || u.is_adult === 1);
           rd.push(d);
         } catch (e2) {}
       }
@@ -17260,6 +17266,9 @@ const home={
         rd=kaas.recentParse(v);
         console.log(["KAAS SEARCH RES",rd]);
       }
+      else if (__SD9){
+        rd=gotaku.recent_parse(v);
+      }
       else if (__SD==1){
         var h=$n('div','','',null,v);
         // window._kaisrc=h;
@@ -18389,6 +18398,9 @@ const home={
       }
       else if (__SD5){
         genrelist=_API.genres_flix;
+      }
+      else if (__SD9){
+        genrelist=gotaku.genres;
       }
       for (var i in genrelist){
         var title=i.replace(/_/g," ").toUpperCase().trim();
