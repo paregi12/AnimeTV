@@ -8,7 +8,8 @@ public class Conf {
       "anix.to",
       "aniwatchtv.to",
       "aniwatchtv.to",
-      "animeflix.live", "kaa.lt", "api.gojo.wtf", "www.miruro.tv"
+      "animeflix.live", "kaa.lt", "api.gojo.wtf", "www.miruro.tv",
+      "gotaku.to"
   };
   public static String SOURCE_DOMAIN5_API = "api.animeflix.dev";
   public static int SOURCE_DOMAIN = 1;
