@@ -153,26 +153,7 @@ jobs:
 
       - name: Update and Commit server.json
         run: |
-          APK_FILE=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          APK_SIZE=$(du -h "$APK_FILE" | cut -f1)
-          cat <<EOF > server.json
-{
-  "domain": "gotaku.to",
-  "update": "${CLEAN_VER}",
-
-  "appnum": ${APP_VERSION_CODE},
-  "appver": "${CLEAN_VER}",
-  "appsize": "${APK_SIZE}B",
-  "appurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv-release.apk",
-  "appnote": "- Release ${CLEAN_VER}\n- Official signed APK build\n- Bug fixes and improvements",
-
-  "pcnum": ${APP_VERSION_CODE},
-  "pcver": "${CLEAN_VER}",
-  "pcsize": "${APK_SIZE}B",
-  "pcurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv-release.apk",
-  "pcnote": "AnimeTV ${CLEAN_VER} update"
-}
-EOF
+          python3 scripts/update_server_json.py
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add server.json
