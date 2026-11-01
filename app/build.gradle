@@ -10,30 +10,64 @@ android {
         applicationId "com.amarullz.androidtv.animetvjmto"
         minSdk 22
         targetSdk 34
-        versionCode 666
-         versionName "6.6.7-Nightly"
+        versionCode (System.getenv("APP_VERSION_CODE") ?: "666").toInteger()
+        versionName (System.getenv("APP_VERSION_NAME") ?: "6.6.7-Nightly")
 
         // Automatic Build Version
         buildConfigField "long", "TIMESTAMP", System.currentTimeMillis() + "L"
         setProperty("archivesBaseName", "animetv-" + versionName)
     }
 
+    signingConfigs {
+        debug {
+            storeFile rootProject.file('keystore/debug.keystore')
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
+        release {
+            def ksFile = null
+            if (System.getenv("KEYSTORE_FILE") != null) {
+                def customKs = file(System.getenv("KEYSTORE_FILE"))
+                if (customKs.exists()) {
+                    ksFile = customKs
+                } else {
+                    def rootKs = rootProject.file(System.getenv("KEYSTORE_FILE"))
+                    if (rootKs.exists()) {
+                        ksFile = rootKs
+                    }
+                }
+            }
+            if (ksFile == null && rootProject.file('keystore/release.keystore').exists()) {
+                ksFile = rootProject.file('keystore/release.keystore')
+            }
+            if (ksFile == null && rootProject.file('keystore/debug.keystore').exists()) {
+                ksFile = rootProject.file('keystore/debug.keystore')
+            }
+
+            if (ksFile != null) {
+                storeFile ksFile
+                storePassword System.getenv("KEYSTORE_PASSWORD") ?: "android"
+                keyAlias System.getenv("KEY_ALIAS") ?: (ksFile.name.contains("release") ? "animetv" : "androiddebugkey")
+                keyPassword System.getenv("KEY_PASSWORD") ?: "android"
+            } else {
+                storeFile rootProject.file('keystore/debug.keystore')
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
         debug {
             minifyEnabled false
-        }
-    }
-    signingConfigs {
-        debug {
-            storeFile file('../keystore/debug.keystore')
-            storePassword "android"
-            keyAlias "androiddebugkey"
-            keyPassword "android"
+            signingConfig signingConfigs.debug
         }
     }
 }

@@ -1,0 +1,137 @@
+name: Build & Publish Release APK
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      custom_version:
+        description: 'Custom version tag (leave empty for auto-bump, e.g. v1.0.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build_release:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, 'push build') || contains(github.event.head_commit.message, 'Push build') || contains(github.event.head_commit.message, 'Push Build') || contains(github.event.head_commit.message, 'PUSH BUILD') || contains(github.event.head_commit.message, 'push-build') || contains(github.event.head_commit.message, 'Push-Build') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Release Version
+        id: versioning
+        run: |
+          git fetch --tags --force || true
+          if [ -n "${{ inputs.custom_version }}" ]; then
+            NEW_TAG="${{ inputs.custom_version }}"
+          else
+            LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -n 1)
+            if [ -z "$LATEST_TAG" ]; then
+              NEW_TAG="v1.0.0"
+            else
+              VER="${LATEST_TAG#v}"
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$VER"
+              MAJOR=${MAJOR:-1}
+              MINOR=${MINOR:-0}
+              PATCH=${PATCH:-0}
+              
+              PATCH=$((PATCH + 1))
+              if [ "$PATCH" -ge 10 ]; then
+                PATCH=0
+                MINOR=$((MINOR + 1))
+                if [ "$MINOR" -ge 10 ]; then
+                  MINOR=0
+                  MAJOR=$((MAJOR + 1))
+                fi
+              fi
+              NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+            fi
+          fi
+          echo "Target Release Version: $NEW_TAG"
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+          CLEAN_VER="${NEW_TAG#v}"
+          echo "APP_VERSION_NAME=$CLEAN_VER" >> $GITHUB_ENV
+          IFS='.' read -r MAJ MIN PAT <<< "$CLEAN_VER"
+          VCODE=$(( (${MAJ:-1} * 10000) + (${MIN:-0} * 100) + ${PAT:-0} ))
+          echo "APP_VERSION_CODE=$VCODE" >> $GITHUB_ENV
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Prepare Signing Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          mkdir -p keystore
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Using release keystore from secrets.KEYSTORE_BASE64"
+            echo "$KEYSTORE_BASE64" | base64 -d > keystore/release.keystore
+            echo "KEYSTORE_FILE=$GITHUB_WORKSPACE/keystore/release.keystore" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+          else
+            echo "No secrets.KEYSTORE_BASE64 found. Creating a release keystore..."
+            keytool -genkey -v -keystore keystore/release.keystore -alias animetv -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=AnimeTV Release,O=AnimeTV,C=US"
+            echo "KEYSTORE_FILE=$GITHUB_WORKSPACE/keystore/release.keystore" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_ALIAS=animetv" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
+          fi
+          if [ ! -f keystore/debug.keystore ]; then
+            keytool -genkey -v -keystore keystore/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          chmod +x ./gradlew
+
+      - name: Build Release APK
+        env:
+          APP_VERSION_NAME: ${{ env.APP_VERSION_NAME }}
+          APP_VERSION_CODE: ${{ env.APP_VERSION_CODE }}
+          KEYSTORE_FILE: ${{ env.KEYSTORE_FILE }}
+          KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ env.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Package Release APK
+        run: |
+          APK_FILE=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "Error: Release APK not found!"
+            exit 1
+          fi
+          mkdir -p release-artifacts
+          cp "$APK_FILE" "release-artifacts/animetv-${NEW_TAG}.apk"
+          cp "$APK_FILE" "release-artifacts/animetv-release.apk"
+          echo "Package created: release-artifacts/animetv-${NEW_TAG}.apk"
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: animetv-${{ env.NEW_TAG }}.apk
+          path: release-artifacts/animetv-${{ env.NEW_TAG }}.apk
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${NEW_TAG}" \
+            "release-artifacts/animetv-${NEW_TAG}.apk" \
+            "release-artifacts/animetv-release.apk" \
+            --title "AnimeTV ${NEW_TAG}" \
+            --notes "Automated Release ${NEW_TAG} for AndroidTV, GoogleTV, and FireTV."
