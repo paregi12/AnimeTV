@@ -17138,8 +17138,8 @@ const home={
     open_donation:function(ispaypal){
       if (ispaypal){
         home.settings.open_qrcode(
-          "Donate Project<br>https://paypal.me/amarullz",
-          "https://paypal.me/amarullz"
+          "Donate Project<br>https://ko-fi.com/paregi",
+          "https://ko-fi.com/paregi"
         );
       }
       else{

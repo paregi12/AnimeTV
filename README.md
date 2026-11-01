@@ -9,8 +9,7 @@ You can select any source that suit your needs, easy to install, contains alot o
 > Source data is from various *anime streaming website*. Developer doesn't have any affiliation with it. Please read [DISCLAIMER](#DISCLAIMER)
 
 # Donation & More Information
-- 💖 **Sponsor Project :** [https://github.com/sponsors/amarullz](https://github.com/sponsors/amarullz)
-- 💝 **Donate Project :** [Paypal: https://paypal.me/amarullz](https://paypal.me/amarullz)
+- 💝 **Donate Project :** [Ko-fi: https://ko-fi.com/paregi](https://ko-fi.com/paregi)
 - ❓ **Join Discussion on Discord :**  [https://discord.gg/zD6URsM4ms](https://discord.gg/zD6URsM4ms)
 
 # DISCLAIMER
