@@ -21,5 +21,8 @@ keystore/debug.keystore
 .idea/deploymentTargetSelector.xml
 electron/src/version.js
 keystore/animetv.keystore
+keystore/release.keystore
+keystore/release.jks
+keystore/*.base64
 keystore/keystore-info.md
 keystore/keystore.base64
