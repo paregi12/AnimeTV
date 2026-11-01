@@ -21,13 +21,11 @@ You can select any source that suit your needs, easy to install, contains alot o
 * If the internet infringement issues are involved, please contact the source website. The developer does not assume any legal responsibility.
 
 # Download URL and Code
-- **NIGHTLY / DEBUG APK**
+- **RELEASE APK (STABLE)**
+  - Releases: **[https://github.com/paregi12/AnimeTV/releases](https://github.com/paregi12/AnimeTV/releases)**
+- **DEBUG APK (TESTING)**
   - Github Actions: **[https://github.com/paregi12/AnimeTV/actions](https://github.com/paregi12/AnimeTV/actions)**
   - Nightly.link: **[https://nightly.link/paregi12/AnimeTV/workflows/build-debug/master?preview](https://nightly.link/paregi12/AnimeTV/workflows/build-debug/master?preview)**
-
-https://private-user-images.githubusercontent.com/1386831/423260195-dac0445a-086c-4f10-8443-15cc3da48e4b.mp4
-
-
 
 # Screenshot
 ![Homescreen](https://github.com/amarullz/AnimeTV/assets/1386831/d05c7e5d-8abc-4fed-9183-0c58aa815c44)
