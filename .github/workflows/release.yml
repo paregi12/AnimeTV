@@ -112,13 +112,6 @@ jobs:
           chmod +x ./gradlew
 
       - name: Build Release APK
-        env:
-          APP_VERSION_NAME: ${{ env.APP_VERSION_NAME }}
-          APP_VERSION_CODE: ${{ env.APP_VERSION_CODE }}
-          KEYSTORE_FILE: ${{ env.KEYSTORE_FILE }}
-          KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ env.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
         run: ./gradlew assembleRelease --stacktrace
 
       - name: Package Release APK
@@ -136,8 +129,8 @@ jobs:
       - name: Upload Release Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: animetv-${{ env.NEW_TAG }}.apk
-          path: release-artifacts/animetv-${{ env.NEW_TAG }}.apk
+          name: animetv-release.apk
+          path: release-artifacts/animetv-release.apk
           retention-days: 30
 
       - name: Publish GitHub Release
@@ -165,23 +158,23 @@ jobs:
           cat <<EOF > server.json
 {
   "domain": "gotaku.to",
-  "update": "${{ env.CLEAN_VER }}",
+  "update": "${CLEAN_VER}",
 
-  "appnum": ${{ env.APP_VERSION_CODE }},
-  "appver": "${{ env.CLEAN_VER }}",
+  "appnum": ${APP_VERSION_CODE},
+  "appver": "${CLEAN_VER}",
   "appsize": "${APK_SIZE}B",
   "appurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv-release.apk",
-  "appnote": "- Release ${{ env.CLEAN_VER }}\n- Official signed APK build\n- Bug fixes and improvements",
+  "appnote": "- Release ${CLEAN_VER}\n- Official signed APK build\n- Bug fixes and improvements",
 
-  "pcnum": ${{ env.APP_VERSION_CODE }},
-  "pcver": "${{ env.CLEAN_VER }}",
+  "pcnum": ${APP_VERSION_CODE},
+  "pcver": "${CLEAN_VER}",
   "pcsize": "${APK_SIZE}B",
   "pcurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv-release.apk",
-  "pcnote": "AnimeTV ${{ env.CLEAN_VER }} update"
+  "pcnote": "AnimeTV ${CLEAN_VER} update"
 }
 EOF
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add server.json
-          git commit -m "Update server.json to ${{ env.NEW_TAG }}" || true
+          git commit -m "Update server.json to ${NEW_TAG}" || true
           git push origin master || true
