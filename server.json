@@ -1,16 +1,14 @@
 {
   "domain": "gotaku.to",
-  "update": "1.0.0",
-
-  "appnum": 10000,
-  "appver": "1.0.0",
-  "appsize": "6.03 MB",
+  "update": "1.0.1",
+  "appnum": 10001,
+  "appver": "1.0.1",
+  "appsize": "6.1MB",
   "appurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv-release.apk",
-  "appnote": "- Integrated Gotaku source\n- In-app auto-updates enabled\n- Official signed release",
-
-  "pcnum": 10000,
-  "pcver": "1.0.0",
-  "pcsize": "6.03 MB",
+  "appnote": "- Release 1.0.1\n- Official signed APK build\n- Bug fixes and improvements",
+  "pcnum": 10001,
+  "pcver": "1.0.1",
+  "pcsize": "6.1MB",
   "pcurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv-release.apk",
-  "pcnote": "AnimeTV v1.0.0 update"
+  "pcnote": "AnimeTV 1.0.1 update"
 }
