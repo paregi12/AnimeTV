@@ -23091,7 +23091,7 @@ const touchHelper={
     }
     window._ELECTRON_CHECK_UPDATE=function(ismenu){
       _JSAPI.storeSet('__noautoupdate','0');
-      $ap('https://raw.githubusercontent.com/amarullz/kaicodex/refs/heads/main/shr/server.json',function(r){
+      $ap('https://raw.githubusercontent.com/paregi12/AnimeTV/master/server.json',function(r){
         if (r.ok){
           try{
             var update=JSON.parse(r.responseText);

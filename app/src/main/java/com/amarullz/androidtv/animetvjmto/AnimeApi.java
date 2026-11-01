@@ -103,8 +103,8 @@ public class AnimeApi extends WebViewClient {
       try {
         /* Get Server Data from Github */
         Http http=new Http(
-                "https://raw.githubusercontent.com/amarullz/kaicodex/main/shr/server" +
-                ".json?"+System.currentTimeMillis()
+                "https://raw.githubusercontent.com/paregi12/AnimeTV/master/server.json?" +
+                System.currentTimeMillis()
         );
         http.execute();
         String serverjson=http.body.toString();
