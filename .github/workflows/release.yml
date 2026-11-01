@@ -27,8 +27,18 @@ jobs:
         id: versioning
         run: |
           git fetch --tags --force || true
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          EXPLICIT_VER=$(echo "$COMMIT_MSG" | grep -ioP "push[- ]build[:\s]+\Kv?[0-9]+(\.[0-9]+)+" | head -n 1 || true)
+          
           if [ -n "${{ inputs.custom_version }}" ]; then
             NEW_TAG="${{ inputs.custom_version }}"
+          elif [ -n "$EXPLICIT_VER" ]; then
+            if [[ ! "$EXPLICIT_VER" =~ ^v ]]; then
+              NEW_TAG="v$EXPLICIT_VER"
+            else
+              NEW_TAG="$EXPLICIT_VER"
+            fi
+            echo "Found explicit version in commit message: $NEW_TAG"
           else
             LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -n 1)
             if [ -z "$LATEST_TAG" ]; then
@@ -51,6 +61,9 @@ jobs:
               fi
               NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
             fi
+          fi
+          if [[ ! "$NEW_TAG" =~ ^v ]]; then
+            NEW_TAG="v$NEW_TAG"
           fi
           echo "Target Release Version: $NEW_TAG"
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
@@ -130,8 +143,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${NEW_TAG}" \
-            "release-artifacts/animetv-${NEW_TAG}.apk" \
-            "release-artifacts/animetv-release.apk" \
-            --title "AnimeTV ${NEW_TAG}" \
-            --notes "Automated Release ${NEW_TAG} for AndroidTV, GoogleTV, and FireTV."
+          if gh release view "${NEW_TAG}" >/dev/null 2>&1; then
+            echo "Release ${NEW_TAG} already exists, updating assets..."
+            gh release upload "${NEW_TAG}" \
+              "release-artifacts/animetv-${NEW_TAG}.apk" \
+              "release-artifacts/animetv-release.apk" \
+              --clobber
+          else
+            gh release create "${NEW_TAG}" \
+              "release-artifacts/animetv-${NEW_TAG}.apk" \
+              "release-artifacts/animetv-release.apk" \
+              --title "AnimeTV ${NEW_TAG}" \
+              --notes "Automated Release ${NEW_TAG} for AndroidTV, GoogleTV, and FireTV."
+          fi
