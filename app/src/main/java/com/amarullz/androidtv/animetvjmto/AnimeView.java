@@ -261,7 +261,7 @@ import javax.crypto.spec.SecretKeySpec;
     webSettings.setGeolocationEnabled(false);
 
     wv.addJavascriptInterface(new JSViewApi(), "_JSAPI");
-    wv.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+    wv.setLayerType(View.LAYER_TYPE_NONE, null);
   }
 
   public WebChromeClient chromeClient=null;
