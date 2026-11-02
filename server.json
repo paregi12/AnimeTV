@@ -1,14 +1,14 @@
 {
   "domain": "gotaku.to",
-  "update": "1.0.3",
-  "appnum": 10003,
-  "appver": "1.0.3",
+  "update": "1.0.4",
+  "appnum": 10004,
+  "appver": "1.0.4",
   "appsize": "6.1MB",
   "appurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk",
-  "appnote": "- Add configurable Video Buffer setting (30s to 10m) to reduce RAM usage on low-end devices",
-  "pcnum": 10003,
-  "pcver": "1.0.3",
+  "appnote": "- Fix app startup crash and stabilize video buffer initialization",
+  "pcnum": 10004,
+  "pcver": "1.0.4",
   "pcsize": "6.1MB",
   "pcurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk",
-  "pcnote": "AnimeTV 1.0.3 update"
+  "pcnote": "AnimeTV 1.0.4 update"
 }
