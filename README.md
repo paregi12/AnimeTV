@@ -10,7 +10,7 @@ You can select any source that suit your needs, easy to install, contains alot o
 
 # Donation & More Information
 - 💝 **Donate Project :** [Ko-fi: https://ko-fi.com/paregi](https://ko-fi.com/paregi)
-- ❓ **Join Discussion on Discord :**  [https://discord.gg/zD6URsM4ms](https://discord.gg/zD6URsM4ms)
+- ❓ **Join Discussion on Discord :**  [https://discord.gg/M76sBtFpH](https://discord.gg/M76sBtFpH)
 
 # DISCLAIMER
 * AnimeTV only scrapes links from various websites and makes it easier for users to find anime.
