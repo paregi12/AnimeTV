@@ -26,3 +26,5 @@ keystore/release.jks
 keystore/*.base64
 keystore/keystore-info.md
 keystore/keystore.base64
+__pycache__/
+*.pyc

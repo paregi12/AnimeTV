@@ -132,20 +132,25 @@ jobs:
           path: release-artifacts/animetv.apk
           retention-days: 30
 
+      - name: Generate Release Notes
+        run: python3 scripts/generate_release_notes.py
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "${NEW_TAG}" >/dev/null 2>&1; then
-            echo "Release ${NEW_TAG} already exists, updating asset..."
+            echo "Release ${NEW_TAG} already exists, updating asset and notes..."
             gh release upload "${NEW_TAG}" \
               "release-artifacts/animetv.apk" \
               --clobber
+            gh release edit "${NEW_TAG}" \
+              --notes-file "release-artifacts/release_notes.md"
           else
             gh release create "${NEW_TAG}" \
               "release-artifacts/animetv.apk" \
               --title "AnimeTV ${NEW_TAG}" \
-              --notes "Automated Release ${NEW_TAG} for AndroidTV, GoogleTV, and FireTV."
+              --notes-file "release-artifacts/release_notes.md"
           fi
 
       - name: Update and Commit server.json
