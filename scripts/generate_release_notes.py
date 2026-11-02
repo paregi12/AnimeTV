@@ -16,8 +16,7 @@ def main():
 {notes}
 
 ---
-- **AFTV Downloader Code:** `1600676`
-- **Direct Download:** [animetv.apk](https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk)
+- **Downloader Code:** `1600676`
 """
     out_dir = "release-artifacts"
     os.makedirs(out_dir, exist_ok=True)
