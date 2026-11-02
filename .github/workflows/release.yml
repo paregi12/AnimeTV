@@ -122,14 +122,14 @@ jobs:
             exit 1
           fi
           mkdir -p release-artifacts
-          cp "$APK_FILE" "release-artifacts/animetv-${NEW_TAG}.apk"
-          echo "Package created: release-artifacts/animetv-${NEW_TAG}.apk"
+          cp "$APK_FILE" "release-artifacts/animetv.apk"
+          echo "Package created: release-artifacts/animetv.apk"
 
       - name: Upload Release Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: animetv-apk
-          path: release-artifacts/animetv-*.apk
+          name: animetv.apk
+          path: release-artifacts/animetv.apk
           retention-days: 30
 
       - name: Publish GitHub Release
@@ -139,11 +139,11 @@ jobs:
           if gh release view "${NEW_TAG}" >/dev/null 2>&1; then
             echo "Release ${NEW_TAG} already exists, updating asset..."
             gh release upload "${NEW_TAG}" \
-              "release-artifacts/animetv-${NEW_TAG}.apk" \
+              "release-artifacts/animetv.apk" \
               --clobber
           else
             gh release create "${NEW_TAG}" \
-              "release-artifacts/animetv-${NEW_TAG}.apk" \
+              "release-artifacts/animetv.apk" \
               --title "AnimeTV ${NEW_TAG}" \
               --notes "Automated Release ${NEW_TAG} for AndroidTV, GoogleTV, and FireTV."
           fi

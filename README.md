@@ -22,7 +22,8 @@ You can select any source that suit your needs, easy to install, contains alot o
 
 # Download URL and Code
 - **RELEASE APK (STABLE)**
-  - Releases: **[https://github.com/paregi12/AnimeTV/releases](https://github.com/paregi12/AnimeTV/releases)**
+  - Direct Download (Latest): **[https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk](https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk)**
+  - All Releases: **[https://github.com/paregi12/AnimeTV/releases](https://github.com/paregi12/AnimeTV/releases)**
 - **DEBUG APK (TESTING)**
   - Github Actions: **[https://github.com/paregi12/AnimeTV/actions](https://github.com/paregi12/AnimeTV/actions)**
   - Nightly.link: **[https://nightly.link/paregi12/AnimeTV/workflows/build-debug/master?preview](https://nightly.link/paregi12/AnimeTV/workflows/build-debug/master?preview)**

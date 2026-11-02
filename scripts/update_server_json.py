@@ -10,9 +10,8 @@ def main():
         size = subprocess.getoutput(f'du -h "{apk}" | cut -f1') + "B"
 
     clean_ver = os.environ.get("CLEAN_VER", "1.0.0")
-    new_tag = os.environ.get("NEW_TAG", f"v{clean_ver}")
     vcode = int(os.environ.get("APP_VERSION_CODE", "10000"))
-    apk_url = f"https://github.com/paregi12/AnimeTV/releases/download/{new_tag}/animetv-{new_tag}.apk"
+    apk_url = "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk"
 
     data = {
         "domain": "gotaku.to",

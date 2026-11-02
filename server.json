@@ -4,11 +4,11 @@
   "appnum": 10001,
   "appver": "1.0.1",
   "appsize": "6.1MB",
-  "appurl": "https://github.com/paregi12/AnimeTV/releases/download/v1.0.1/animetv-v1.0.1.apk",
+  "appurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk",
   "appnote": "- Release 1.0.1\n- Official signed APK build\n- Bug fixes and improvements",
   "pcnum": 10001,
   "pcver": "1.0.1",
   "pcsize": "6.1MB",
-  "pcurl": "https://github.com/paregi12/AnimeTV/releases/download/v1.0.1/animetv-v1.0.1.apk",
+  "pcurl": "https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk",
   "pcnote": "AnimeTV 1.0.1 update"
 }
