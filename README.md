@@ -21,6 +21,8 @@ You can select any source that suit your needs, easy to install, contains alot o
 * If the internet infringement issues are involved, please contact the source website. The developer does not assume any legal responsibility.
 
 # Download URL and Code
+- **DOWNLOADER CODE (FIRE TV / ANDROID TV / GOOGLE TV)**
+  - Enter Code in Downloader App: **`1600676`**
 - **RELEASE APK (STABLE)**
   - Direct Download (Latest): **[https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk](https://github.com/paregi12/AnimeTV/releases/latest/download/animetv.apk)**
   - All Releases: **[https://github.com/paregi12/AnimeTV/releases](https://github.com/paregi12/AnimeTV/releases)**
