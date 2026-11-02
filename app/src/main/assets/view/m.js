@@ -8671,6 +8671,7 @@ const pb={
     quality:0,
     uifontsize:2,
     seekvalue:10,
+    videobuffer:2,
     httpclient:0,
     mirrorserver:0,
     listprog:0,
@@ -8822,6 +8823,17 @@ const pb={
           pb.cfg_data.seekvalue=10;
         }
 
+        if ('videobuffer' in j){
+          var vb=parseInt(j.videobuffer);
+          pb.cfg_data.videobuffer=2;
+          if (!isNaN(vb)&&(vb!=null)&&vb>=0&&vb<=4){
+            pb.cfg_data.videobuffer=vb;
+          }
+        }
+        else{
+          pb.cfg_data.videobuffer=2;
+        }
+
         
 
         if ('httpclient' in j){
@@ -8880,6 +8892,7 @@ const pb={
     pb.cfg_data.animation=0;
     pb.cfg_data.uifontsize=2;
     pb.cfg_data.seekvalue=10;
+    pb.cfg_data.videobuffer=2;
     
     pb.cfg_data.httpclient=0;
     pb.cfg_data.listprog=0;
@@ -9248,12 +9261,14 @@ const pb={
           el.lastElementChild.innerHTML=pb.cfg_data[key]+" seconds";
         }
         else if (key=='videobuffer'){
-          var vb=2;
+          var vb=pb.cfg_data.videobuffer;
           if (typeof _JSAPI!=='undefined'&&_JSAPI.getVideoBuffer){
             vb=_JSAPI.getVideoBuffer();
           }
           if (vb<0||vb>=pb.cfgvideobuffer_name.length) vb=2;
-          el.lastElementChild.innerHTML=pb.cfgvideobuffer_name[vb];
+          if (el && el.lastElementChild){
+            el.lastElementChild.innerHTML=pb.cfgvideobuffer_name[vb];
+          }
         }
         else if (key=='httpclient'){
           if (_ISELECTRON)
@@ -11382,7 +11397,7 @@ const pb={
         );
       }
       else if (key=="videobuffer"){
-        var vsel=2;
+        var vsel=pb.cfg_data.videobuffer;
         if (typeof _JSAPI!=='undefined'&&_JSAPI.getVideoBuffer){
           vsel=_JSAPI.getVideoBuffer();
         }
@@ -11393,10 +11408,12 @@ const pb={
           vsel,
           function(chval){
             if (chval!==null){
+              pb.cfg_data.videobuffer=toInt(chval);
               if (typeof _JSAPI!=='undefined'&&_JSAPI.setVideoBuffer){
                 _JSAPI.setVideoBuffer(toInt(chval));
               }
               pb.cfg_update_el(key);
+              pb.cfg_save();
             }
           }
         );

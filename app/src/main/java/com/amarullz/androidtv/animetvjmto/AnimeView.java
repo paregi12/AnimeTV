@@ -528,10 +528,9 @@ import javax.crypto.spec.SecretKeySpec;
     webView.setVerticalScrollBarEnabled(false);
     webView.setBackgroundColor(Color.TRANSPARENT);
 
+    aApi=new AnimeApi(activity);
     initVideoView();
     videoViewSetScale(videoStatScaleType);
-
-    aApi=new AnimeApi(activity);
     playerInjectString=aApi.assetsString("inject/view_player.html");
 //    webView.loadUrl("https://"+Conf.getDomain()+"/__view/main.html");
     webView.loadUrl("https://"+Conf.getDomain()+"/__view/login/login" +
@@ -698,11 +697,18 @@ import javax.crypto.spec.SecretKeySpec;
   }
 
   public int getVideoBufferLevel() {
-    int level = aApi.pref.getInt("videobuffer", 2);
-    if (level < 0 || level > 4) {
-      level = 2;
-    }
-    return level;
+    try {
+      SharedPreferences pref = (aApi != null && aApi.pref != null)
+          ? aApi.pref
+          : (activity != null ? activity.getSharedPreferences("SERVER", Context.MODE_PRIVATE) : null);
+      if (pref != null) {
+        int level = pref.getInt("videobuffer", 2);
+        if (level >= 0 && level <= 4) {
+          return level;
+        }
+      }
+    } catch (Exception ignored) {}
+    return 2;
   }
 
   @SuppressLint("UnsafeOptInUsageError")
@@ -776,60 +782,68 @@ import javax.crypto.spec.SecretKeySpec;
 
     videoTrackManager=new TrackManager(activity);
 
-    int bufLevel = getVideoBufferLevel();
-    int minBufMs = 120000;
-    int maxBufMs = 120000;
-    int backBufMs = 30000;
-    int startMs = 2500;
-    int rebufferMs = 5000;
+    DefaultLoadControl loadControl;
+    try {
+      int bufLevel = getVideoBufferLevel();
+      int minBufMs = 120000;
+      int maxBufMs = 120000;
+      int backBufMs = 30000;
+      int startMs = 2500;
+      int rebufferMs = 5000;
 
-    switch (bufLevel) {
-      case 0:
-        minBufMs = 30000;
-        maxBufMs = 30000;
-        backBufMs = 10000;
-        startMs = 1500;
-        rebufferMs = 3000;
-        break;
-      case 1:
-        minBufMs = 60000;
-        maxBufMs = 60000;
-        backBufMs = 20000;
-        startMs = 2000;
-        rebufferMs = 4000;
-        break;
-      case 2:
-        minBufMs = 120000;
-        maxBufMs = 120000;
-        backBufMs = 30000;
-        startMs = 2500;
-        rebufferMs = 5000;
-        break;
-      case 3:
-        minBufMs = 300000;
-        maxBufMs = 300000;
-        backBufMs = 60000;
-        startMs = 2500;
-        rebufferMs = 5000;
-        break;
-      case 4:
-        minBufMs = 600000;
-        maxBufMs = 600000;
-        backBufMs = 120000;
-        startMs = 2500;
-        rebufferMs = 5000;
-        break;
+      switch (bufLevel) {
+        case 0:
+          minBufMs = 30000;
+          maxBufMs = 30000;
+          backBufMs = 10000;
+          startMs = 1500;
+          rebufferMs = 3000;
+          break;
+        case 1:
+          minBufMs = 60000;
+          maxBufMs = 60000;
+          backBufMs = 20000;
+          startMs = 2000;
+          rebufferMs = 4000;
+          break;
+        case 2:
+          minBufMs = 120000;
+          maxBufMs = 120000;
+          backBufMs = 30000;
+          startMs = 2500;
+          rebufferMs = 5000;
+          break;
+        case 3:
+          minBufMs = 300000;
+          maxBufMs = 300000;
+          backBufMs = 60000;
+          startMs = 2500;
+          rebufferMs = 5000;
+          break;
+        case 4:
+          minBufMs = 600000;
+          maxBufMs = 600000;
+          backBufMs = 120000;
+          startMs = 2500;
+          rebufferMs = 5000;
+          break;
+      }
+
+      loadControl = new DefaultLoadControl.Builder()
+          .setBackBuffer(backBufMs, true)
+          .setBufferDurationsMs(
+              minBufMs,
+              maxBufMs,
+              startMs,
+              rebufferMs
+          )
+          .build();
+    } catch (Exception e) {
+      loadControl = new DefaultLoadControl.Builder()
+          .setBackBuffer(120000, true)
+          .setBufferDurationsMs(120000, 120000, 2500, 5000)
+          .build();
     }
-
-    DefaultLoadControl loadControl=new DefaultLoadControl.Builder()
-        .setBackBuffer(backBufMs, true)
-        .setBufferDurationsMs(
-            minBufMs,
-            maxBufMs,
-            startMs,
-            rebufferMs
-        )
-        .build();
 
     // trackManager.
     videoPlayerConfig=
@@ -1978,8 +1992,17 @@ import javax.crypto.spec.SecretKeySpec;
     @JavascriptInterface
     public void setVideoBuffer(int level){
       if (level >= 0 && level <= 4) {
-        aApi.pref.edit().putInt("videobuffer", level).apply();
-        activity.runOnUiThread(AnimeView.this::initVideoView);
+        try {
+          SharedPreferences pref = (aApi != null && aApi.pref != null)
+              ? aApi.pref
+              : (activity != null ? activity.getSharedPreferences("SERVER", Context.MODE_PRIVATE) : null);
+          if (pref != null) {
+            pref.edit().putInt("videobuffer", level).apply();
+          }
+          if (activity != null) {
+            activity.runOnUiThread(AnimeView.this::initVideoView);
+          }
+        } catch (Exception ignored) {}
       }
     }
 
