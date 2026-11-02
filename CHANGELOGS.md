@@ -1,4 +1,6 @@
 # Changelogs
+- **1.0.3**
+  - Add configurable Video Buffer setting (30s to 10m) to reduce RAM usage on low-end devices
 - **1.0.2**
   - Performance improvements for low-end devices
   - Remove top announcement message and YouTube channel link
