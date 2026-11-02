@@ -8948,6 +8948,13 @@ const pb={
     'Large',
     'Larger'
   ],
+  cfgvideobuffer_name:[
+    '30 Seconds (Low RAM)',
+    '1 Minute',
+    '2 Minutes (Recommended)',
+    '5 Minutes',
+    '10 Minutes (High RAM)'
+  ],
   cfghttpclient_name:[
     'OkHttp with DoH Support',
     'Generic HttpClient',
@@ -9240,6 +9247,14 @@ const pb={
         else if (key=='seekvalue'){
           el.lastElementChild.innerHTML=pb.cfg_data[key]+" seconds";
         }
+        else if (key=='videobuffer'){
+          var vb=2;
+          if (typeof _JSAPI!=='undefined'&&_JSAPI.getVideoBuffer){
+            vb=_JSAPI.getVideoBuffer();
+          }
+          if (vb<0||vb>=pb.cfgvideobuffer_name.length) vb=2;
+          el.lastElementChild.innerHTML=pb.cfgvideobuffer_name[vb];
+        }
         else if (key=='httpclient'){
           if (_ISELECTRON)
             el.lastElementChild.innerHTML=pb.cfghttpclient_electron_name[pb.cfg_data[key]];
@@ -9325,6 +9340,7 @@ const pb={
 
       pb.cfg_update_el('uifontsize');
       pb.cfg_update_el('seekvalue');
+      pb.cfg_update_el('videobuffer');
       pb.cfg_update_el('httpclient');
       pb.cfg_update_el('listprog');
       
@@ -11361,6 +11377,26 @@ const pb={
               pb.cfg_data.seekvalue=toInt(lst[chval]);
               pb.cfg_update_el(key);
               pb.cfg_save();
+            }
+          }
+        );
+      }
+      else if (key=="videobuffer"){
+        var vsel=2;
+        if (typeof _JSAPI!=='undefined'&&_JSAPI.getVideoBuffer){
+          vsel=_JSAPI.getVideoBuffer();
+        }
+        if (vsel<0||vsel>=pb.cfgvideobuffer_name.length) vsel=2;
+        listOrder.showList(
+          "Video Buffer",
+          pb.cfgvideobuffer_name,
+          vsel,
+          function(chval){
+            if (chval!==null){
+              if (typeof _JSAPI!=='undefined'&&_JSAPI.setVideoBuffer){
+                _JSAPI.setVideoBuffer(toInt(chval));
+              }
+              pb.cfg_update_el(key);
             }
           }
         );
@@ -16549,6 +16585,14 @@ const home={
           },
           home.settings.video.P,
           '<c>fast_forward</c> Seek Value<span class="value"></span>'
+        );
+        home.settings.tools._s_videobuffer=$n(
+          'div','',{
+            action:'*videobuffer',
+            s_desc:'Set video buffer duration in memory. Lower values reduce RAM usage on low-end devices.'
+          },
+          home.settings.video.P,
+          '<c>motion_photos_paused</c> Video Buffer<span class="value"></span>'
         );
         home.settings.tools._s_closeconfirm=$n(
           'div','',{

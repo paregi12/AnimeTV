@@ -697,6 +697,14 @@ import javax.crypto.spec.SecretKeySpec;
     });
   }
 
+  public int getVideoBufferLevel() {
+    int level = aApi.pref.getInt("videobuffer", 2);
+    if (level < 0 || level > 4) {
+      level = 2;
+    }
+    return level;
+  }
+
   @SuppressLint("UnsafeOptInUsageError")
   public void initVideoView(){
     if (videoView!=null){
@@ -768,13 +776,58 @@ import javax.crypto.spec.SecretKeySpec;
 
     videoTrackManager=new TrackManager(activity);
 
+    int bufLevel = getVideoBufferLevel();
+    int minBufMs = 120000;
+    int maxBufMs = 120000;
+    int backBufMs = 30000;
+    int startMs = 2500;
+    int rebufferMs = 5000;
+
+    switch (bufLevel) {
+      case 0:
+        minBufMs = 30000;
+        maxBufMs = 30000;
+        backBufMs = 10000;
+        startMs = 1500;
+        rebufferMs = 3000;
+        break;
+      case 1:
+        minBufMs = 60000;
+        maxBufMs = 60000;
+        backBufMs = 20000;
+        startMs = 2000;
+        rebufferMs = 4000;
+        break;
+      case 2:
+        minBufMs = 120000;
+        maxBufMs = 120000;
+        backBufMs = 30000;
+        startMs = 2500;
+        rebufferMs = 5000;
+        break;
+      case 3:
+        minBufMs = 300000;
+        maxBufMs = 300000;
+        backBufMs = 60000;
+        startMs = 2500;
+        rebufferMs = 5000;
+        break;
+      case 4:
+        minBufMs = 600000;
+        maxBufMs = 600000;
+        backBufMs = 120000;
+        startMs = 2500;
+        rebufferMs = 5000;
+        break;
+    }
+
     DefaultLoadControl loadControl=new DefaultLoadControl.Builder()
-        .setBackBuffer(1000 * 60 * 2, true)
+        .setBackBuffer(backBufMs, true)
         .setBufferDurationsMs(
-            600000,
-            600000,
-            2500,
-            5000
+            minBufMs,
+            maxBufMs,
+            startMs,
+            rebufferMs
         )
         .build();
 
@@ -1916,6 +1969,18 @@ import javax.crypto.spec.SecretKeySpec;
     @JavascriptInterface
     public void setCacheSz(int s){
       aApi.setCacheSize(s);
+    }
+
+    @JavascriptInterface
+    public int getVideoBuffer(){
+      return getVideoBufferLevel();
+    }
+    @JavascriptInterface
+    public void setVideoBuffer(int level){
+      if (level >= 0 && level <= 4) {
+        aApi.pref.edit().putInt("videobuffer", level).apply();
+        activity.runOnUiThread(AnimeView.this::initVideoView);
+      }
     }
 
     @JavascriptInterface
