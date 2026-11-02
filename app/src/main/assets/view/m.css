@@ -1449,22 +1449,7 @@ c.loader {
 
 
 #home_discord_info{
-  position: absolute;
-  left:40vw;
-  width:35vw;
-  height:7vw;
-  top:.7vw;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-shadow: 0 0 .1vw #000;
-
-  transition:var(--transition-3s);
-  visibility: visible;
-  opacity: 1;
-  /* transform: scale(1); */
-  will-change: transform, opacity;
+  display: none !important;
 }
 #home_discord_info #home_discord_info_value:empty{
   display: none;

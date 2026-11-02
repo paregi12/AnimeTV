@@ -11138,11 +11138,6 @@ const pb={
           home.settings.open_donation(1);
         }
       }
-      else if (key=='ytchannel'){
-        if (home.onsettings){
-          _JSAPI.openIntentUri('https://www.youtube.com/@amarullz');
-        }
-      }
       else if (key=='exportcsv'){
         if ('goToUrl' in _JSAPI){
           _JSAPI.goToUrl('https://aniwave.to/__view/export.html');
@@ -16444,43 +16439,7 @@ const home={
     $('home_logo').onclick=home.header_item_click;
   },
   init_discord_message:function(){
-    // Discord Info & Announchments
-    var iv=$('home_discord_info_value');
-    iv.innerHTML='';
-    iv._msg=[];
-    iv._msg_pos=-1;
-    function start_discord_message(){
-      if (iv._msg_pos>=0){
-        iv._msg[iv._msg_pos].className='';
-      }
-      if (++iv._msg_pos>=iv._msg.length){
-        iv._msg_pos=0;
-      }
-      iv._msg[iv._msg_pos].className='active';
-    }
-    _API.discordFetch(function(r){  
-      if (r.ok){
-        try{
-          var j=JSON.parse(r.responseText);
-          for (var i=0;i<j.length;i++){
-            var m=j[i];
-            if (m.content){
-              var g=document.createElement('div');
-              g.innerHTML=
-                '<span><c>info</c> '+((new Date(m.timestamp)).toLocaleString())+'</span>'+
-                '<p>'+md2html(m.content)+'</p>';
-              iv._msg.push(g);
-              iv.appendChild(g);
-            }
-          }
-          start_discord_message();
-          setInterval(start_discord_message,10000);
-        }catch(e){
-          console.log("ERROR "+e);
-          iv.innerHTML='';
-        }
-      }
-    });
+    // Top message disabled
   },
 
   settings:{
@@ -16945,13 +16904,6 @@ const home={
           },
           home.settings.about.P,
           "<c>volunteer_activism</c> Donation"
-        );
-        home.settings.tools._s_ytchannel=$n(
-          'div','',{
-            action:'*ytchannel'
-          },
-          home.settings.about.P,
-          "<c>youtube_activity</c> Youtube Channel"
         );
         home.settings.tools._s_discord=$n(
           'div','',{
