@@ -1,4 +1,10 @@
 # Changelogs
+- **1.0.2**
+  - Performance improvements for low-end devices
+  - Remove top announcement message and YouTube channel link
+  - Updated community Discord link
+- **1.0.1**
+  - Added Gotaku source
 - **5.6.0 🎆**
   - Add new source: miruro with 4 provider: animepahe, zoro, anivibe, gogoanime
   - Add new source: gojo
