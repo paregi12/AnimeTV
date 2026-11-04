@@ -1768,7 +1768,8 @@ import javax.crypto.spec.SecretKeySpec;
         JSONArray subsOut = new JSONArray();
         if (subList != null) {
           for (int i = 0; i < subList.length(); i++) {
-            JSONObject s = subList.getJSONObject(i);
+            JSONObject s = subList.optJSONObject(i);
+            if (s == null) continue;
             String sUrl = s.optString("url");
             if (sUrl.startsWith("https://")) {
               JSONObject subItem = new JSONObject();
@@ -1781,15 +1782,15 @@ import javax.crypto.spec.SecretKeySpec;
         }
 
         JSONObject skipObj = new JSONObject();
-        if (embedObj.has("intro_chapter")) {
-          JSONObject intro = embedObj.getJSONObject("intro_chapter");
+        JSONObject intro = embedObj.optJSONObject("intro_chapter");
+        if (intro != null) {
           JSONArray introArr = new JSONArray();
           introArr.put(intro.optInt("start", 0));
           introArr.put(intro.optInt("end", 0));
           skipObj.put("intro", introArr);
         }
-        if (embedObj.has("outro_chapter")) {
-          JSONObject outro = embedObj.getJSONObject("outro_chapter");
+        JSONObject outro = embedObj.optJSONObject("outro_chapter");
+        if (outro != null) {
           JSONArray outroArr = new JSONArray();
           outroArr.put(outro.optInt("start", 0));
           outroArr.put(outro.optInt("end", 0));
@@ -1819,9 +1820,11 @@ import javax.crypto.spec.SecretKeySpec;
         tokenResp.close();
         JSONObject tokenRespObj = new JSONObject(tokenJsonStr);
         if (tokenRespObj.optInt("status") != 200 || !tokenRespObj.has("result")) return null;
-        JSONObject tokenResult = tokenRespObj.getJSONObject("result");
-        String token = tokenResult.getString("token");
-        JSONObject context = tokenResult.getJSONObject("context");
+        JSONObject tokenResult = tokenRespObj.optJSONObject("result");
+        if (tokenResult == null) return null;
+        String token = tokenResult.optString("token", null);
+        JSONObject context = tokenResult.optJSONObject("context");
+        if (token == null || context == null) return null;
 
         Request m3u8Req = new Request.Builder()
             .url("https://flixcloud.cc/api/m3u8/" + token)
@@ -1859,8 +1862,10 @@ import javax.crypto.spec.SecretKeySpec;
         streamResp.close();
         JSONObject streamRespObj = new JSONObject(streamJsonStr);
         if (streamRespObj.optInt("status") != 200 || !streamRespObj.has("result")) return null;
-        JSONObject streamResult = streamRespObj.getJSONObject("result");
-        String streamUrl = streamResult.getString("stream");
+        JSONObject streamResult = streamRespObj.optJSONObject("result");
+        if (streamResult == null) return null;
+        String streamUrl = streamResult.optString("stream", null);
+        if (streamUrl == null) return null;
         JSONObject streamCtx = streamResult.optJSONObject("context");
         String wPayload = streamCtx != null ? streamCtx.optString("w_payload", "") : "";
 
