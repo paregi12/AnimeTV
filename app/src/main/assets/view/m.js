@@ -8223,32 +8223,50 @@ const vtt={
       // }
       // vtt.castSet(subs_url.join("\n"));
 
-      // console.error(JSON.stringify(subs));
+      var engMatches = [];
       for (var i=0;i<subs.length;i++){
-        if ((subs[i].l=='english')||(subs[i].i && subs[i].i=='en')){
-          console.log("SUBTITLE LENGTH = FOUND ENGLISH");
-          vtt.load(subs[i]);
-          // vtt.castSetIndex(i+1);
-          return;
+        var l = subs[i].l;
+        if (l=='english' || (subs[i].i && subs[i].i=='en') || l.indexOf('eng')>-1){
+          engMatches.push(i);
         }
       }
+
+      if (engMatches.length>0){
+        for (var k=0;k<engMatches.length;k++){
+          var idx = engMatches[k];
+          if (subs[idx].l.indexOf('full')>-1){
+            vtt.load(subs[idx]);
+            return;
+          }
+        }
+        for (var k=0;k<engMatches.length;k++){
+          var idx = engMatches[k];
+          var l = subs[idx].l;
+          if (l.indexOf('episode name')==-1 && l.indexOf('sign')==-1 && l.indexOf('song')==-1){
+            vtt.load(subs[idx]);
+            return;
+          }
+        }
+        for (var k=0;k<engMatches.length;k++){
+          var idx = engMatches[k];
+          if (subs[idx].d){
+            vtt.load(subs[idx]);
+            return;
+          }
+        }
+        vtt.load(subs[engMatches[0]]);
+        return;
+      }
+
       for (var i=0;i<subs.length;i++){
         if (subs[i].d){
           vtt.load(subs[i]);
-          // vtt.castSetIndex(i+1);
-          return;
-        }
-      }
-      for (var i=0;i<subs.length;i++){
-        if (subs[i].l.indexOf("eng")>-1){
-          vtt.load(subs[i]);
-          // vtt.castSetIndex(i+1);
           return;
         }
       }
       vtt.load(subs[0]);
-      // vtt.castSetIndex(1);
     }
+    pb.cfg_update_el('subtrack');
   },
   match_lang:{ 
     it:['ita'], 
@@ -8260,28 +8278,44 @@ const vtt={
     pt:['por','bra'],
   },
   find_match:function(t, lang){
+    var matches = [];
     if (lang in vtt.match_lang){
-      // console.log("SUBTITLES FIND = "+pb.cfg_data.lang);
       var y=vtt.match_lang[lang];
       for (var i=0;i<t.length;i++){
-          var u=t[i];
-          for (var j=0;j<y.length;j++){
-              if (u.l.toLowerCase().indexOf(y[j])>-1){
-                  return i;
-              }
+        var u=t[i];
+        for (var j=0;j<y.length;j++){
+          if (u.l.toLowerCase().indexOf(y[j])>-1){
+            matches.push(i);
+            break;
           }
-      }
-    }
-
-    var lang_name=_API.tlangs_id(lang);
-    if (lang_name){
-      lang_name=lang_name.toLowerCase();
-      for (var i=0;i<t.length;i++){
-        if ((t[i].l==lang_name) || (t[i].i && t[i].i==lang)){
-          console.log("VTT MATCH GOT -> "+lang_name+" = "+i+" => "+JSON.stringify(t[i]));
-          return i;
         }
       }
+    }
+    if (!matches.length){
+      var lang_name=_API.tlangs_id(lang);
+      if (lang_name){
+        lang_name=lang_name.toLowerCase();
+        for (var i=0;i<t.length;i++){
+          if ((t[i].l==lang_name) || (t[i].i && t[i].i==lang) || (t[i].l.indexOf(lang_name)>-1)){
+            matches.push(i);
+          }
+        }
+      }
+    }
+    if (matches.length > 0){
+      for (var k=0;k<matches.length;k++){
+        var str = t[matches[k]].l.toLowerCase();
+        if (str.indexOf("full") > -1){
+          return matches[k];
+        }
+      }
+      for (var k=0;k<matches.length;k++){
+        var str = t[matches[k]].l.toLowerCase();
+        if (str.indexOf("episode name") == -1 && str.indexOf("sign") == -1 && str.indexOf("song") == -1){
+          return matches[k];
+        }
+      }
+      return matches[0];
     }
 
     return -1;
@@ -8592,6 +8626,7 @@ const vtt={
         window.__activesub=sub;
 
         pb.updateStreamTypeInfo();
+        pb.cfg_update_el('subtrack');
       }
       else{
         // console.log("LOADING GET SUB RAW FAILED");
@@ -9027,6 +9062,48 @@ const pb={
       return "Mirror";
     }
     return "Main";
+  },
+
+  getSubVariants:function(){
+    if (!pb.subtitles || pb.subtitles.length<=1 || pb.cfg_data.lang=='nosub'){
+      return [];
+    }
+    var targetLang = (pb.cfg_data.lang=='hard'||!pb.cfg_data.lang)?'en':pb.cfg_data.lang;
+    var matches = [];
+    if (targetLang in vtt.match_lang){
+      var y = vtt.match_lang[targetLang];
+      for (var i=0;i<pb.subtitles.length;i++){
+        var u = pb.subtitles[i];
+        for (var j=0;j<y.length;j++){
+          if (u.l.toLowerCase().indexOf(y[j])>-1){
+            matches.push(u);
+            break;
+          }
+        }
+      }
+    }
+    if (!matches.length){
+      var lang_name = _API.tlangs_id(targetLang);
+      if (lang_name){
+        lang_name = lang_name.toLowerCase();
+        for (var i=0;i<pb.subtitles.length;i++){
+          var u = pb.subtitles[i];
+          if (u.l==lang_name || (u.i && u.i==targetLang) || u.l.indexOf(lang_name)>-1 || (targetLang=='en' && u.l.indexOf('eng')>-1)){
+            matches.push(u);
+          }
+        }
+      }
+    }
+    return matches;
+  },
+  formatVariantName:function(name, langName){
+    var clean = name || '';
+    if (langName){
+      var reg = new RegExp('^' + langName + '\\s*\\((.*)\\)$', 'i');
+      var m = clean.match(reg);
+      if (m && m[1]) clean = m[1];
+    }
+    return clean;
   },
 
   listobj:function(){
@@ -9727,6 +9804,22 @@ const pb={
         }
         el.innerHTML='<c>'+icos[sid]+'</c> '+sName;
       }
+      else if (key=='subtrack'){
+        var variants=pb.getSubVariants();
+        if (variants.length<=1){
+          el.style.display='none';
+        }
+        else{
+          el.style.display='';
+          var activeName='Auto';
+          if (vtt.playback && vtt.playback.sub){
+            activeName=vtt.playback.sub.title || vtt.playback.sub.l || 'Active';
+          }
+          var targetLang=(pb.cfg_data.lang=='hard'||!pb.cfg_data.lang)?'en':pb.cfg_data.lang;
+          var langName=_API.tlangs_id(targetLang);
+          el.lastElementChild.innerHTML=special(pb.formatVariantName(activeName, langName));
+        }
+      }
       else if (key=="miruroprovider"){
         el.innerHTML='<c>storefront</c> '+miruro.providers_name[miruro.provider];
       }
@@ -9910,6 +10003,7 @@ const pb={
       pb.cfg_update_el('softsub');
       pb.cfg_update_el('dub');
       pb.cfg_update_el('streamselect');
+      pb.cfg_update_el('subtrack');
 
       pb.cfg_update_el('lang');
       pb.cfg_update_el('alang');
@@ -10801,6 +10895,7 @@ const pb={
         /* Get Servers - HIANIME */
         pb.hiLoadVideo(pb.data, true, function(m3u8url){
           pb.updateStreamTypeInfo();
+        pb.cfg_update_el('subtrack');
           if (m3u8url){
             pb.init_video_mp4upload(m3u8url);
           }
@@ -10812,6 +10907,7 @@ const pb={
       else if (__SD5){
         pb.flix_load_video(pb.data, true, function(){
           pb.updateStreamTypeInfo();
+        pb.cfg_update_el('subtrack');
           pb.flix_play_video();
         });
       }
@@ -10825,6 +10921,7 @@ const pb={
           }
           else{
             pb.updateStreamTypeInfo();
+        pb.cfg_update_el('subtrack');
             console.warn(v);
             try{
               pb.data.skip=[[0,0],[0,0]];
@@ -10928,6 +11025,7 @@ const pb={
 
           /* Load Video */
           pb.updateStreamTypeInfo();
+        pb.cfg_update_el('subtrack');
           var srcvd=v.sources[0].file;
           pb.init_video_mp4upload(srcvd);
           pb.cfg_update_el();
@@ -10965,6 +11063,7 @@ const pb={
               vtt.init(pb.subtitles);
             }
             pb.updateStreamTypeInfo();
+        pb.cfg_update_el('subtrack');
             pb.init_video_mp4upload(v.url);
             pb.cfg_update_el();
           }
@@ -11100,6 +11199,7 @@ const pb={
             vtt.init(pb.subtitles);
           }
           pb.updateStreamTypeInfo();
+        pb.cfg_update_el('subtrack');
           pb.init_video_mp4upload(v.url);
           pb.cfg_update_el();
         });
@@ -11135,6 +11235,7 @@ const pb={
           }
         }
         pb.updateStreamTypeInfo();
+        pb.cfg_update_el('subtrack');
         wave.vidplayGetData(pb.data.stream_vurl,function(r){
           if (r && r.result && r.result.sources){
             pb.video_tmp_start_pos=pb.startpos_val;
@@ -11766,6 +11867,34 @@ const pb={
                 _API.setStreamTypeValue(lstVal[chval],1);
                 pb.reinit_video_delay(100,false);
                 pb.cfg_update_el(key);
+              }
+            }
+          );
+        }
+      }
+      else if (key=="subtrack"){
+        var variants=pb.getSubVariants();
+        if (variants.length>1){
+          var sList=[];
+          var curIdx=0;
+          var targetLang=(pb.cfg_data.lang=='hard'||!pb.cfg_data.lang)?'en':pb.cfg_data.lang;
+          var langName=_API.tlangs_id(targetLang);
+          for (var i=0;i<variants.length;i++){
+            var s=variants[i];
+            var sName=pb.formatVariantName(s.title || s.l || ('Track '+(i+1)), langName);
+            sList.push(sName);
+            if (vtt.playback && vtt.playback.sub && (vtt.playback.sub.u===s.u || vtt.playback.sub===s)){
+              curIdx=i;
+            }
+          }
+          listOrder.showList(
+            "Subtitles",
+            sList,
+            curIdx,
+            function(chval){
+              if (chval!=null && variants[chval]){
+                vtt.load(variants[chval]);
+                pb.cfg_update_el('subtrack');
               }
             }
           );
@@ -12645,8 +12774,12 @@ const pb={
     }
     else if (c==KLEFT){
       if (g._sel){
-        if (g._sel.previousElementSibling)
-          n=g._sel.previousElementSibling;
+        var pr=g._sel.previousElementSibling;
+        while(pr && pr.style.display=='none'){
+          pr=pr.previousElementSibling;
+        }
+        if (pr)
+          n=pr;
         else if (g.__prev){
           clk();
           g.__prev();
@@ -12654,24 +12787,43 @@ const pb={
         }
         else if (g._should_clear)
           g._reset();
-        else if (g._cyclic)
-          n=g.P.lastElementChild;
+        else if (g._cyclic){
+          var last=g.P.lastElementChild;
+          while(last && last.style.display=='none'){
+            last=last.previousElementSibling;
+          }
+          n=last;
+        }
       }
     }
     else if (c==KRIGHT){
       if (g._sel){
-        if (g._sel.nextElementSibling)
-          n=g._sel.nextElementSibling;
+        var nx=g._sel.nextElementSibling;
+        while(nx && nx.style.display=='none'){
+          nx=nx.nextElementSibling;
+        }
+        if (nx)
+          n=nx;
         else if (g.__next){
           clk();
           g.__next();
           return true;
         }
-        else if (g._cyclic)
-          n=g.P.firstElementChild;
+        else if (g._cyclic){
+          var first=g.P.firstElementChild;
+          while(first && first.style.display=='none'){
+            first=first.nextElementSibling;
+          }
+          n=first;
+        }
       }
-      else
-        n=g.P.firstElementChild;
+      else{
+        var first=g.P.firstElementChild;
+        while(first && first.style.display=='none'){
+          first=first.nextElementSibling;
+        }
+        n=first;
+      }
     }
     else if (c==KPGUP || c==KPREV){
       if (g.__prev){
@@ -13408,6 +13560,9 @@ const pb={
         '<c>storefront</c> '+miruro.providers_name[miruro.provider]
       );
     }
+
+    pb.pb_settings._s_subtrack=$n('div','',{action:'*subtrack'},pb.pb_settings.P,'<c>closed_caption</c> <span>Subtitles</span>');
+    pb.pb_settings._s_subtrack.style.display='none';
 
     pb.pb_settings._s_alang=$n('div','',{action:'*alang'},pb.pb_settings.P,'<c>text_to_speech</c> <span>Original</span>');
     
