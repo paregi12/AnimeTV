@@ -778,7 +778,7 @@ var reanime = {
             d.ep = u.subbed || u.dubbed || u.episodes || 0;
           }
           d.type = u.format || "TV";
-          d.rating = u.average_score ? (u.average_score + "") : (u.rating || "");
+          d.rating = "";
           d.adult = (u.is_adult === true || u.is_adult === 1);
           rd.push(d);
         } catch (e2) {}
@@ -823,7 +823,7 @@ var reanime = {
             genre: genreStr,
             quality: null,
             ep: epCount,
-            rating: m.average_score ? (m.average_score + "") : (m.rating || ""),
+            rating: "",
             ttid: id,
             poster: cov.large || cov.extra_large || cov.medium || null,
             banner: m.banner_image || cov.extra_large || null,
