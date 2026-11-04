@@ -9755,6 +9755,19 @@ const pb={
         else
           el.firstElementChild.classList.remove('checked');
       }
+      else if (key=='logcat'){
+        var isLogOn=false;
+        if (typeof _JSAPI!=='undefined'&&_JSAPI.logcatIsEnabled){
+          isLogOn=_JSAPI.logcatIsEnabled();
+        }
+        if (el){
+          el.firstElementChild.innerHTML=isLogOn?'check':'clear';
+          if (isLogOn)
+            el.firstElementChild.classList.add('checked');
+          else
+            el.firstElementChild.classList.remove('checked');
+        }
+      }
       else if (key=='ccstyle'){
         el.lastElementChild.innerHTML=vtt.stylename(pb.cfg_data.ccstyle);
       }
@@ -10042,6 +10055,7 @@ const pb={
       pb.cfg_update_el('fav');
       pb.cfg_update_el('speed');
       pb.cfg_update_el('ccstyle');
+      pb.cfg_update_el('logcat');
       pb.cfg_update_el('bgimg');
 
       pb.cfg_update_el('quality');
@@ -11877,6 +11891,16 @@ const pb={
           _API.checkNightly();
         }
       }
+      else if (key=='logcat'){
+        if (typeof _JSAPI!=='undefined'&&_JSAPI.logcatSetEnabled){
+          var cur=_JSAPI.logcatIsEnabled();
+          _JSAPI.logcatSetEnabled(!cur);
+        }
+        pb.cfg_update_el(key);
+      }
+      else if (key=='logcat_view'){
+        home.showLogcatDialog();
+      }
       else if (key=="miruroprovider"){
         var prev_provider = miruro.provider;
         miruro.beforeChangeSource(function(v){
@@ -13338,6 +13362,9 @@ const pb={
 
   /* Root Key Callback */
   keycb:function(c,isvirt){
+    if (home.onlogcat){
+      return home.logcat_keycb(c);
+    }
     if (listOrder.onpopup){
       return listOrder.keycb(c);
     }
@@ -17779,6 +17806,24 @@ const home={
             home.settings.about.P,
             "<c>update</c> Check for Update"
           );
+
+          home.settings.tools._s_logcat=$n(
+            'div','',{
+              action:'*logcat',
+              s_desc:"Record diagnostic logs to storage for troubleshooting"
+            },
+            home.settings.about.P,
+            '<c class="check">clear</c><c>build</c> Debug Logging'
+          );
+
+          home.settings.tools._s_logcat_view=$n(
+            'div','',{
+              action:'*logcat_view',
+              s_desc:"View, copy, or clear recorded diagnostic logs"
+            },
+            home.settings.about.P,
+            '<c>list_alt</c> View Logs'
+          );
         }
       }
       home.settings.initmore_done=true;
@@ -17991,6 +18036,9 @@ const home={
     }
   },
   settings_keycb:function(c){
+    if (home.onlogcat){
+      return home.logcat_keycb(c);
+    }
     if (home.ondonate){
       if (c==KBACK || (c==KENTER && home.ondonate!=2)){
         clk();
@@ -18063,6 +18111,146 @@ const home={
   },
   onsettings:false,
   ondonate:false,
+  onlogcat:false,
+  logcat_btn_sel:2,
+  logcat_keycb:function(c){
+    if (c==KBACK){
+      clk();
+      home.closeLogcatDialog();
+      return true;
+    }
+    else if (c==KLEFT){
+      if (home.logcat_btn_sel>0){
+        clk();
+        home.logcat_btn_sel--;
+        home.logcatUpdateButtons();
+      }
+      return true;
+    }
+    else if (c==KRIGHT){
+      if (home.logcat_btn_sel<2){
+        clk();
+        home.logcat_btn_sel++;
+        home.logcatUpdateButtons();
+      }
+      return true;
+    }
+    else if (c==KUP){
+      var box=$('logcat_content');
+      if (box) box.scrollTop-=80;
+      return true;
+    }
+    else if (c==KDOWN){
+      var box=$('logcat_content');
+      if (box) box.scrollTop+=80;
+      return true;
+    }
+    else if (c==KPGUP){
+      var box=$('logcat_content');
+      if (box) box.scrollTop-=300;
+      return true;
+    }
+    else if (c==KPGDOWN){
+      var box=$('logcat_content');
+      if (box) box.scrollTop+=300;
+      return true;
+    }
+    else if (c==KENTER){
+      clk();
+      if (home.logcat_btn_sel==0){
+        if (typeof _JSAPI!=='undefined'&&_JSAPI.logcatCopy){
+          _JSAPI.logcatCopy();
+        }
+      }
+      else if (home.logcat_btn_sel==1){
+        if (typeof _JSAPI!=='undefined'&&_JSAPI.logcatClear){
+          _JSAPI.logcatClear();
+          var box=$('logcat_content');
+          if (box) box.textContent='(logs cleared)';
+        }
+      }
+      else if (home.logcat_btn_sel==2){
+        home.closeLogcatDialog();
+      }
+      return true;
+    }
+    return false;
+  },
+  logcatUpdateButtons:function(){
+    var btns=document.querySelectorAll('.logcat_button');
+    for (var i=0;i<btns.length;i++){
+      if (i==home.logcat_btn_sel){
+        btns[i].classList.add('active');
+      }
+      else{
+        btns[i].classList.remove('active');
+      }
+    }
+  },
+  showLogcatDialog:function(){
+    home.onlogcat=true;
+    home.logcat_btn_sel=2;
+    var dlg=$('logcat_dialog');
+    if (!dlg){
+      dlg=$n('div','',{id:'logcat_dialog'},document.body,
+        '<div id="logcat_window">'+
+          '<div id="logcat_header">'+
+            '<div id="logcat_title">Diagnostic Logs</div>'+
+            '<div id="logcat_path"></div>'+
+          '</div>'+
+          '<pre id="logcat_content">Loading logs...</pre>'+
+          '<div id="logcat_buttons">'+
+            '<div class="logcat_button" data-idx="0">Copy to Clipboard</div>'+
+            '<div class="logcat_button" data-idx="1">Clear Logs</div>'+
+            '<div class="logcat_button active" data-idx="2"><c>close</c> Close</div>'+
+          '</div>'+
+        '</div>'
+      );
+      var btns=dlg.querySelectorAll('.logcat_button');
+      if (btns[0]) btns[0].onclick=function(){
+        clk();
+        if (typeof _JSAPI!=='undefined'&&_JSAPI.logcatCopy) _JSAPI.logcatCopy();
+      };
+      if (btns[1]) btns[1].onclick=function(){
+        clk();
+        if (typeof _JSAPI!=='undefined'&&_JSAPI.logcatClear){
+          _JSAPI.logcatClear();
+          var box=$('logcat_content');
+          if (box) box.textContent='(logs cleared)';
+        }
+      };
+      if (btns[2]) btns[2].onclick=function(){
+        clk();
+        home.closeLogcatDialog();
+      };
+      dlg.onclick=function(e){
+        if (e.target==dlg){
+          clk();
+          home.closeLogcatDialog();
+        }
+      };
+    }
+    else{
+      dlg.style.display='';
+    }
+    home.logcatUpdateButtons();
+
+    var logPath=(typeof _JSAPI!=='undefined'&&_JSAPI.logcatGetPath)?_JSAPI.logcatGetPath():'N/A';
+    var pathEl=$('logcat_path');
+    if (pathEl) pathEl.textContent='File: '+logPath;
+
+    var logs=(typeof _JSAPI!=='undefined'&&_JSAPI.logcatGetLogs)?_JSAPI.logcatGetLogs(500):'No logs available.';
+    var box=$('logcat_content');
+    if (box){
+      box.textContent=logs||'(empty logs)';
+      box.scrollTop=box.scrollHeight;
+    }
+  },
+  closeLogcatDialog:function(){
+    var dlg=$('logcat_dialog');
+    if (dlg) dlg.style.display='none';
+    home.onlogcat=false;
+  },
 
   search:{
     search:$('search'),
@@ -19939,6 +20127,9 @@ const home={
     }
     if (home.onsearch){
       return home.search_keycb(c);
+    }
+    if (home.onlogcat){
+      return home.logcat_keycb(c);
     }
     if (home.onsettings){
       return home.settings_keycb(c);
