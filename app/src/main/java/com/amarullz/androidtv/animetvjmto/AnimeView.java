@@ -38,6 +38,7 @@ import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
@@ -462,6 +463,12 @@ import javax.crypto.spec.SecretKeySpec;
         (AudioManager) activity.getSystemService(Context.AUDIO_SERVICE);
 
     chromeClient=new WebChromeClient() {
+      @Override
+      public boolean onConsoleMessage(ConsoleMessage cm) {
+        Log.d("ATVLOG-JS", "[" + cm.messageLevel() + "] " + cm.message());
+        return true;
+      }
+
       @Override public Bitmap getDefaultVideoPoster() {
         final Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.RGB_565);
         Canvas canvas = new Canvas(bitmap);

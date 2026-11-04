@@ -774,7 +774,7 @@ public class AnimeApi extends WebViewClient {
       }
 
       InputStream stream = new ByteArrayInputStream(http.body.toByteArray());
-//      Log.d(_TAG,"OKHTTP = "+url+" -> "+http.body.size()+" Bytes");
+      Log.d(_TAG, "HTTP " + http.responseCode + " (" + http.body.size() + "b) " + url);
       return new WebResourceResponse(http.ctype[0], http.ctype[1], stream);
     } catch (Exception e) {
       Log.e(_TAG, "defaultRequest ERR =" + url, e);

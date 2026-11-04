@@ -10,8 +10,11 @@ import android.widget.Toast;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 public class LogcatManager {
   private static final String TAG = "ATVLOG-LOGCAT";
@@ -66,9 +69,10 @@ public class LogcatManager {
     try {
       File logFile = getLogFile();
       int pid = Process.myPid();
-      // Rotate 2 files of max 2048 KB each
       String[] cmd = new String[] {
           "logcat",
+          "-b", "main",
+          "-b", "crash",
           "-v", "time",
           "--pid=" + pid,
           "-f", logFile.getAbsolutePath(),
@@ -92,28 +96,103 @@ public class LogcatManager {
     }
   }
 
+  public static boolean isNoise(String line) {
+    if (line == null || line.trim().isEmpty()) return true;
+    if (line.contains(" E/") || line.contains(" F/") || line.contains("FATAL") || line.contains("Exception")) {
+      return false;
+    }
+    return line.contains("Quality ") ||
+           line.contains("ViewRootImplExtImpl") ||
+           line.contains("BufferQueueProducer") ||
+           line.contains("BufferPoolAccessor") ||
+           line.contains("VRI[") ||
+           line.contains("Oplus") ||
+           line.contains("AtlasEventUploadUtils") ||
+           line.contains("Codec2") ||
+           line.contains("CCodec") ||
+           line.contains("BLASTBufferQueue") ||
+           line.contains("SurfaceUtils") ||
+           line.contains("hw-BpHwBinder") ||
+           line.contains("ResourcesManagerExtImpl") ||
+           line.contains("ListServiceUtils") ||
+           line.contains("SurfaceView") ||
+           line.contains("OpenGLRenderer");
+  }
+
   public String getRecentLogs(int lines) {
+    int targetLines = lines > 0 ? lines : 1500;
+    File logFile = getLogFile();
+    if (logFile.exists() && logFile.length() > 0) {
+      String fileLogs = readFromFile(targetLines);
+      if (!fileLogs.isEmpty()) {
+        return fileLogs;
+      }
+    }
+    return readFromLogcat(targetLines);
+  }
+
+  private String readFromFile(int maxLines) {
+    List<String> list = new ArrayList<>();
+    File file = getLogFile();
+    File file1 = new File(file.getAbsolutePath() + ".1");
+    if (file1.exists()) {
+      readFileLines(file1, list);
+    }
+    readFileLines(file, list);
+    if (list.isEmpty()) {
+      return "";
+    }
+    int start = Math.max(0, list.size() - maxLines);
     StringBuilder sb = new StringBuilder();
+    for (int i = start; i < list.size(); i++) {
+      sb.append(list.get(i)).append("\n");
+    }
+    return sb.toString();
+  }
+
+  private void readFileLines(File f, List<String> out) {
+    try (BufferedReader reader = new BufferedReader(
+        new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
+      String line;
+      while ((line = reader.readLine()) != null) {
+        if (!isNoise(line)) {
+          out.add(line);
+        }
+      }
+    } catch (Exception ignored) {}
+  }
+
+  private String readFromLogcat(int maxLines) {
+    List<String> list = new ArrayList<>();
     try {
       int pid = Process.myPid();
       String[] cmd = new String[] {
           "logcat",
           "-d",
+          "-b", "main",
+          "-b", "crash",
           "-v", "time",
           "--pid=" + pid,
-          "-t", String.valueOf(lines > 0 ? lines : 500)
+          "-t", String.valueOf(maxLines * 3)
       };
       java.lang.Process p = Runtime.getRuntime().exec(cmd);
       try (BufferedReader reader = new BufferedReader(
           new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
         String line;
         while ((line = reader.readLine()) != null) {
-          sb.append(line).append("\n");
+          if (!isNoise(line)) {
+            list.add(line);
+          }
         }
       }
       p.waitFor();
     } catch (Exception e) {
-      sb.append("Error retrieving logs: ").append(e.getMessage()).append("\n");
+      return "Error retrieving logs: " + e.getMessage();
+    }
+    int start = Math.max(0, list.size() - maxLines);
+    StringBuilder sb = new StringBuilder();
+    for (int i = start; i < list.size(); i++) {
+      sb.append(list.get(i)).append("\n");
     }
     return sb.toString();
   }
@@ -132,7 +211,7 @@ public class LogcatManager {
 
   public void copyToClipboard() {
     try {
-      String logs = getRecentLogs(1000);
+      String logs = getRecentLogs(2000);
       ClipboardManager clipboard = (ClipboardManager) appContext.getSystemService(Context.CLIPBOARD_SERVICE);
       if (clipboard != null) {
         ClipData clip = ClipData.newPlainText("AnimeTV Logs", logs);

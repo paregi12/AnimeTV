@@ -18237,7 +18237,7 @@ const home={
     var pathEl=$('logcat_path');
     if (pathEl) pathEl.textContent='File: '+logPath;
 
-    var logs=(typeof _JSAPI!=='undefined'&&_JSAPI.logcatGetLogs)?_JSAPI.logcatGetLogs(500):'No logs available.';
+    var logs=(typeof _JSAPI!=='undefined'&&_JSAPI.logcatGetLogs)?_JSAPI.logcatGetLogs(1500):'No logs available.';
     var box=$('logcat_content');
     if (box){
       box.textContent=logs||'(empty logs)';
