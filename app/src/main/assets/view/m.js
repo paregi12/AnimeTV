@@ -17718,6 +17718,22 @@ const home={
           '<c class="check">clear</c><c>bolt</c> HLS Stream Proxy'
         );
 
+        home.settings.tools._s_logcat=$n(
+          'div','',{
+            action:'*logcat'
+          },
+          home.settings.networks.P,
+          '<c class="check">clear</c><c>build</c> Debug Logging'
+        );
+
+        home.settings.tools._s_logcat_view=$n(
+          'div','',{
+            action:'*logcat_view'
+          },
+          home.settings.networks.P,
+          '<c>list_alt</c> View Logs'
+        );
+
         
 
         /* Integrations */
@@ -17805,24 +17821,6 @@ const home={
             },
             home.settings.about.P,
             "<c>update</c> Check for Update"
-          );
-
-          home.settings.tools._s_logcat=$n(
-            'div','',{
-              action:'*logcat',
-              s_desc:"Record diagnostic logs to storage for troubleshooting"
-            },
-            home.settings.about.P,
-            '<c class="check">clear</c><c>build</c> Debug Logging'
-          );
-
-          home.settings.tools._s_logcat_view=$n(
-            'div','',{
-              action:'*logcat_view',
-              s_desc:"View, copy, or clear recorded diagnostic logs"
-            },
-            home.settings.about.P,
-            '<c>list_alt</c> View Logs'
           );
         }
       }
