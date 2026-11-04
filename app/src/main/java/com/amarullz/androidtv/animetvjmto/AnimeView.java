@@ -1541,6 +1541,36 @@ import javax.crypto.spec.SecretKeySpec;
     }
 
     @JavascriptInterface
+    public boolean logcatIsEnabled() {
+      return LogcatManager.getInstance(activity).isEnabled();
+    }
+
+    @JavascriptInterface
+    public void logcatSetEnabled(boolean enabled) {
+      LogcatManager.getInstance(activity).setEnabled(enabled);
+    }
+
+    @JavascriptInterface
+    public String logcatGetLogs(int maxLines) {
+      return LogcatManager.getInstance(activity).getRecentLogs(maxLines);
+    }
+
+    @JavascriptInterface
+    public String logcatGetPath() {
+      return LogcatManager.getInstance(activity).getLogPath();
+    }
+
+    @JavascriptInterface
+    public void logcatClear() {
+      LogcatManager.getInstance(activity).clearLogs();
+    }
+
+    @JavascriptInterface
+    public void logcatCopy() {
+      activity.runOnUiThread(() -> LogcatManager.getInstance(activity).copyToClipboard());
+    }
+
+    @JavascriptInterface
     public int getGotakuProxyPort() {
       return GotakuProxy.getInstance().getPort();
     }

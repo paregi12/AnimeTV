@@ -471,6 +471,14 @@ const api={
   malLogin(){},
   checkUpdate(){},
 
+  /* logcat debug */
+  logcatIsEnabled() { return false; },
+  logcatSetEnabled(v) {},
+  logcatGetLogs(l) { return "Desktop logging: inspect terminal output or Electron DevTools console."; },
+  logcatGetPath() { return "N/A (Desktop)"; },
+  logcatClear() {},
+  logcatCopy() {},
+
   /* may supported */
   openIntentUri(u){
     invoke('intent-start',u);
