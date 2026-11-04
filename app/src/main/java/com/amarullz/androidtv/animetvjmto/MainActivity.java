@@ -69,48 +69,16 @@ public class MainActivity extends FragmentActivity {
     }
   }
 
-  public void initLogcat(){
-    if (ContextCompat.checkSelfPermission(this,
-        android.Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-      ActivityCompat.requestPermissions(this, new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE}, 1);
-    }
-    if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-      ActivityCompat.requestPermissions(this, new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
-      Toast.makeText(this,"Please restart app after accepting permission...",
-          Toast.LENGTH_LONG).show();
-    }
-    else {
-      try {
-        String fn = Environment.getExternalStorageDirectory() +
-            "/animetv-logcat.txt";
-        Log.d("DEBUG-LOGCAT", fn);
-        File filename = new File(fn);
-        //noinspection ResultOfMethodCallIgnored
-        filename.createNewFile();
-        String cmd = "logcat -f " + filename.getAbsolutePath();
-        Runtime.getRuntime().exec(cmd);
-      } catch (IOException e) {
-        Log.d("DEBUG-LOGCAT", "Error Exec - " + e);
-      }
-    }
-  }
-
-  private void initRefreshRate(){
+  private void initRefreshRate() {
     if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)) {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         Window w = getWindow();
         WindowManager.LayoutParams p = w.getAttributes();
         Display.Mode[] modes = getDisplay().getSupportedModes();
         Display.Mode cmode = getDisplay().getMode();
-        Log.d("ATVLOG",
-            "Current Mode "+cmode.getModeId()+" : " + cmode.getPhysicalWidth() + "x"+cmode.getPhysicalHeight()+"@"+cmode.getRefreshRate()+"hz");
-
-        //find display mode with max hz
         int maxMode = -1;
         float maxHZ = 60f;
         for (Display.Mode m : modes) {
-          Log.d("ATVLOG",
-              "Mode "+m.getModeId()+" : " + m.getPhysicalWidth() + "x"+m.getPhysicalHeight()+"@"+m.getRefreshRate()+"hz");
           if (cmode.getPhysicalHeight() == m.getPhysicalHeight() && cmode.getPhysicalWidth() == m.getPhysicalWidth()) {
             if (cmode.getRefreshRate() <= m.getRefreshRate()) {
               maxHZ = m.getRefreshRate();
@@ -118,23 +86,21 @@ public class MainActivity extends FragmentActivity {
             }
           }
         }
-        if (maxMode>-1){
+        if (maxMode > -1) {
           p.preferredDisplayModeId = maxMode;
           w.setAttributes(p);
-          Log.d("ATVLOG", "Max Mode Value : " + maxHZ + "hz");
         }
       }
-      Log.d("ATVLOG", "Have Touch Screen");
-    }
-    else{
-      Log.d("ATVLOG", "No Touch Screen");
     }
   }
 
   @Override
   public void onCreate(Bundle savedInstanceState) {
+    LogcatManager logcat = LogcatManager.getInstance(this);
+    if (logcat.isEnabled()) {
+      logcat.startLogging();
+    }
     super.onCreate(savedInstanceState);
-//     initLogcat();
 
     requestWindowFeature(Window.FEATURE_NO_TITLE);
     getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -309,6 +275,7 @@ public class MainActivity extends FragmentActivity {
 
   @Override
   protected void onDestroy() {
+    LogcatManager.getInstance(this).stopLogging();
     GotakuProxy.getInstance().stopServer();
     ReAnimeProxy.getInstance().stopServer();
     super.onDestroy();
