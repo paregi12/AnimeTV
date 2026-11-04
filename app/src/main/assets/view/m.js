@@ -342,7 +342,7 @@ var gotaku = {
           d.eptotal = epInfo.total || null;
           d.ep = epInfo.latest_sub || epInfo.latest_dub || epInfo.total || 0;
           d.type = u.format || "TV";
-          d.rating = u.score ? (u.score + "") : "";
+          d.rating = "";
           d.adult = (u.is_adult === true || u.is_adult === 1);
           rd.push(d);
         } catch (e2) {}
@@ -396,7 +396,7 @@ var gotaku = {
             genre: genreStr,
             quality: null,
             ep: epCount,
-            rating: m.score ? (m.score + "") : (m.age_rating || ""),
+            rating: "",
             ttid: id,
             poster: m.poster_url,
             banner: m.backdrop_url || m.banner_url || null,
