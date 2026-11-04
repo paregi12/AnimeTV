@@ -98,7 +98,7 @@ public class LogcatManager {
 
   public static boolean isNoise(String line) {
     if (line == null || line.trim().isEmpty()) return true;
-    if (line.contains(" E/") || line.contains(" F/") || line.contains("FATAL") || line.contains("Exception")) {
+    if (line.contains("ATVLOG") || line.contains(" E/") || line.contains(" F/") || line.contains("FATAL") || line.contains("Exception")) {
       return false;
     }
     return line.contains("Quality ") ||
