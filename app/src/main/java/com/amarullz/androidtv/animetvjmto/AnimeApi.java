@@ -705,11 +705,15 @@ public class AnimeApi extends WebViewClient {
           req.cacheControl(cc);
         }
         res = httpClient.newCall(req.build()).execute();
-        body = new ByteArrayOutputStream();
-        if (res.body() != null) {
-          body.write(Objects.requireNonNull(res.body()).bytes());
+        try {
+          body = new ByteArrayOutputStream();
+          if (res.body() != null) {
+            body.write(Objects.requireNonNull(res.body()).bytes());
+          }
+          ctype = parseContentType(res.header("Content-Type"));
+        } finally {
+          res.close();
         }
-        ctype = parseContentType(res.header("Content-Type"));
       }
       else if (http!=null){
         if (nocache){
