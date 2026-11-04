@@ -18,6 +18,7 @@ const __SD6=(__SD==6);
 const __SD7=(__SD==7);
 const __SD8=(__SD==8);
 const __SD9=(__SD==9);
+const __SD10=(__SD==10);
 
 // pahe anime => document.querySelectorAll('.content-wrapper .tab-content .row div a[title]');
 
@@ -33,7 +34,7 @@ var _ISELECTRON=('isElectron' in _JSAPI);
 // }
 
 const __SOURCE_NAME=[
-  'AnimeKAI', 'Anix', 'Aniwatch', 'Aniwatch', 'Animeflix', 'KickAss', 'Gojo', 'Miruro', 'Gotaku'
+  'AnimeKAI', 'Anix', 'Aniwatch', 'Aniwatch', 'Animeflix', 'KickAss', 'Gojo', 'Miruro', 'Gotaku', 'Re:ANIME'
 ];
 // https://kickass-anime.ro/
 const __SOURCE_DOMAINS=[
@@ -45,7 +46,8 @@ const __SOURCE_DOMAINS=[
   ['kaa.lt'], //,'kickass-anime.ru' /*'kaa.mx' ,'kaa.to' */ /*,'kaas.ro'*/ ],
   ['api.gojo.wtf'],
   ['www.miruro.tv'],
-  ['gotaku.to']
+  ['gotaku.to'],
+  ['reanime.to']
 ];
 
 /* video res change */
@@ -110,6 +112,11 @@ function SD_CHECK_DOMAIN(sd,cb){
     // gotaku
     chk_url='/api/v1/titles?limit=1';
     chk_json='data';
+  }
+  else if (sd==10){
+    // reanime
+    chk_url='/api/v1/search?limit=1';
+    chk_json='results';
   }
   var res=[];
   var num=__SOURCE_DOMAINS[sm].length;
@@ -653,6 +660,469 @@ var gotaku = {
         url: playUrl,
         subtitles: manifest.subtitles || [],
         skip: skipInfo
+      };
+      f(v);
+    });
+  }
+};
+
+/* REANIME SOURCE */
+var reanime = {
+  dns: 'reanime.to',
+  cache: {},
+  subtitle_origin: {
+    "X-Org-Prox": "https://flixcloud.cc",
+    "X-Ref-Prox": "https://flixcloud.cc/",
+    "X-NoH-Proxy": "true"
+  },
+  genres: {
+    "_tv": "TV", "_movie": "MOVIE", "_ova": "OVA", "_ona": "ONA", "_special": "SPECIAL", "_music": "MUSIC",
+    "action": "Action", "adventure": "Adventure", "avant_garde": "Avant Garde", "avant-garde": "Avant Garde",
+    "award_winning": "Award Winning", "boys_love": "Boys Love", "comedy": "Comedy", "drama": "Drama",
+    "ecchi": "Ecchi", "erotica": "Erotica", "fantasy": "Fantasy", "girls_love": "Girls Love",
+    "gourmet": "Gourmet", "hentai": "Hentai", "horror": "Horror", "mystery": "Mystery",
+    "romance": "Romance", "sci-fi": "Sci-Fi", "sci_fi": "Sci-Fi", "slice_of_life": "Slice of Life",
+    "sports": "Sports", "supernatural": "Supernatural", "suspense": "Suspense", "thriller": "Thriller",
+    "psychological": "Psychological", "mecha": "Mecha"
+  },
+  getAnimeId: function(url) {
+    if (!url) return "";
+    var ux = (url + '').split('#')[0].split('?')[0];
+    if (ux.indexOf('/anime/') > -1) {
+      return ux.split('/anime/')[1];
+    } else if (ux.indexOf('/watch/') > -1) {
+      return ux.split('/watch/')[1];
+    }
+    return ux.split('/').pop();
+  },
+  getFilterOrigin: function() {
+    var d = __SD_DOMAIN ? __SD_DOMAIN : reanime.dns;
+    return {
+      "X-Org-Prox": "https://" + d,
+      "X-Ref-Prox": "https://" + d + "/home",
+      "Accept": "application/json, text/plain, */*",
+      "Pragma": "no-cache",
+      "Cache-Control": "no-cache"
+    };
+  },
+  getFilterUrl: function(q, genres, sort, page, ses, year) {
+    var p = page ? page : 1;
+    var limit = 36;
+    var offset = (p - 1) * limit;
+    var params = ["limit=" + limit, "offset=" + offset];
+    var nq = (q || '').trim();
+    if (nq) {
+      params.push("q=" + enc(nq));
+    }
+    var sortVal = "popularity_desc";
+    if (sort == 1) sortVal = "popularity_desc";
+    else if (sort == 2) sortVal = "latest_aired";
+    else if (sort == 3) sortVal = "score_desc";
+    params.push("sort=" + sortVal);
+
+    if (genres && genres.length) {
+      var gList = [];
+      for (var i = 0; i < genres.length; i++) {
+        var gKey = (genres[i] + '').toLowerCase().trim();
+        if (gKey.charAt(0) == '_') {
+          var tVal = reanime.genres[gKey];
+          if (tVal) params.push("format=" + enc(tVal));
+        } else {
+          var cleanKey = gKey.replace(/ /g, '_').replace(/-/g, '_');
+          var gName = reanime.genres[gKey] || reanime.genres[cleanKey];
+          if (gName) gList.push(gName);
+        }
+      }
+      if (gList.length > 0) {
+        params.push("genre=" + enc(gList.join(",")));
+      }
+    }
+    if (year) {
+      params.push("year=" + enc(year));
+    }
+    if (ses) {
+      params.push("season=" + enc((ses + '').toUpperCase()));
+    }
+    var d = __SD_DOMAIN ? __SD_DOMAIN : reanime.dns;
+    return "/__proxy/https://" + d + "/api/v1/search?" + params.join("&");
+  },
+  recent_parse: function(v) {
+    var rd = [];
+    try {
+      var t = typeof v === 'string' ? JSON.parse(v) : v;
+      var list = t.results ? t.results : (t.data ? t.data : (Array.isArray(t) ? t : []));
+      for (var i = 0; i < list.length; i++) {
+        try {
+          var u = list[i];
+          var d = {};
+          var slug = u.anime_id;
+          d.url = "/anime/" + slug;
+          var tObj = u.title || {};
+          d.title = tObj.english || tObj.romaji || tObj.native || tObj.user_preferred || slug;
+          d.title_jp = tObj.native || tObj.romaji || d.title;
+          d.tip = slug;
+          var cov = u.cover_image || {};
+          d.poster = cov.large || cov.extra_large || cov.medium || null;
+          d.epavail = u.subbed || 0;
+          d.epdub = u.dubbed || 0;
+          d.eptotal = u.episodes || null;
+          d.ep = u.subbed || u.dubbed || u.episodes || 0;
+          d.type = u.format || "TV";
+          d.rating = u.average_score ? (u.average_score + "") : (u.rating || "");
+          d.adult = (u.is_adult === true || u.is_adult === 1);
+          rd.push(d);
+        } catch (e2) {}
+      }
+    } catch (e) {
+      console.log("ERR reanime.recent_parse: " + e);
+    }
+    return rd;
+  },
+  getTooltip: function(id, cb, url, isview) {
+    if (!id && url) {
+      id = reanime.getAnimeId(url);
+    }
+    if (!id) return;
+    if (id in reanime.cache) {
+      var cached = reanime.cache[id];
+      requestAnimationFrame(function() { cb(JSON.parse(cached)); });
+      return;
+    }
+    var d = __SD_DOMAIN ? __SD_DOMAIN : reanime.dns;
+    $ap("https://" + d + "/api/v1/anime/" + id, function(r) {
+      if (r.ok) {
+        try {
+          var m = JSON.parse(r.responseText);
+          var genreArr = [];
+          var genreStr = "";
+          if (m.genres) {
+            for (var i = 0; i < m.genres.length; i++) {
+              genreArr.push({ name: m.genres[i], val: m.genres[i] });
+            }
+            genreStr = m.genres.join(", ");
+          }
+          var tObj = m.title || {};
+          var epCount = m.subbed || m.dubbed || m.episodes || 0;
+          var cov = m.cover_image || {};
+          var o = {
+            url: "/anime/" + id,
+            title: tObj.english || tObj.romaji || tObj.native || tObj.user_preferred || id,
+            title_jp: tObj.native || tObj.romaji || tObj.english || id,
+            synopsis: m.description ? m.description.replace(/<[^>]*>/g, '') : "",
+            genres: genreArr,
+            genre: genreStr,
+            quality: null,
+            ep: epCount,
+            rating: m.average_score ? (m.average_score + "") : (m.rating || ""),
+            ttid: id,
+            poster: cov.large || cov.extra_large || cov.medium || null,
+            banner: m.banner_image || cov.extra_large || null,
+            tip: id,
+            anilistId: m.anilist_id || null,
+            malId: m.mal_id || null,
+            subbed: m.subbed || 0,
+            dubbed: m.dubbed || 0
+          };
+          reanime.cache[id] = JSON.stringify(o);
+          cb(o);
+          return;
+        } catch (e) {
+          console.log("ERR reanime.getTooltip: " + e);
+        }
+      }
+      cb(null);
+    }, reanime.getFilterOrigin());
+  },
+  _cbs: {},
+  _cbId: 0,
+  callNative: function(method, arg, cb) {
+    var id = ++reanime._cbId;
+    reanime._cbs[id] = cb;
+    if (!window._reanimeCb) {
+      window._reanimeCb = function(cbId, data) {
+        var fn = reanime._cbs[cbId];
+        if (fn) {
+          delete reanime._cbs[cbId];
+          var out = data;
+          if (typeof data === 'string') {
+            try { out = JSON.parse(data); } catch (e) { out = data; }
+          }
+          fn(out);
+        }
+      };
+    }
+    if (typeof _JSAPI !== 'undefined' && _JSAPI && _JSAPI[method + 'Async']) {
+      _JSAPI[method + 'Async'](arg, id);
+    } else if (typeof _JSAPI !== 'undefined' && _JSAPI && _JSAPI[method]) {
+      var syncRes = _JSAPI[method](arg);
+      try {
+        var parsed = syncRes ? JSON.parse(syncRes) : null;
+        cb(parsed);
+      } catch (e) {
+        cb(null);
+      }
+    } else {
+      cb(null);
+    }
+  },
+  getView: function(url, f) {
+    var uid = ++_API.viewid;
+    var ux = (url + '').split('#');
+    var epTarget = (ux.length >= 2 && ux[1]) ? toInt(ux[1]) : 1;
+    var id = reanime.getAnimeId(ux[0]);
+    if (!id) {
+      f({ status: false }, uid);
+      return uid;
+    }
+
+    var tipData = null;
+    var epData = null;
+    var thumbData = null;
+    var finished = false;
+
+    function finish() {
+      if (finished || !tipData || !epData) return;
+      finished = true;
+
+      var epList = [];
+      var episodes = (epData && epData.data) ? epData.data : (Array.isArray(epData) ? epData : []);
+      var maxSub = tipData.subbed || 0;
+      var maxDub = tipData.dubbed || 0;
+
+      for (var i = 0; i < episodes.length; i++) {
+        var ep = episodes[i];
+        var epNum = (ep.episode_number !== undefined && ep.episode_number !== null) ? ep.episode_number : (i + 1);
+        var hasSub = maxSub > 0 ? (epNum <= maxSub) : true;
+        var hasDub = (epNum <= maxDub);
+        var epTitle = ep.title || "";
+        var baseName = epTitle ? ("Episode " + epNum + " - " + epTitle) : ("Episode " + epNum);
+        var thumb = thumbData ? (thumbData[epNum + ""] || thumbData[epNum] || null) : null;
+
+        var oe = {
+          ep: epNum,
+          url: "/anime/" + id + "#" + epNum,
+          active: (epTarget == epNum),
+          filler: !!ep.is_filler,
+          title: baseName,
+          epId: ep.episode_id || ("ep-" + epNum),
+          has_sub: hasSub,
+          has_dub: hasDub,
+          img: thumb,
+          streams: []
+        };
+        if (hasSub) oe.streams.push({ provider: 'ReAnime Sub', id: epNum });
+        if (hasDub) {
+          oe.streams.push({ provider: 'ReAnime Dub', id: epNum });
+          oe.dub = oe.streams.length;
+        }
+        epList.push(oe);
+      }
+
+      var activeIdx = 0;
+      for (var j = 0; j < epList.length; j++) {
+        if (epList[j].active) {
+          activeIdx = j;
+          break;
+        }
+      }
+      if (epList.length > 0) {
+        epList[activeIdx].active = true;
+      }
+
+      var o = {
+        idMal: tipData.malId,
+        anilistId: tipData.anilistId,
+        title: tipData.title,
+        title_jp: tipData.title_jp,
+        synopsis: tipData.synopsis,
+        genres: tipData.genres,
+        quality: null,
+        banner: tipData.banner,
+        rating: tipData.rating,
+        ttid: id,
+        url: "/anime/" + id,
+        poster: tipData.poster,
+        status: true,
+        epavail: maxSub || epList.length,
+        epdub: maxDub,
+        type: tipData.type || "TV",
+        genre: tipData.genre,
+        info: {
+          type: { val: "_" + (tipData.type || "TV"), name: tipData.type || "TV" },
+          rating: tipData.rating,
+          quality: null
+        },
+        ep: epList,
+        epactive: activeIdx,
+        servers: { dub: [], sub: [], softsub: [] },
+        streamtype: "sub",
+        stream_url: {}
+      };
+
+      if (epList.length > 0) {
+        var currEp = epList[activeIdx];
+        if (currEp.has_sub) {
+          o.servers.sub.push(pb.serverobj('ReAnime Sub', 0));
+          o.stream_url.hard = currEp.ep;
+        }
+        if (currEp.has_dub) {
+          o.servers.dub.push(pb.serverobj('ReAnime Dub', 0));
+          o.stream_url.dub = currEp.ep;
+        }
+
+        var preferDub = (_API.currentStreamType == 2) || (pb.cfg_data && pb.cfg_data.dubaudio && !_API.currentStreamTypeValue);
+        if (preferDub && currEp.has_dub) {
+          o.streamtype = "dub";
+          o.playingStreamType = 2;
+        } else if (currEp.has_sub) {
+          o.streamtype = "sub";
+          o.playingStreamType = 0;
+        } else if (currEp.has_dub) {
+          o.streamtype = "dub";
+          o.playingStreamType = 2;
+        }
+      }
+
+      f(o, uid);
+    }
+
+    reanime.getTooltip(id, function(tip) {
+      tipData = tip || {
+        title: id,
+        title_jp: id,
+        synopsis: "",
+        genres: [],
+        genre: "",
+        rating: "",
+        poster: null,
+        banner: null,
+        malId: null,
+        anilistId: null,
+        subbed: 0,
+        dubbed: 0
+      };
+      if (tipData.anilistId) {
+        var d = __SD_DOMAIN || reanime.dns;
+        $ap("https://" + d + "/api/thumbnails/" + tipData.anilistId, function(tr) {
+          if (tr.ok) {
+            try {
+              var tj = JSON.parse(tr.responseText);
+              thumbData = tj.thumbnails || null;
+            } catch (e) {}
+          }
+          finish();
+        }, reanime.getFilterOrigin());
+      } else {
+        finish();
+      }
+    }, url, 1);
+
+    var d = __SD_DOMAIN || reanime.dns;
+    var epUrl = "https://" + d + "/api/v1/anime/" + id + "/episodes?limit=2000";
+    $ap(epUrl, function(r) {
+      if (r.ok) {
+        try {
+          epData = JSON.parse(r.responseText);
+        } catch (e) {
+          epData = { data: [] };
+        }
+      } else {
+        epData = { data: [] };
+      }
+      finish();
+    }, reanime.getFilterOrigin());
+
+    return uid;
+  },
+  loadVideo: function(dt, f) {
+    if (!dt || !dt.ep || dt.epactive === undefined) {
+      f(null);
+      return;
+    }
+    var oe = dt.ep[dt.epactive];
+    if (!oe) {
+      f(null);
+      return;
+    }
+
+    dt.servers = { dub: [], sub: [], softsub: [] };
+    dt.stream_url = {};
+    if (oe.has_sub) {
+      dt.servers.sub.push(pb.serverobj('ReAnime Sub', 0));
+      dt.stream_url.hard = oe.ep;
+    }
+    if (oe.has_dub) {
+      dt.servers.dub.push(pb.serverobj('ReAnime Dub', 0));
+      dt.stream_url.dub = oe.ep;
+    }
+
+    var preferDub = (_API.currentStreamType == 2) || (pb.cfg_data && pb.cfg_data.dubaudio && !_API.currentStreamTypeValue);
+    var audioType = "sub";
+    if (preferDub && oe.has_dub) {
+      audioType = "dub";
+      dt.streamtype = "dub";
+      dt.playingStreamType = 2;
+    } else if (oe.has_sub) {
+      audioType = "sub";
+      dt.streamtype = "sub";
+      dt.playingStreamType = 0;
+    } else if (oe.has_dub) {
+      audioType = "dub";
+      dt.streamtype = "dub";
+      dt.playingStreamType = 2;
+    }
+
+    var d = __SD_DOMAIN || reanime.dns;
+    var anilistId = dt.anilistId || 0;
+    var malId = dt.idMal || 0;
+    var flixUrl = "https://" + d + "/api/flix/" + anilistId + "/" + oe.ep + (malId ? ("?mal=" + malId) : "");
+
+    $ap(flixUrl, function(r) {
+      if (!r.ok) {
+        f(null);
+        return;
+      }
+      try {
+        var res = JSON.parse(r.responseText);
+        if (!res.success || !res.servers || !res.servers.length) {
+          f(null);
+          return;
+        }
+
+        var matched = null;
+        for (var i = 0; i < res.servers.length; i++) {
+          var s = res.servers[i];
+          if (s.dataType === audioType) {
+            matched = s;
+            break;
+          }
+        }
+        if (!matched && res.servers.length > 0) {
+          matched = res.servers[0];
+        }
+        if (!matched || !matched.dataLink) {
+          f(null);
+          return;
+        }
+
+        reanime.resolveAndPlay(matched.dataLink, f);
+      } catch (e) {
+        console.log("ERR reanime.loadVideo: " + e);
+        f(null);
+      }
+    }, reanime.getFilterOrigin());
+  },
+  resolveAndPlay: function(dataLink, f) {
+    reanime.callNative('reanimeResolveStream', dataLink, function(manifest) {
+      if (!manifest || (!manifest.proxy_url && !manifest.source)) {
+        f(null);
+        return;
+      }
+      var playUrl = (!_ISELECTRON && manifest.proxy_url) ? manifest.proxy_url : manifest.source;
+      var v = {
+        url: playUrl,
+        subtitles: manifest.subtitles || [],
+        skip: manifest.skip || null
       };
       f(v);
     });
@@ -4818,7 +5288,7 @@ var __IMGCDNL=toInt(_JSAPI.storeGet("imgcdnl","1"));
 
 /* proxy image */
 function $imgnl(src, maxw){
-  if (__IMGCDNL!=1 || src.indexOf("anilist.co") || __SD7 || __SD8 || __SD9){
+  if (__IMGCDNL!=1 || src.indexOf("anilist.co") || __SD7 || __SD8 || __SD9 || __SD10){
     return src;
   }
   return 'https://wsrv.nl/?url='+encodeURIComponent(src)+'&w='+maxw+'&we';
@@ -5346,7 +5816,7 @@ const _API={
     if (src_ori){
       if (pb.cfg_data && pb.cfg_data.hlsproxy){
         if (
-          !__SD7 && !__SD8 && !__SD9 && !__SDKAI &&
+          !__SD7 && !__SD8 && !__SD9 && !__SD10 && !__SDKAI &&
           (src_ori.indexOf("#dash")==-1)
           && (src_ori.indexOf("megaup.nl", /*"4spromax.site"*/ /*"megaup.live"*/ )==-1)
           && (src_ori.indexOf("prxy.miruro.to")==-1)
@@ -5598,6 +6068,9 @@ const _API={
     else if (__SD9){
       return gotaku.getAnimeId(url);
     }
+    else if (__SD10){
+      return reanime.getAnimeId(url);
+    }
     else{
       var url_parse=url.split('/');
       if (url_parse.length>=5){
@@ -5668,6 +6141,8 @@ const _API={
       return miruro.getFilterOrigin();
     else if (__SD9)
       return gotaku.getFilterOrigin();
+    else if (__SD10)
+      return reanime.getFilterOrigin();
     return null;
   },
 
@@ -5687,6 +6162,9 @@ const _API={
     }
     else if (__SD9){
       return gotaku.getFilterUrl(q,genres,sort,page,ses,year);
+    }
+    else if (__SD10){
+      return reanime.getFilterUrl(q,genres,sort,page,ses,year);
     }
     else if (!__SD3 && !__SD5){
       var qv=[];
@@ -6132,6 +6610,9 @@ const _API={
     }
     else if (__SD9){
       return gotaku.getView(url,f);
+    }
+    else if (__SD10){
+      return reanime.getView(url,f);
     }
     else if (__SDKAI){
       return kai.getView(url,f);
@@ -6882,6 +7363,9 @@ const _API={
     }
     else if (__SD9){
       return gotaku.getTooltip(id, cb, url, 0);
+    }
+    else if (__SD10){
+      return reanime.getTooltip(id, cb, url, 0);
     }
 
     if (!id && url){
@@ -8031,6 +8515,8 @@ const vtt={
       hdr=miruro.add_headers;
     }else if (__SD9){
       hdr=gotaku.subtitle_origin;
+    }else if (__SD10){
+      hdr=reanime.subtitle_origin;
     }
     $ap(sub.u,function(r){
       if (r.ok){
@@ -10527,8 +11013,8 @@ const pb={
             }
           });
       }
-      else if (__SD9){
-        gotaku.loadVideo(pb.data, function(v){
+      else if (__SD9 || __SD10){
+        (__SD10 ? reanime : gotaku).loadVideo(pb.data, function(v){
           if (!v || !v.url){
             pb.playback_error(
               'PLAYBACK ERROR',
@@ -11067,7 +11553,7 @@ const pb={
         if (sel_id>-1){
           var epd=pb.data.ep[sel_id];
           action_value=epd.url;
-          if (__SD3||__SD5||__SD6||__SD9){
+          if (__SD3||__SD5||__SD6||__SD9||__SD10){
             action_value='>'+epd.url;
           }
           pb.action_handler(action_value,';1');
@@ -12748,7 +13234,7 @@ const pb={
         var d=pb.data.ep[i];
         var adh='';
         var action_value=d.url;
-        if (__SD3||__SD5||__SD6||__SD9){
+        if (__SD3||__SD5||__SD6||__SD9||__SD10){
           action_value='>'+d.url;
         }
         var hl=$n('div',d.active?'playing':'',{action:action_value,arg:pb.tip_value+';1'},pb.pb_episodes.P,special(d.ep)+adh);
@@ -13132,7 +13618,7 @@ const pb={
       });
     }
 
-    if (!id || (!__SD5 && !__SD6 && !__SD7 && !__SD8 && !__SD9 && !__SDKAI)){
+    if (!id || (!__SD5 && !__SD6 && !__SD7 && !__SD8 && !__SD9 && !__SD10 && !__SDKAI)){
       return;
     }
 
@@ -13717,7 +14203,7 @@ const pb={
       pb.url_value=uri;
       pb.startpos_val=(startpos!==undefined)?(startpos?parseInt(startpos):0):0;
       console.log("ATVLOG OPENPB => POS="+pb.startpos_val);
-      if (!noclean && (!__SD3) &&(!__SD5) &&(!__SD6) &&(!__SD7) && (!__SD8) && (!__SD9)){
+      if (!noclean && (!__SD3) &&(!__SD5) &&(!__SD6) &&(!__SD7) && (!__SD8) && (!__SD9) && (!__SD10)){
         _API.getTooltip(ttid,pb.open_ttip, uri);
       }
       pb.reset(0,((__SD3||__SD5))?2:noclean);
@@ -13957,6 +14443,9 @@ const home={
     else if (__SD9){
       rd=gotaku.recent_parse(v);
     }
+    else if (__SD10){
+      rd=reanime.recent_parse(v);
+    }
     else if (__SD5){
       // Hi Anime
       rd=home.flix_parse(v);
@@ -14148,10 +14637,13 @@ const home={
         load_page='';
       }
     }
+    else if (__SD10){
+      load_page=(g._page-1)*28;
+    }
     $a(g._ajaxurl+''+load_page,function(r){
       if (r.ok){
         try{
-          if (__SD3||__SD5||__SD6||__SD7||__SD8||__SD9){
+          if (__SD3||__SD5||__SD6||__SD7||__SD8||__SD9||__SD10){
             home.recent_parse(g,r.responseText);
           }
           else{
@@ -14854,7 +15346,7 @@ const home={
       el.__last_touch=$tick()+5000;
     });
 
-    if (__SD6||pb.cfg_data.alisthomess||(__SD==2)||__SD7||__SD8||__SD9){
+    if (__SD6||pb.cfg_data.alisthomess||(__SD==2)||__SD7||__SD8||__SD9||__SD10){
       home.home_anilist_load();
       return;
     }
@@ -15314,6 +15806,13 @@ const home={
         ["recent",'/api/v1/titles?sort=latest&limit=28&page=', "Recently Updated", true],
         ["trending",'/api/v1/titles?sort=trending_day&limit=28&page=', "Trending Today", true],
         ["top",'/api/v1/titles?sort=trending_week&limit=28&page=', "Popular This Week", true]
+      ];
+    }
+    else if (__SD10){
+      homepage=[
+        ["recent",'/api/v1/search?sort=latest_aired&limit=28&offset=', "Recently Updated", true],
+        ["trending",'/api/v1/top/anime?period=today&limit=28&offset=', "Trending Today", true],
+        ["top",'/api/v1/search?sort=popularity_desc&limit=28&offset=', "Most Popular", true]
       ];
     }
     else{
@@ -17323,6 +17822,9 @@ const home={
       else if (__SD9){
         rd=gotaku.recent_parse(v);
       }
+      else if (__SD10){
+        rd=reanime.recent_parse(v);
+      }
       else if (__SD==1){
         var h=$n('div','','',null,v);
         // window._kaisrc=h;
@@ -18455,6 +18957,9 @@ const home={
       }
       else if (__SD9){
         genrelist=gotaku.genres;
+      }
+      else if (__SD10){
+        genrelist=reanime.genres;
       }
       for (var i in genrelist){
         var title=i.replace(/_/g," ").toUpperCase().trim();
@@ -21609,7 +22114,7 @@ query ($weekStart: Int, $weekEnd: Int, $page: Int, $perPage: Int) {
         epsel=_MAL.pop.var.ep;
       }
 
-      openurl+=(__SDKAI||__SD3||__SD5||__SD6||__SD7||__SD8||__SD9)?('#'+epsel):('/ep-'+epsel);
+      openurl+=(__SDKAI||__SD3||__SD5||__SD6||__SD7||__SD8||__SD9||__SD10)?('#'+epsel):('/ep-'+epsel);
 
       console.log("MAL Open Anime = "+openurl);
       _MAL.popup_close();

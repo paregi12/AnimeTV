@@ -86,6 +86,99 @@ function gotakuHttpFetch(url, headers) {
   });
 }
 
+function httpPostJson(url, postData, headers) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const data = Buffer.from(typeof postData === 'string' ? postData : JSON.stringify(postData));
+    const req = https.request(u, {
+      method: 'POST',
+      headers: Object.assign({
+        'Content-Type': 'application/json',
+        'Content-Length': data.length,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }, headers || {})
+    }, (res) => {
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
+      res.on('end', () => resolve({ status: res.statusCode, data: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+async function reanimeElectronResolveStream(embedUrl) {
+  const htmlRes = await gotakuHttpFetch(embedUrl, {
+    'Referer': 'https://flixcloud.cc/',
+    'Origin': 'https://flixcloud.cc',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+  });
+  const html = htmlRes.data.toString('utf8');
+  const dataMatch = html.match(/type:\s*"data",\s*data:\s*(\{.*?\})\s*,\s*uses:/s);
+  if (!dataMatch) return null;
+
+  let s = dataMatch[1]
+    .replace(/([{,]\s*)([\w_]+)(\s*:)/g, '$1"$2"$3')
+    .replace(/,\s*([}\]])/g, '$1')
+    .replace(/:\s*undefined\b/g, ': null');
+  const embedObj = JSON.parse(s);
+
+  const subtitles = (embedObj.subtitles || []).filter(sub => (sub.url || '').startsWith('https://')).map(sub => ({
+    url: sub.url,
+    lang: sub.language || 'Unknown',
+    default: !!sub.default
+  }));
+
+  const skip = {};
+  if (embedObj.intro_chapter) {
+    skip.intro = [embedObj.intro_chapter.start || 0, embedObj.intro_chapter.end || 0];
+  }
+  if (embedObj.outro_chapter) {
+    skip.outro = [embedObj.outro_chapter.start || 0, embedObj.outro_chapter.end || 0];
+  }
+
+  delete embedObj.subtitles;
+  delete embedObj.intro_chapter;
+  delete embedObj.outro_chapter;
+  delete embedObj.chapters;
+
+  const tokenRes = await httpPostJson('https://enc-dec.app/api/dec-flixcloud?type=token', { data: embedObj }, {
+    'Referer': 'https://enc-dec.app/'
+  });
+  const tokenDto = JSON.parse(tokenRes.data);
+  if (tokenDto.status !== 200 || !tokenDto.result) return null;
+
+  const m3u8Res = await gotakuHttpFetch('https://flixcloud.cc/api/m3u8/' + tokenDto.result.token, {
+    'Referer': 'https://flixcloud.cc/',
+    'Origin': 'https://flixcloud.cc',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+  });
+  const m3u8Dto = JSON.parse(m3u8Res.data.toString('utf8'));
+
+  const streamRes = await httpPostJson('https://enc-dec.app/api/dec-flixcloud?type=stream', {
+    data: {
+      context: tokenDto.result.context,
+      stream_response: m3u8Dto
+    }
+  }, {
+    'Referer': 'https://enc-dec.app/'
+  });
+  const streamDto = JSON.parse(streamRes.data);
+  if (streamDto.status !== 200 || !streamDto.result) return null;
+
+  const streamUrl = streamDto.result.stream;
+  const wPayload = (streamDto.result.context && streamDto.result.context.w_payload) ? streamDto.result.context.w_payload : '';
+  const parsedManifestUrl = 'https://enc-dec.app/api/parse-flixcloud?url=' + encodeURIComponent(streamUrl).replace(/\+/g, '%20') + '&w_payload=' + encodeURIComponent(wPayload).replace(/\+/g, '%20');
+
+  return JSON.stringify({
+    source: streamUrl,
+    proxy_url: parsedManifestUrl,
+    subtitles: subtitles,
+    skip: skip
+  });
+}
+
 async function gotakuElectronFetchAndDecrypt(url) {
   const res = await gotakuHttpFetch(url, {
     'Referer': 'https://gotaku.to/',
@@ -362,6 +455,15 @@ const api={
       if (window._gotakuCb) window._gotakuCb(cbnum, res);
     }).catch(() => {
       if (window._gotakuCb) window._gotakuCb(cbnum, null);
+    });
+  },
+
+  reanimeResolveStream(embedUrl) { return null; },
+  reanimeResolveStreamAsync(embedUrl, cbnum) {
+    reanimeElectronResolveStream(embedUrl).then(res => {
+      if (window._reanimeCb) window._reanimeCb(cbnum, res);
+    }).catch(() => {
+      if (window._reanimeCb) window._reanimeCb(cbnum, null);
     });
   },
 

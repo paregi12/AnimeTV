@@ -144,6 +144,7 @@ public class MainActivity extends FragmentActivity {
     initBluetooth();
     updateInstance(savedInstanceState);
     GotakuProxy.getInstance().startServer();
+    ReAnimeProxy.getInstance().startServer();
     aView=new AnimeView(this);
 //    initCastService();
   }
@@ -309,6 +310,7 @@ public class MainActivity extends FragmentActivity {
   @Override
   protected void onDestroy() {
     GotakuProxy.getInstance().stopServer();
+    ReAnimeProxy.getInstance().stopServer();
     super.onDestroy();
   }
 

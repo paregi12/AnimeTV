@@ -37,7 +37,8 @@ const common={
     "kaa.lt",
     "api.gojo.wtf",
     "www.miruro.tv",
-    "gotaku.to"
+    "gotaku.to",
+    "reanime.to"
   ],
   main:{
     /* animetv.js global object */

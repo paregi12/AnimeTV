@@ -53,6 +53,12 @@ import android.widget.ImageView;
 import android.widget.RelativeLayout;
 import android.widget.Toast;
 
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -1666,6 +1672,186 @@ import javax.crypto.spec.SecretKeySpec;
         String jsSafe = res != null ? res : "null";
         activity.runOnUiThread(() ->
             webView.evaluateJavascript("if (window._gotakuCb) window._gotakuCb(" + cbnum + ", " + jsSafe + ");", null)
+        );
+      });
+    }
+
+    public String reanimeResolveStreamSync(String embedUrl) {
+      try {
+        OkHttpClient client = AnimeApi.httpClient != null ? AnimeApi.httpClient : new OkHttpClient.Builder().build();
+        Request req = new Request.Builder()
+            .url(embedUrl)
+            .header("User-Agent", Conf.USER_AGENT)
+            .header("Referer", "https://flixcloud.cc/")
+            .header("Origin", "https://flixcloud.cc")
+            .build();
+        Response resp = client.newCall(req).execute();
+        if (!resp.isSuccessful()) {
+          resp.close();
+          return null;
+        }
+        String html = resp.body().string();
+        resp.close();
+
+        Matcher scriptM = Pattern.compile("/(?:js/)?player/v\\d+/e\\d+-player\\.min\\.js").matcher(html);
+        if (scriptM.find()) {
+          String scriptUrl = "https://flixcloud.cc" + scriptM.group();
+          try {
+            Request sReq = new Request.Builder().url(scriptUrl).header("Referer", "https://flixcloud.cc/").build();
+            Response sResp = client.newCall(sReq).execute();
+            if (sResp.isSuccessful()) {
+              String js = sResp.body().string();
+              sResp.close();
+              Matcher maskM = Pattern.compile("\\[(\\s*(?:0x[0-9a-fA-F]+|\\d+)\\s*(?:,\\s*(?:0x[0-9a-fA-F]+|\\d+)\\s*)*)\\]").matcher(js);
+              if (maskM.find()) {
+                String[] parts = maskM.group(1).split(",");
+                byte[] m = new byte[parts.length];
+                for (int i = 0; i < parts.length; i++) {
+                  String p = parts[i].trim();
+                  int val = p.startsWith("0x") || p.startsWith("0X") ? Integer.parseInt(p.substring(2), 16) : Integer.parseInt(p);
+                  m[i] = (byte) val;
+                }
+                ReAnimeProxy.getInstance().updateMask(m);
+              }
+            } else {
+              sResp.close();
+            }
+          } catch (Exception ignored) {}
+        }
+
+        Matcher dataM = Pattern.compile("type:\\s*\"data\",\\s*data:\\s*(\\{.*?\\})\\s*,\\s*uses:", Pattern.DOTALL).matcher(html);
+        if (!dataM.find()) return null;
+        String rawJson5 = dataM.group(1);
+        String jsonStr = rawJson5.replaceAll("([{,]\\s*)([\\w_]+)(\\s*:)", "$1\"$2\"$3")
+                                 .replaceAll(",\\s*([}\\]])", "$1")
+                                 .replaceAll(":\\s*undefined\\b", ": null");
+        JSONObject embedObj = new JSONObject(jsonStr);
+
+        JSONArray subList = embedObj.optJSONArray("subtitles");
+        JSONArray subsOut = new JSONArray();
+        if (subList != null) {
+          for (int i = 0; i < subList.length(); i++) {
+            JSONObject s = subList.getJSONObject(i);
+            String sUrl = s.optString("url");
+            if (sUrl.startsWith("https://")) {
+              JSONObject subItem = new JSONObject();
+              subItem.put("url", sUrl);
+              subItem.put("lang", s.optString("language", "Unknown"));
+              subItem.put("default", s.optBoolean("default", false));
+              subsOut.put(subItem);
+            }
+          }
+        }
+
+        JSONObject skipObj = new JSONObject();
+        if (embedObj.has("intro_chapter")) {
+          JSONObject intro = embedObj.getJSONObject("intro_chapter");
+          JSONArray introArr = new JSONArray();
+          introArr.put(intro.optInt("start", 0));
+          introArr.put(intro.optInt("end", 0));
+          skipObj.put("intro", introArr);
+        }
+        if (embedObj.has("outro_chapter")) {
+          JSONObject outro = embedObj.getJSONObject("outro_chapter");
+          JSONArray outroArr = new JSONArray();
+          outroArr.put(outro.optInt("start", 0));
+          outroArr.put(outro.optInt("end", 0));
+          skipObj.put("outro", outroArr);
+        }
+
+        embedObj.remove("subtitles");
+        embedObj.remove("intro_chapter");
+        embedObj.remove("outro_chapter");
+        embedObj.remove("chapters");
+
+        JSONObject tokenReqObj = new JSONObject();
+        tokenReqObj.put("data", embedObj);
+        RequestBody tokenBody = RequestBody.create(tokenReqObj.toString(), MediaType.get("application/json"));
+        Request tokenReq = new Request.Builder()
+            .url("https://enc-dec.app/api/dec-flixcloud?type=token")
+            .post(tokenBody)
+            .header("User-Agent", Conf.USER_AGENT)
+            .header("Referer", "https://enc-dec.app/")
+            .build();
+        Response tokenResp = client.newCall(tokenReq).execute();
+        if (!tokenResp.isSuccessful()) {
+          tokenResp.close();
+          return null;
+        }
+        String tokenJsonStr = tokenResp.body().string();
+        tokenResp.close();
+        JSONObject tokenRespObj = new JSONObject(tokenJsonStr);
+        if (tokenRespObj.optInt("status") != 200 || !tokenRespObj.has("result")) return null;
+        JSONObject tokenResult = tokenRespObj.getJSONObject("result");
+        String token = tokenResult.getString("token");
+        JSONObject context = tokenResult.getJSONObject("context");
+
+        Request m3u8Req = new Request.Builder()
+            .url("https://flixcloud.cc/api/m3u8/" + token)
+            .header("User-Agent", Conf.USER_AGENT)
+            .header("Referer", "https://flixcloud.cc/")
+            .header("Origin", "https://flixcloud.cc")
+            .build();
+        Response m3u8Resp = client.newCall(m3u8Req).execute();
+        if (!m3u8Resp.isSuccessful()) {
+          m3u8Resp.close();
+          return null;
+        }
+        String m3u8JsonStr = m3u8Resp.body().string();
+        m3u8Resp.close();
+        JSONObject m3u8JsonObj = new JSONObject(m3u8JsonStr);
+
+        JSONObject streamData = new JSONObject();
+        streamData.put("context", context);
+        streamData.put("stream_response", m3u8JsonObj);
+        JSONObject streamReqObj = new JSONObject();
+        streamReqObj.put("data", streamData);
+        RequestBody streamBody = RequestBody.create(streamReqObj.toString(), MediaType.get("application/json"));
+        Request streamReq = new Request.Builder()
+            .url("https://enc-dec.app/api/dec-flixcloud?type=stream")
+            .post(streamBody)
+            .header("User-Agent", Conf.USER_AGENT)
+            .header("Referer", "https://enc-dec.app/")
+            .build();
+        Response streamResp = client.newCall(streamReq).execute();
+        if (!streamResp.isSuccessful()) {
+          streamResp.close();
+          return null;
+        }
+        String streamJsonStr = streamResp.body().string();
+        streamResp.close();
+        JSONObject streamRespObj = new JSONObject(streamJsonStr);
+        if (streamRespObj.optInt("status") != 200 || !streamRespObj.has("result")) return null;
+        JSONObject streamResult = streamRespObj.getJSONObject("result");
+        String streamUrl = streamResult.getString("stream");
+        JSONObject streamCtx = streamResult.optJSONObject("context");
+        String wPayload = streamCtx != null ? streamCtx.optString("w_payload", "") : "";
+
+        String proxyUrl = ReAnimeProxy.getInstance().createProxyPlaylistUrl(streamUrl, wPayload);
+        JSONObject out = new JSONObject();
+        out.put("source", streamUrl);
+        out.put("proxy_url", proxyUrl);
+        out.put("subtitles", subsOut);
+        out.put("skip", skipObj);
+        return out.toString();
+      } catch (Exception e) {
+        Log.e(_TAG, "reanimeResolveStream error: " + e.getMessage());
+        return null;
+      }
+    }
+
+    @JavascriptInterface
+    public String reanimeResolveStream(String embedUrl) {
+      return reanimeResolveStreamSync(embedUrl);
+    }
+
+    @JavascriptInterface
+    public void reanimeResolveStreamAsync(String embedUrl, int cbnum) {
+      AsyncTask.execute(() -> {
+        String res = reanimeResolveStreamSync(embedUrl);
+        String jsSafe = res != null ? res : "null";
+        activity.runOnUiThread(() ->
+            webView.evaluateJavascript("if (window._reanimeCb) window._reanimeCb(" + cbnum + ", " + jsSafe + ");", null)
         );
       });
     }
