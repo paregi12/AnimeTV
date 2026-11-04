@@ -655,7 +655,7 @@ var gotaku = {
         f(null);
         return;
       }
-      var playUrl = (!_ISELECTRON && manifest.proxy_url) ? manifest.proxy_url : manifest.source;
+      var playUrl = manifest.proxy_url || manifest.source;
       var v = {
         url: playUrl,
         subtitles: manifest.subtitles || [],
@@ -1163,7 +1163,7 @@ var reanime = {
         f(null);
         return;
       }
-      var playUrl = (!_ISELECTRON && manifest.proxy_url) ? manifest.proxy_url : manifest.source;
+      var playUrl = manifest.proxy_url || manifest.source;
       var v = {
         url: playUrl,
         subtitles: manifest.subtitles || [],
