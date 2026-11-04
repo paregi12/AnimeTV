@@ -8232,6 +8232,16 @@ const vtt={
       }
 
       if (engMatches.length>0){
+        var prefVariant=(pb.cfg_data.subvariants && pb.cfg_data.subvariants['en']) || pb.cfg_data.subvariant;
+        if (prefVariant){
+          for (var k=0;k<engMatches.length;k++){
+            var idx = engMatches[k];
+            if (vtt.match_variant(subs[idx], prefVariant, 'English')){
+              vtt.load(subs[idx]);
+              return;
+            }
+          }
+        }
         for (var k=0;k<engMatches.length;k++){
           var idx = engMatches[k];
           if (subs[idx].l.indexOf('full')>-1){
@@ -8277,6 +8287,20 @@ const vtt={
     de:['deu','ger'],
     pt:['por','bra'],
   },
+  match_variant:function(sub, pref, langName){
+    if (!sub || !pref) return false;
+    var name=(sub.title || sub.l || '').toLowerCase();
+    var vName=pb.formatVariantName(sub.title || sub.l, langName).toLowerCase();
+    pref=pref.toLowerCase();
+    if (vName===pref || name===pref) return true;
+    var keys=['restyled','unstyled','original','dialogue','dubtitle','signs','song','cc','forced'];
+    for (var i=0;i<keys.length;i++){
+      if (pref.indexOf(keys[i])>-1){
+        return (name.indexOf(keys[i])>-1 || vName.indexOf(keys[i])>-1);
+      }
+    }
+    return (name.indexOf(pref)>-1 || pref.indexOf(vName)>-1);
+  },
   find_match:function(t, lang){
     var matches = [];
     if (lang in vtt.match_lang){
@@ -8303,6 +8327,16 @@ const vtt={
       }
     }
     if (matches.length > 0){
+      var targetLang=(lang=='hard'||!lang)?'en':lang;
+      var prefVariant=(pb.cfg_data.subvariants && pb.cfg_data.subvariants[targetLang]) || pb.cfg_data.subvariant;
+      var langName=_API.tlangs_id(targetLang);
+      if (prefVariant){
+        for (var k=0;k<matches.length;k++){
+          if (vtt.match_variant(t[matches[k]], prefVariant, langName)){
+            return matches[k];
+          }
+        }
+      }
       for (var k=0;k<matches.length;k++){
         var str = t[matches[k]].l.toLowerCase();
         if (str.indexOf("full") > -1){
@@ -8312,6 +8346,11 @@ const vtt={
       for (var k=0;k<matches.length;k++){
         var str = t[matches[k]].l.toLowerCase();
         if (str.indexOf("episode name") == -1 && str.indexOf("sign") == -1 && str.indexOf("song") == -1){
+          return matches[k];
+        }
+      }
+      for (var k=0;k<matches.length;k++){
+        if (t[matches[k]].d){
           return matches[k];
         }
       }
@@ -8578,11 +8617,13 @@ const vtt={
   */
   load:function(sub,n){
     vtt.set('');
-    vtt.playback.sub=null;
+    vtt.playback.sub=sub;
     vtt.playback.pos=0;
     vtt.playback.posid=0;
     vtt.substyle=0;
     vtt.playback.show=false;
+    window.__activesub=sub;
+    pb.cfg_update_el('subtrack');
     // console.log("LOADING SUBTITLE = "+JSON.stringify(sub));
     var hdr=null;
     if (__SD5){
@@ -9275,6 +9316,8 @@ const pb={
     server:0,
     scale:0,
     lang:'',
+    subvariant:'',
+    subvariants:{},
     alang:'',
     ccstyle:0,
     bgimg:{},
@@ -9357,6 +9400,8 @@ const pb={
 
         
         pb.cfg_data.lang=('lang' in j)?j.lang:'';
+        pb.cfg_data.subvariant=('subvariant' in j)?j.subvariant:'';
+        pb.cfg_data.subvariants=('subvariants' in j && typeof j.subvariants=='object' && j.subvariants!==null)?j.subvariants:{};
         pb.cfg_data.alang=('alang' in j)?j.alang:'';
         _API.setStreamType(0,0);
 
@@ -9509,6 +9554,8 @@ const pb={
     
     pb.cfg_data.scale=0;
     pb.cfg_data.lang='';
+    pb.cfg_data.subvariant='';
+    pb.cfg_data.subvariants={};
     pb.cfg_data.alang='';
     pb.cfg_data.ccstyle=0;
     pb.cfg_data.bgimg={};
@@ -11883,7 +11930,7 @@ const pb={
             var s=variants[i];
             var sName=pb.formatVariantName(s.title || s.l || ('Track '+(i+1)), langName);
             sList.push(sName);
-            if (vtt.playback && vtt.playback.sub && (vtt.playback.sub.u===s.u || vtt.playback.sub===s)){
+            if (vtt.playback && vtt.playback.sub && (vtt.playback.sub.u===s.u || vtt.playback.sub===s || (s.title && vtt.playback.sub.title===s.title))){
               curIdx=i;
             }
           }
@@ -11893,7 +11940,17 @@ const pb={
             curIdx,
             function(chval){
               if (chval!=null && variants[chval]){
-                vtt.load(variants[chval]);
+                var chosen=variants[chval];
+                vtt.load(chosen);
+                var sName=pb.formatVariantName(chosen.title || chosen.l || '', langName);
+                if (sName){
+                  pb.cfg_data.subvariant=sName;
+                  if (!pb.cfg_data.subvariants){
+                    pb.cfg_data.subvariants={};
+                  }
+                  pb.cfg_data.subvariants[targetLang]=sName;
+                  pb.cfg_save();
+                }
                 pb.cfg_update_el('subtrack');
               }
             }
@@ -17743,6 +17800,7 @@ const home={
             pb.cfg_data.lang=nlg;
             pb.cfg_save();
             pb.cfg_update_el('lang');
+            pb.cfg_update_el('subtrack');
 
             var nst=_API.streamTypeById(nlg);
             if (nst!=prevstype){
