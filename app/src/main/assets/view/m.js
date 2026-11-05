@@ -578,7 +578,7 @@ var gotaku = {
     }, url, 1);
 
     var d = __SD_DOMAIN || gotaku.dns;
-    var epUrl = "https://" + d + "/api/v1/titles/" + id + "/episodes?k=8";
+    var epUrl = "https://" + d + "/api/v1/titles/" + id + "/episodes?k=10";
     gotaku.callNative('gotakuFetchAndDecrypt', epUrl, function(res) {
       epData = res || { data: [] };
       finish();
@@ -626,12 +626,12 @@ var gotaku = {
     }
 
     var d = __SD_DOMAIN || gotaku.dns;
-    var embedApiUrl = "https://" + d + "/api/v1/episodes/" + oe.epId + "/embed?type=" + reqType + "&k=8";
+    var embedApiUrl = "https://" + d + "/api/v1/episodes/" + oe.epId + "/embed?type=" + reqType + "&k=10";
     gotaku.callNative('gotakuFetchAndDecrypt', embedApiUrl, function(embedRes) {
       if (!embedRes || !embedRes.data || !embedRes.data.url) {
         var fallbackType = (reqType == "dub" && oe.has_sub) ? "hard_sub" : null;
         if (fallbackType) {
-          var fbUrl = "https://" + d + "/api/v1/episodes/" + oe.epId + "/embed?type=" + fallbackType + "&k=8";
+          var fbUrl = "https://" + d + "/api/v1/episodes/" + oe.epId + "/embed?type=" + fallbackType + "&k=10";
           gotaku.callNative('gotakuFetchAndDecrypt', fbUrl, function(fbRes) {
             if (!fbRes || !fbRes.data || !fbRes.data.url) {
               f(null);
@@ -8395,6 +8395,19 @@ const vtt={
           }catch(ee){}
         }
         if (!s&&p>=0){
+          var trimmedLn = ln.trim();
+          if (/^\d+$/.test(trimmedLn)){
+            var isCueId = false;
+            for (var next = n + 1; next < l.length; next++){
+              var nextLn = l[next].trim();
+              if (!nextLn) continue;
+              if (nextLn.indexOf("-->") > 0){
+                isCueId = true;
+              }
+              break;
+            }
+            if (isCueId) continue;
+          }
           if (__SD6){
             if (ln.indexOf('kickassanimes.info')>0){
               ln='';

@@ -20,14 +20,23 @@ import javax.crypto.spec.SecretKeySpec;
 public class GotakuCrypto {
     private static final String TAG = "GotakuCrypto";
 
-    public static final byte[] DEFAULT_API_SEED = new byte[] {
+    public static final byte[] API_SEED_V8 = new byte[] {
         (byte) 169, (byte) 97, (byte) 13, (byte) 229, (byte) 137, (byte) 106, (byte) 199, (byte) 91,
         (byte) 124, (byte) 53, (byte) 130, (byte) 103, (byte) 235, (byte) 216, (byte) 204, (byte) 41,
         (byte) 161, (byte) 207, (byte) 4, (byte) 157, (byte) 109, (byte) 106, (byte) 130, (byte) 5,
         (byte) 57, (byte) 176, (byte) 155, (byte) 55, (byte) 18, (byte) 148, (byte) 80, (byte) 128
     };
 
-    public static final String DEFAULT_API_VERSION = "8";
+    public static final byte[] API_SEED_V10 = new byte[] {
+        (byte) 30, (byte) 99, (byte) 206, (byte) 236, (byte) 176, (byte) 26, (byte) 228, (byte) 147,
+        (byte) 55, (byte) 35, (byte) 152, (byte) 123, (byte) 6, (byte) 17, (byte) 126, (byte) 179,
+        (byte) 40, (byte) 181, (byte) 197, (byte) 210, (byte) 194, (byte) 90, (byte) 232, (byte) 35,
+        (byte) 247, (byte) 20, (byte) 130, (byte) 43, (byte) 71, (byte) 117, (byte) 123, (byte) 82
+    };
+
+    public static final byte[] DEFAULT_API_SEED = API_SEED_V10;
+
+    public static final String DEFAULT_API_VERSION = "10";
     public static final String DEFAULT_HKDF_INFO = "api-seal|v1";
 
     public static final byte[] MANIFEST_SEED = hexToBytes("458e5403c40a73332706df406193dd6b040a2ea97a6bb59b52b294a61006e6ef");
@@ -139,18 +148,33 @@ public class GotakuCrypto {
 
     public static String decryptApi(byte[] body, String apiVersion, byte[] apiSeed, String hkdfInfo) {
         if (body == null || body.length <= 29) return null;
-        int versionInt = DEFAULT_API_VERSION.equals(apiVersion) ? 8 : Integer.parseInt(apiVersion);
+        int versionInt = 10;
+        try {
+            versionInt = (apiVersion != null && !apiVersion.isEmpty()) ? Integer.parseInt(apiVersion) : 10;
+        } catch (Exception ignored) {}
         byte versionByte = (byte) (versionInt & 0xFF);
 
         byte[] blob = body;
         if (body[0] != versionByte) {
             blob = b64UrlDecode(new String(body, StandardCharsets.UTF_8));
-            if (blob == null || blob.length <= 29 || blob[0] != versionByte) return null;
+            if (blob == null || blob.length <= 29) return null;
+            if (blob[0] == 10 || blob[0] == 8) {
+                versionByte = blob[0];
+            } else if (blob[0] != versionByte) {
+                return null;
+            }
+        } else {
+            versionByte = blob[0];
+        }
+
+        byte[] seed = apiSeed;
+        if (seed == null || seed == DEFAULT_API_SEED || seed == API_SEED_V10 || seed == API_SEED_V8) {
+            seed = (versionByte == 8) ? API_SEED_V8 : API_SEED_V10;
         }
 
         byte[] iv = Arrays.copyOfRange(blob, 1, 13);
         byte[] ct = Arrays.copyOfRange(blob, 13, blob.length);
-        byte[] key = hkdfSha256(apiSeed, new byte[0], hkdfInfo.getBytes(StandardCharsets.UTF_8), 32);
+        byte[] key = hkdfSha256(seed, new byte[0], hkdfInfo.getBytes(StandardCharsets.UTF_8), 32);
         if (key == null) return null;
 
         byte[] compressed = gcmDecrypt(key, iv, ct);

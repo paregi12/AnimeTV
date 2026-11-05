@@ -1604,7 +1604,12 @@ import javax.crypto.spec.SecretKeySpec;
         }
         in.close();
         byte[] bytes = baos.toByteArray();
-        return GotakuCrypto.decryptApi(bytes, GotakuCrypto.DEFAULT_API_VERSION, GotakuCrypto.DEFAULT_API_SEED, GotakuCrypto.DEFAULT_HKDF_INFO);
+        String kParam = null;
+        try {
+          kParam = Uri.parse(url).getQueryParameter("k");
+        } catch (Exception ignored) {}
+        String apiVer = (kParam != null && !kParam.isEmpty()) ? kParam : GotakuCrypto.DEFAULT_API_VERSION;
+        return GotakuCrypto.decryptApi(bytes, apiVer, GotakuCrypto.DEFAULT_API_SEED, GotakuCrypto.DEFAULT_HKDF_INFO);
       } catch (Exception e) {
         Log.e(_TAG, "gotakuFetchAndDecrypt error: " + e.getMessage());
         return null;

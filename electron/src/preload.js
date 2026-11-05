@@ -28,10 +28,15 @@ const crypto = require("crypto");
 const zlib = require("zlib");
 const https = require("https");
 
-const GOTAKU_API_SEED = Buffer.from([
+const GOTAKU_API_SEED_V8 = Buffer.from([
   169, 97, 13, 229, 137, 106, 199, 91, 124, 53, 130, 103, 235, 216, 204,
   41, 161, 207, 4, 157, 109, 106, 130, 5, 57, 176, 155, 55, 18, 148, 80, 128
 ]);
+const GOTAKU_API_SEED_V10 = Buffer.from([
+  30, 99, 206, 236, 176, 26, 228, 147, 55, 35, 152, 123, 6, 17, 126, 179,
+  40, 181, 197, 210, 194, 90, 232, 35, 247, 20, 130, 43, 71, 117, 123, 82
+]);
+const GOTAKU_API_SEED = GOTAKU_API_SEED_V10;
 const GOTAKU_MANIFEST_SEED = Buffer.from("458e5403c40a73332706df406193dd6b040a2ea97a6bb59b52b294a61006e6ef", "hex");
 
 function gotakuB64UrlEncode(buf) {
@@ -65,11 +70,12 @@ function gotakuHkdfSha256(ikm, salt, info, length) {
 }
 
 function gotakuDecryptApi(buf) {
-  if (buf.length <= 29 || buf[0] !== 8) return null;
+  if (buf.length <= 29 || (buf[0] !== 10 && buf[0] !== 8)) return null;
   const iv = buf.subarray(1, 13);
   const ciphertext = buf.subarray(13, buf.length - 16);
   const tag = buf.subarray(buf.length - 16);
-  const key = gotakuHkdfSha256(GOTAKU_API_SEED, Buffer.alloc(0), Buffer.from("api-seal|v1"), 32);
+  const seed = (buf[0] === 8) ? GOTAKU_API_SEED_V8 : GOTAKU_API_SEED_V10;
+  const key = gotakuHkdfSha256(seed, Buffer.alloc(0), Buffer.from("api-seal|v1"), 32);
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(tag);
   const compressed = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
