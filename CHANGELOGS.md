@@ -1,4 +1,11 @@
 # Changelogs
+- **1.0.5**
+  - Added Reanime source
+  - Fixed Gotaku source streaming issue
+  - Add subtitle variant selector and remember chosen track variant
+  - Fix subtitle cue numbers displaying below dialogue text
+  - Added Logcat in app
+  - Allow proxy stream playback on desktop
 - **1.0.4**
   - Fix app startup crash and stabilize video buffer initialization
 - **1.0.3**
