@@ -1,0 +1,8 @@
+Material Symbols Outlined
+
+The paregi_icons.ttf resource is a static subset of Google's Material Symbols
+Outlined icon font, converted from the original AnimeTV icon font asset.
+It is licensed under the Apache License, Version 2.0. The license text is in
+Apache-2.0.txt.
+
+Upstream documentation: https://developers.google.com/fonts/docs/material_symbols
