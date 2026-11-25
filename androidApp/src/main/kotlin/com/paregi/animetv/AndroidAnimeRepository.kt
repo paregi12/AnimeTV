@@ -19,6 +19,8 @@ import com.paregi.animetv.source.anilist.AndroidAniListApi
 import com.paregi.animetv.source.AndroidCatalogApi
 import com.paregi.animetv.source.AndroidPlaybackResolver
 import com.paregi.animetv.source.CatalogSourceSelector
+import com.paregi.animetv.source.gotaku.GotakuSource
+import com.paregi.animetv.source.gotaku.GotakuSync
 import com.paregi.animetv.source.lookup.SourceAnimeLookup
 import com.paregi.animetv.source.shared.AndroidSourceHttpClient
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +39,7 @@ class AndroidAnimeRepository(
 ) : AnimeRepository {
     private val sourceSelector = CatalogSourceSelector()
     private val sourceHttpClient = AndroidSourceHttpClient(networkStack, ::sourceSnapshot)
-    private val catalogApi = AndroidCatalogApi(sourceHttpClient::requestBytes)
+    private val catalogApi = AndroidCatalogApi(sourceHttpClient::requestBytes, GotakuSync(networkStack))
     private val sourceAnimeLookup = SourceAnimeLookup(catalogApi)
     private val aniListApi = AndroidAniListApi(
         requestJsonCall = sourceHttpClient::requestJson,
@@ -251,8 +253,18 @@ class AndroidAnimeRepository(
                 source
             )
         } else animeId
-        val anime = catalogApi.loadAnime(sourceId, source)
-            ?: error("Anime details response had no title")
+        val gotakuDetail = if (!source.isReAnime) {
+            catalogApi.json("${source.root}/api/v1/titles/${Uri.encode(sourceId)}", source)
+                .let { it.optJSONObject("data") ?: it }
+        } else null
+        val anime = (if (gotakuDetail != null) {
+            GotakuSource.anime(gotakuDetail.optJSONObject("title") ?: gotakuDetail, sourceId)
+        } else {
+            catalogApi.loadAnime(sourceId, source)
+        }) ?: error("Anime details response had no title")
+        val (gotakuSeasons, gotakuRelations, gotakuRecommendations) =
+            gotakuDetail?.let { GotakuSource.relatedItems(it, sourceId) }
+                ?: Triple(emptyList(), emptyList(), emptyList())
         val resolvedAniListId = anime.aniListId ?: titleMetadata?.aniListId ?: aniListId
         val resolvedMalId = anime.malId ?: titleMetadata?.malId ?: malId
         val trailerId = titleMetadata?.trailerId
@@ -267,8 +279,9 @@ class AndroidAnimeRepository(
         AnimeDetails(
             anime = detailsAnime,
             episodes = catalogApi.loadEpisodes(sourceId, source),
-            related = relatedTitles?.related.orEmpty(),
-            recommendations = relatedTitles?.recommendations.orEmpty()
+            related = relatedTitles?.related.orEmpty().ifEmpty { gotakuRelations },
+            recommendations = relatedTitles?.recommendations.orEmpty().ifEmpty { gotakuRecommendations },
+            seasons = gotakuSeasons
         )
     }
 

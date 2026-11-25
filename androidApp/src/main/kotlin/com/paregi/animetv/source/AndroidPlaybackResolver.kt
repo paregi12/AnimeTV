@@ -35,7 +35,7 @@ internal class AndroidPlaybackResolver(
         val choice = if (source.isReAnime) {
             reAnimeResolver.resolvePlayback(episodeId, preferDub, mirrorIndex, source)
         } else {
-            gotakuResolver.resolvePlayback(episodeId, preferDub, hasSub, source)
+            gotakuResolver.resolvePlayback(episodeId, preferDub, hasSub, source, mirrorIndex = mirrorIndex)
         }
         translateSubtitleIfNeeded(choice, subtitleLanguage)
     }

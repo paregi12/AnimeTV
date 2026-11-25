@@ -1,12 +1,12 @@
 package com.paregi.animetv.source.gotaku
 
-import com.paregi.animetv.source.*
-import com.paregi.animetv.source.shared.*
-
-
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.Episode
+import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.SubtitleTrack
+import com.paregi.animetv.source.shared.toSourceGenreList
+import com.paregi.animetv.source.shared.toSourceStringList
+import com.paregi.animetv.source.shared.toSubtitleLanguageTag
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -14,39 +14,61 @@ import java.util.Locale
 /** Gotaku-specific response mapping kept outside the repository coordinator. */
 internal object GotakuSource {
     fun anime(json: JSONObject, fallbackId: String? = null): Anime? {
-        val id = json.optString("id").ifBlank { json.optString("slug") }.ifBlank { fallbackId.orEmpty() }
-        if (id.isBlank()) return null
+        val id = json.optText("id")
+            ?: json.optText("slug")
+            ?: fallbackId?.takeIf(String::isNotBlank)
+            ?: return null
         val episodes = json.optJSONObject("episodes")
         val links = json.optJSONObject("links")
-        val durationMs = json.optLong("duration")
-        val episodeDurationSeconds = json.optLong("episode_duration")
+        val durationMinutes = json.optPositiveInt("duration_minutes") ?: 0
+        val episodeDurationSeconds = json.optPositiveLong("episode_duration") ?: 0L
+        val durationMs = json.optPositiveLong("duration") ?: 0L
+        val genres = (json.optJSONArray("genres").toSourceGenreList() +
+            json.optJSONArray("themes").toSourceGenreList()).distinct()
         return Anime(
             id = id,
-            title = json.optString("name").ifBlank { json.optString("title") }.ifBlank { id },
-            originalTitle = json.optJSONArray("alt_names")?.optString(0)?.takeIf(String::isNotBlank),
+            title = json.optText("name") ?: json.optText("title") ?: id,
+            originalTitle = json.optJSONArray("alt_names")?.let { arr ->
+                if (arr.length() > 0 && !arr.isNull(0)) arr.optString(0).takeIf(String::isNotBlank) else null
+            },
             titleAliases = json.optJSONArray("alt_names").toSourceStringList(),
-            posterUrl = (json.optString("poster_url").ifBlank { json.optString("poster") }).takeIf(String::isNotBlank),
-            bannerUrl = (json.optString("backdrop_url").ifBlank { json.optString("banner_url") }).takeIf(String::isNotBlank),
-            synopsis = json.optString("synopsis").takeIf(String::isNotBlank),
-            genres = json.optJSONArray("genres").toSourceGenreList(),
-            year = json.optInt("year").takeIf { it > 0 },
-            score = null,
-            status = json.optString("status").takeIf(String::isNotBlank),
+            posterUrl = json.optText("poster_url") ?: json.optText("poster"),
+            bannerUrl = json.optText("backdrop_url") ?: json.optText("banner_url"),
+            synopsis = json.optText("synopsis"),
+            genres = genres,
+            year = json.optPositiveInt("year"),
+            score = json.optPositiveFloat("mal_score") ?: json.optPositiveFloat("ratings_avg"),
+            status = json.optText("status"),
             duration = when {
+                durationMinutes > 0 -> "${durationMinutes}MIN"
                 episodeDurationSeconds > 0 -> "${episodeDurationSeconds / 60}MIN"
                 durationMs >= 60_000 -> "${durationMs / 60_000}MIN"
                 durationMs > 0 -> "${durationMs}MIN"
                 else -> null
             },
-            rating = json.optString("rating").takeIf(String::isNotBlank),
-            episodeCount = episodes?.optInt("total")?.takeIf { it > 0 },
-            format = json.optString("format").takeIf(String::isNotBlank),
+            rating = json.optText("rating") ?: json.optText("age_rating"),
+            episodeCount = episodes?.optPositiveInt("total"),
+            format = json.optText("format"),
             adult = json.optBoolean("is_adult"),
             latestSubEpisode = episodes?.optInt("latest_sub") ?: 0,
             latestDubEpisode = episodes?.optInt("latest_dub") ?: 0,
-            malId = links?.optString("mal")?.substringAfterLast('/')?.takeIf(String::isNotBlank),
-            aniListId = json.optString("anilist_id").takeIf(String::isNotBlank),
-            sourceIndex = com.paregi.animetv.domain.SourceCatalog.GOTAKU_INDEX
+            malId = links?.optText("mal")?.trimEnd('/')?.substringAfterLast('/')?.takeIf(String::isNotBlank),
+            aniListId = json.optText("anilist_id")
+                ?: links?.optText("al")?.trimEnd('/')?.substringAfterLast('/')?.takeIf(String::isNotBlank),
+            sourceIndex = SourceCatalog.GOTAKU_INDEX
+        )
+    }
+
+    fun relatedItems(data: JSONObject, currentId: String? = null): Triple<List<Anime>, List<Anime>, List<Anime>> {
+        val payload = if (data.has("seasons") || data.has("relations") || data.has("recommendations")) {
+            data
+        } else {
+            data.optJSONObject("data") ?: data
+        }
+        return Triple(
+            payload.optJSONArray("seasons").toBriefAnimeList(currentId, preferFullName = true),
+            payload.optJSONArray("relations").toBriefAnimeList(currentId, preferFullName = false),
+            payload.optJSONArray("recommendations").toBriefAnimeList(currentId, preferFullName = false)
         )
     }
 
@@ -79,16 +101,22 @@ internal object GotakuSource {
         val array = items ?: return emptyList()
         return (0 until array.length()).mapNotNull { index ->
             val item = array.optJSONObject(index) ?: return@mapNotNull null
-            val id = item.optString("id").takeIf(String::isNotBlank) ?: return@mapNotNull null
-            val number = item.opt("number")?.toString()?.takeIf { it != "null" } ?: (index + 1).toString()
+            val id = item.optText("id") ?: return@mapNotNull null
+            val rawNumber = if (!item.isNull("number")) item.optDouble("number", Double.NaN) else Double.NaN
+            val number = if (!rawNumber.isNaN()) {
+                if (rawNumber % 1.0 == 0.0) rawNumber.toLong().toString() else rawNumber.toString()
+            } else {
+                item.optText("label") ?: (index + 1).toString()
+            }
             Episode(
                 id = id,
                 animeId = animeId,
                 number = number,
-                title = item.optString("name").takeIf(String::isNotBlank),
-                hasSub = item.optBoolean("sub", true),
+                title = item.optText("name"),
+                hasSub = if (item.has("sub") && !item.isNull("sub")) item.optBoolean("sub") else true,
                 hasDub = item.optBoolean("dub", false),
-                filler = item.optBoolean("is_filler")
+                filler = item.optBoolean("is_filler"),
+                imageUrl = item.optText("thumbnail_url")
             )
         }
     }
@@ -97,15 +125,51 @@ internal object GotakuSource {
         val array = items ?: return emptyList()
         return (0 until array.length()).mapNotNull { index ->
             val item = array.optJSONObject(index) ?: return@mapNotNull null
-            val url = item.optString("url").takeIf(String::isNotBlank) ?: return@mapNotNull null
-            val rawLanguage = item.optString("lang").ifBlank { item.optString("language") }
+            val url = item.optText("url") ?: return@mapNotNull null
+            val rawLanguage = item.optText("lang") ?: item.optText("language") ?: item.optText("name") ?: ""
             SubtitleTrack(
-                id = item.optString("id").ifBlank { url },
+                id = item.optText("id") ?: url,
                 language = rawLanguage.toSubtitleLanguageTag(),
-                label = item.optString("label").ifBlank { rawLanguage.ifBlank { "Subtitle" } },
+                label = item.optText("label") ?: item.optText("name") ?: rawLanguage.ifBlank { "Subtitle" },
                 url = url,
                 defaultSelected = item.optBoolean("default")
             )
         }
+    }
+
+    private fun JSONArray?.toBriefAnimeList(currentId: String?, preferFullName: Boolean): List<Anime> {
+        val array = this ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val id = item.optText("id") ?: return@mapNotNull null
+            if (!currentId.isNullOrBlank() && id == currentId) return@mapNotNull null
+            val title = if (preferFullName) {
+                item.optText("full_name") ?: item.optText("name")
+            } else {
+                item.optText("name")
+            } ?: return@mapNotNull null
+            Anime(
+                id = id,
+                title = title,
+                posterUrl = item.optText("poster_url"),
+                format = item.optText("format"),
+                sourceIndex = SourceCatalog.GOTAKU_INDEX
+            )
+        }.distinctBy { it.id }
+    }
+
+    private fun JSONObject.optText(key: String): String? =
+        if (isNull(key)) null else optString(key).takeIf(String::isNotBlank)
+
+    private fun JSONObject.optPositiveInt(key: String): Int? =
+        if (isNull(key)) null else optInt(key).takeIf { it > 0 }
+
+    private fun JSONObject.optPositiveLong(key: String): Long? =
+        if (isNull(key)) null else optLong(key).takeIf { it > 0L }
+
+    private fun JSONObject.optPositiveFloat(key: String): Float? {
+        if (isNull(key)) return null
+        val value = optDouble(key, Double.NaN)
+        return if (!value.isNaN() && value > 0.0) value.toFloat() else null
     }
 }

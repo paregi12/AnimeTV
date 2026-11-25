@@ -5,12 +5,16 @@ import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.SearchFilters
 import com.paregi.animetv.domain.SearchPage
 import com.paregi.animetv.source.gotaku.GotakuCatalogApi
+import com.paregi.animetv.source.gotaku.GotakuSync
 import com.paregi.animetv.source.reanime.ReAnimeCatalogApi
 import org.json.JSONObject
 
 /** Routes catalog operations to the API implementation for the captured source. */
-internal class AndroidCatalogApi(requestBytes: SourceRequestBytes) {
-    private val gotaku = GotakuCatalogApi(requestBytes)
+internal class AndroidCatalogApi(
+    requestBytes: SourceRequestBytes,
+    gotakuSync: GotakuSync? = null
+) {
+    private val gotaku = GotakuCatalogApi(requestBytes, gotakuSync)
     private val reAnime = ReAnimeCatalogApi(requestBytes)
 
     suspend fun search(filters: SearchFilters, page: Int, source: CatalogSource): SearchPage =

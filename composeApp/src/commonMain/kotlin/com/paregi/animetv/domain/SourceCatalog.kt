@@ -31,9 +31,9 @@ object SourceCatalog {
         ),
         AnimeSource(
             index = REANIME_INDEX,
-            domain = "reanime.to",
+            domain = "reanime.cz",
             displayName = "Re:ANIME",
-            mirrors = listOf("reanime.to"),
+            mirrors = listOf("reanime.cz", "reanime.bz", "reanime.wtf", "reanime.to"),
             benchmarkPath = "/api/v1/search?limit=1",
             benchmarkKey = "results"
         )

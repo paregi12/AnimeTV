@@ -28,8 +28,20 @@ private val gotakuGenreOptions = listOf(
     "romance", "sci_fi", "slice_of_life", "sports", "supernatural", "suspense"
 ).map { SearchFilterOption(it, it.replace('_', ' ').uppercase()) }
 
-private val reAnimeGenreOptions = gotakuGenreOptions + listOf("thriller", "psychological", "mecha")
-    .map { SearchFilterOption(it, it.replace('_', ' ').uppercase()) }
+private val reAnimeGenreOptions = (
+    gotakuGenreOptions + listOf(
+        "action_&_adventure",
+        "animation",
+        "family",
+        "mahou_shoujo",
+        "mecha",
+        "music",
+        "psychological",
+        "sci-fi_&_fantasy",
+        "science_fiction",
+        "thriller"
+    ).map { SearchFilterOption(it, it.replace('_', ' ').uppercase()) }
+).sortedBy { it.label }
 
 private val aniListGenreOptions = listOf(
     "action", "adventure", "comedy", "drama", "ecchi", "fantasy", "horror",

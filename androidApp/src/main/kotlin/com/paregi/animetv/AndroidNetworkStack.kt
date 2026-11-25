@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 /** Applies the original HTTP client, DNS, and cache preferences to Android network requests. */
 class AndroidNetworkStack(context: Context) : Closeable {
     private val appContext = context.applicationContext
+    internal val context: Context get() = appContext
     private val clients = ConcurrentHashMap<NetworkConfig, NetworkClients>()
 
     @Volatile

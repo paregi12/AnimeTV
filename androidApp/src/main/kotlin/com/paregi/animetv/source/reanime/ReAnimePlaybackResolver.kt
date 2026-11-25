@@ -1,14 +1,16 @@
 package com.paregi.animetv.source.reanime
 
-import com.paregi.animetv.source.*
-import com.paregi.animetv.source.shared.*
-
-
 import android.net.Uri
+import android.util.LruCache
 import com.paregi.animetv.AndroidStreamProxy
 import com.paregi.animetv.domain.PlaybackChoice
 import com.paregi.animetv.domain.PlaybackStreamType
 import com.paregi.animetv.domain.SkipRange
+import com.paregi.animetv.source.AndroidCatalogApi
+import com.paregi.animetv.source.CatalogSource
+import com.paregi.animetv.source.shared.SourceRequestJson
+import com.paregi.animetv.source.shared.SourceRequestText
+import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URL
@@ -20,6 +22,17 @@ internal class ReAnimePlaybackResolver(
     private val requestText: SourceRequestText,
     private val requestJsonCall: SourceRequestJson
 ) {
+    private data class AnimeMeta(
+        val anilistId: Int,
+        val malId: Int,
+        val tmdbId: Int,
+        val seasonNumber: Int,
+        val subbed: Int,
+        val dubbed: Int
+    )
+
+    private val metaCache = LruCache<String, AnimeMeta>(64)
+
     suspend fun resolvePlayback(
         episodeId: String,
         preferDub: Boolean,
@@ -30,71 +43,71 @@ internal class ReAnimePlaybackResolver(
         val animeId = parts.getOrNull(0).orEmpty()
         val episodeNumber = parts.getOrNull(1).orEmpty()
         require(animeId.isNotBlank() && episodeNumber.isNotBlank()) { "Invalid ReAnime episode id" }
-        val detailRoot = catalogApi.json(source.root + "/api/v1/anime/" + Uri.encode(animeId), source)
-        val detail = detailRoot.optJSONObject("data") ?: detailRoot
-        val aniListId = detail.optString("anilist_id").takeIf { it.isNotBlank() } ?: "0"
-        val malId = detail.optString("mal_id").takeIf { it.isNotBlank() }
-        val flixUrl = Uri.parse(source.root + "/api/flix/" + Uri.encode(aniListId) + "/" + Uri.encode(episodeNumber))
-            .buildUpon().apply { malId?.let { appendQueryParameter("mal", it) } }.build().toString()
-        val flixRoot = requestJson(flixUrl, referer = source.root + "/home")
+
+        val meta = resolveAnimeMeta(animeId, episodeNumber, source)
+        val pathId = if (meta.anilistId > 0) meta.anilistId.toString() else "0"
+        val flixUrl = Uri.parse(
+            "${source.root}/api/flix/${Uri.encode(pathId)}/${Uri.encode(episodeNumber)}"
+        ).buildUpon().apply {
+            if (meta.malId > 0) appendQueryParameter("mal", meta.malId.toString())
+            if (meta.anilistId <= 0 && meta.tmdbId > 0) {
+                appendQueryParameter("tmdb", meta.tmdbId.toString())
+                appendQueryParameter("season", meta.seasonNumber.toString())
+            }
+        }.build().toString()
+        val flixReferer = "${source.root}/watch/${Uri.encode(animeId)}?ep=${Uri.encode(episodeNumber)}"
+        val flixRoot = requestJson(flixUrl, referer = flixReferer)
         val flixData = flixRoot.optJSONObject("data") ?: flixRoot
         check(flixData.optBoolean("success", flixRoot.optBoolean("success", false))) {
             "ReAnime did not return any stream servers"
         }
-        val servers = flixData.optJSONArray("servers") ?: flixRoot.optJSONArray("servers") ?: JSONArray()
-        val preferredType = if (preferDub) "dub" else "sub"
-        val preferredServers = (0 until servers.length()).mapNotNull { servers.optJSONObject(it) }
-            .filter {
-                val type = it.optString("dataType")
-                if (preferDub) type.equals(preferredType, ignoreCase = true)
-                else !type.equals("dub", ignoreCase = true)
-            }
-        val candidates = preferredServers.ifEmpty {
-            (0 until servers.length()).mapNotNull { servers.optJSONObject(it) }
+        val serversArray = flixData.optJSONArray("servers") ?: flixRoot.optJSONArray("servers") ?: JSONArray()
+        val allServers = (0 until serversArray.length()).mapNotNull { serversArray.optJSONObject(it) }
+            .filter { !it.isNull("dataLink") && it.optString("dataLink").isNotBlank() }
+        val preferredServers = allServers.filter {
+            val type = it.optString("dataType")
+            if (preferDub) type.equals("dub", ignoreCase = true)
+            else !type.equals("dub", ignoreCase = true)
         }
+        val candidates = preferredServers.ifEmpty { allServers }
         val selectedServerIndex = mirrorIndex.coerceIn(0, candidates.lastIndex.coerceAtLeast(0))
         val selected = candidates.getOrNull(selectedServerIndex)
             ?: error("ReAnime did not return any stream servers")
-        val serverNames = candidates.mapIndexed { index, server ->
-            server.optString("serverName").takeIf { it.isNotBlank() } ?: "HD-${index + 1}"
-        }
+        val serverNames = candidates.mapIndexed { index, server -> formatServerLabel(server, index) }
         val embedUrl = selected.optString("dataLink").takeIf { it.isNotBlank() }
             ?: error("ReAnime stream server did not include an embed URL")
 
         val html = request(
             embedUrl,
             accept = "text/html,application/xhtml+xml,*/*",
-            referer = "https://flixcloud.cc/",
-            origin = "https://flixcloud.cc",
+            referer = FLIXCLOUD_REFERER,
+            origin = FLIXCLOUD_ORIGIN,
             source = source
         )
-        Regex("/(?:js/)?player/v\\d+/e\\d+-player\\.min\\.js").find(html)?.value?.let { scriptPath ->
-            runCatching {
-                val scriptUrl = URL(URL(embedUrl), scriptPath).toString()
-                val script = request(scriptUrl, referer = "https://flixcloud.cc/", source = source)
-                Regex("\\[(\\s*(?:0x[0-9a-fA-F]+|\\d+)\\s*(?:,\\s*(?:0x[0-9a-fA-F]+|\\d+)\\s*)*)\\]")
-                    .find(script)?.groupValues?.get(1)?.split(',')
-                    ?.map { value ->
-                        val number = value.trim()
-                        (if (number.startsWith("0x", ignoreCase = true)) number.substring(2).toInt(16) else number.toInt()).toByte()
-                    }?.toByteArray()?.let(streamProxy::updateReAnimeMask)
-            }
-        }
+        extractXorMask(html, embedUrl, source)?.let(streamProxy::updateReAnimeMask)
 
-        val rawEmbed = Regex("type:\\s*\"data\",\\s*data:\\s*(\\{.*?\\})\\s*,\\s*uses:", RegexOption.DOT_MATCHES_ALL)
-            .find(html)?.groupValues?.get(1) ?: error("FlixCloud embed data was not found")
+        val rawEmbed = EMBED_DATA_REGEX.find(html)?.groupValues?.get(1)
+            ?: error("FlixCloud embed data was not found")
         val normalizedEmbed = rawEmbed
-            .replace(Regex("([{,]\\s*)([\\w_]+)(\\s*:)"), "$1\"$2\"$3")
-            .replace(Regex(",\\s*([}\\]])"), "$1")
-            .replace(Regex(":\\s*undefined\\b"), ": null")
+            .replace(JSON5_KEY_REGEX, "$1\"$2\"$3")
+            .replace(JSON5_TRAILING_COMMA_REGEX, "$1")
+            .replace(JSON5_UNDEFINED_REGEX, ": null")
         val embedData = JSONObject(normalizedEmbed)
         val subtitles = ReAnimeSource.subtitles(embedData.optJSONArray("subtitles"))
         val skipRanges = mutableListOf<SkipRange>()
         embedData.optJSONObject("intro_chapter")?.let {
-            skipRanges += SkipRange(it.optDouble("start", 0.0), it.optDouble("end", 0.0), SkipRange.Kind.INTRO)
+            val start = it.optDouble("start", Double.NaN)
+            val end = it.optDouble("end", Double.NaN)
+            if (!start.isNaN() && !end.isNaN() && end > start) {
+                skipRanges += SkipRange(start, end, SkipRange.Kind.INTRO)
+            }
         }
         embedData.optJSONObject("outro_chapter")?.let {
-            skipRanges += SkipRange(it.optDouble("start", 0.0), it.optDouble("end", 0.0), SkipRange.Kind.OUTRO)
+            val start = it.optDouble("start", Double.NaN)
+            val end = it.optDouble("end", Double.NaN)
+            if (!start.isNaN() && !end.isNaN() && end > start) {
+                skipRanges += SkipRange(start, end, SkipRange.Kind.OUTRO)
+            }
         }
         embedData.remove("subtitles")
         embedData.remove("intro_chapter")
@@ -112,9 +125,9 @@ internal class ReAnimePlaybackResolver(
             ?: error("FlixCloud token was missing")
         val context = tokenResult.optJSONObject("context") ?: error("FlixCloud stream context was missing")
         val streamResponse = requestJson(
-            "https://flixcloud.cc/api/m3u8/" + Uri.encode(token),
-            referer = "https://flixcloud.cc/",
-            origin = "https://flixcloud.cc"
+            "$FLIXCLOUD_ORIGIN/api/m3u8/" + Uri.encode(token),
+            referer = FLIXCLOUD_REFERER,
+            origin = FLIXCLOUD_ORIGIN
         )
         val decodedStream = requestJson(
             "https://enc-dec.app/api/dec-flixcloud?type=stream",
@@ -131,7 +144,7 @@ internal class ReAnimePlaybackResolver(
         val wPayload = streamResult.optJSONObject("context")?.optString("w_payload").orEmpty()
         return PlaybackChoice(
             url = streamProxy.createReAnimePlaylistUrl(streamUrl, wPayload),
-            headers = mapOf("Referer" to "https://flixcloud.cc/"),
+            headers = mapOf("Referer" to FLIXCLOUD_REFERER),
             subtitles = subtitles,
             skipRanges = skipRanges,
             selectedStreamType = if (selected.optString("dataType").equals("dub", ignoreCase = true)) {
@@ -144,6 +157,158 @@ internal class ReAnimePlaybackResolver(
         )
     }
 
+    private suspend fun resolveAnimeMeta(
+        animeId: String,
+        episodeNumber: String,
+        source: CatalogSource
+    ): AnimeMeta {
+        val cacheKey = "${source.root}|$animeId"
+        metaCache.get(cacheKey)?.let { return it }
+
+        val encodedId = Uri.encode(animeId)
+        val detail = try {
+            val root = catalogApi.json("${source.root}/api/v1/anime/$encodedId", source)
+            root.optJSONObject("data") ?: root
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+        val apiAnilistId = detail?.optPositiveInt("anilist_id") ?: 0
+        val apiMalId = detail?.optPositiveInt("mal_id") ?: 0
+        val apiTmdbId = detail?.optPositiveInt("themoviedb_id") ?: 0
+        if (detail != null && (apiAnilistId > 0 || apiMalId > 0 || apiTmdbId > 0)) {
+            val isMovie = detail.optString("format").equals("MOVIE", ignoreCase = true)
+            val seasonNum = if (isMovie) {
+                0
+            } else {
+                detail.optJSONObject("external_seasons")?.optPositiveInt("tmdb")?.takeIf { it > 0 } ?: 1
+            }
+            val meta = AnimeMeta(
+                anilistId = apiAnilistId,
+                malId = apiMalId,
+                tmdbId = apiTmdbId,
+                seasonNumber = seasonNum,
+                subbed = detail.optPositiveInt("subbed"),
+                dubbed = detail.optPositiveInt("dubbed")
+            )
+            metaCache.put(cacheKey, meta)
+            return meta
+        }
+
+        val html = try {
+            request(
+                "${source.root}/anime/$encodedId?_ep=${Uri.encode(episodeNumber)}",
+                accept = "text/html,application/xhtml+xml,*/*",
+                source = source
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            ""
+        }
+        val anilistId = ANILIST_ID_REGEX.find(html)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val malId = MAL_ID_REGEX.find(html)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val tmdbId = TMDB_ID_REGEX.find(html)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val isMovie = isMovieRecord(html, animeId)
+        val seasonNum = if (isMovie) {
+            0
+        } else {
+            TMDB_SEASON_REGEX.find(html)?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }
+                ?: SEASON_REGEX.find(html)?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }
+                ?: 1
+        }
+        val subbed = SUBBED_REGEX.find(html)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val dubbed = DUBBED_REGEX.find(html)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val meta = AnimeMeta(anilistId, malId, tmdbId, seasonNum, subbed, dubbed)
+        if (anilistId > 0 || malId > 0 || tmdbId > 0) {
+            metaCache.put(cacheKey, meta)
+        }
+        return meta
+    }
+
+    private fun isMovieRecord(html: String, slug: String): Boolean {
+        val index = html.indexOf(slug)
+        if (index == -1) return false
+        val start = (index - 500).coerceAtLeast(0)
+        val end = (index + 500).coerceAtMost(html.length)
+        val snippet = html.substring(start, end)
+        return FORMAT_MOVIE_REGEX.containsMatchIn(snippet) || snippet.contains("\"format\":\"MOVIE\"", true)
+    }
+
+    private fun formatServerLabel(server: JSONObject, fallbackIndex: Int): String {
+        val hardsub = server.optBoolean("hardsub", false)
+        val softsub = server.optBoolean("softsub", false)
+        val dataType = if (server.isNull("dataType")) "" else server.optString("dataType").trim()
+        val audioTag = when {
+            hardsub -> "[Hard Sub]"
+            dataType.equals("sub", ignoreCase = true) -> "[Sub]"
+            dataType.equals("dub", ignoreCase = true) -> "[Dub]"
+            dataType.isNotEmpty() -> "[$dataType]"
+            else -> ""
+        }
+        val serverName = if (hardsub) {
+            "H-SUB"
+        } else {
+            val rawName = if (server.isNull("serverName")) "" else server.optString("serverName").trim()
+            rawName.ifBlank { "HD-${fallbackIndex + 1}" }
+        }
+        return buildString {
+            if (audioTag.isNotEmpty()) append(audioTag)
+            if (isNotEmpty()) append(' ')
+            append(serverName)
+            if (softsub) append(" [Softsub]")
+        }.trim()
+    }
+
+    private suspend fun extractXorMask(html: String, embedUrl: String, source: CatalogSource): ByteArray? {
+        HLS_SCRIPT_REGEX.find(html)?.groupValues?.get(1)?.let { scriptPath ->
+            val script = fetchScript(embedUrl, scriptPath, source)
+            if (script != null) {
+                XOR_MASK_REGEX.find(script)?.groupValues?.get(1)?.split(',')
+                    ?.mapNotNull { it.trim().toIntOrNull()?.toByte() }
+                    ?.toByteArray()
+                    ?.takeIf { it.size == MASK_SIZE }
+                    ?.let { return it }
+                parseLegacyMask(script)?.let { return it }
+            }
+        }
+        LEGACY_PLAYER_SCRIPT_REGEX.find(html)?.value?.let { scriptPath ->
+            val script = fetchScript(embedUrl, scriptPath, source)
+            if (script != null) {
+                parseLegacyMask(script)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private suspend fun fetchScript(embedUrl: String, scriptPath: String, source: CatalogSource): String? =
+        try {
+            val scriptUrl = URL(URL(embedUrl), scriptPath).toString()
+            request(scriptUrl, referer = FLIXCLOUD_REFERER, origin = FLIXCLOUD_ORIGIN, source = source)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+
+    private fun parseLegacyMask(script: String): ByteArray? =
+        LEGACY_MASK_REGEX.find(script)?.groupValues?.get(1)?.split(',')
+            ?.mapNotNull { value ->
+                val number = value.trim()
+                val parsed = if (number.startsWith("0x", ignoreCase = true)) {
+                    number.substring(2).toIntOrNull(16)
+                } else {
+                    number.toIntOrNull()
+                }
+                parsed?.toByte()
+            }
+            ?.toByteArray()
+            ?.takeIf { it.size == MASK_SIZE }
+
+    private fun JSONObject.optPositiveInt(key: String): Int =
+        if (isNull(key)) 0 else opt(key)?.toString()?.trim()?.toIntOrNull()?.takeIf { it > 0 } ?: 0
+
     private suspend fun requestJson(
         url: String,
         body: String? = null,
@@ -153,11 +318,34 @@ internal class ReAnimePlaybackResolver(
 
     private suspend fun request(
         url: String,
-        body: String? = null,
-        contentType: String? = null,
         accept: String = "*/*",
         source: CatalogSource,
         referer: String = if (source.isReAnime) source.root + "/home" else source.root + "/",
         origin: String? = null
-    ): String = requestText(url, body, contentType, accept, source, referer, origin)
+    ): String = requestText(url, null, null, accept, source, referer, origin)
+
+    private companion object {
+        const val MASK_SIZE = 16
+        const val FLIXCLOUD_ORIGIN = "https://flixcloud.cc"
+        const val FLIXCLOUD_REFERER = "https://flixcloud.cc/"
+
+        val ANILIST_ID_REGEX = Regex("""(?<!\w)"?anilist_id"?\s*:\s*(\d+)""")
+        val MAL_ID_REGEX = Regex("""(?<!\w)"?mal_id"?\s*:\s*(\d+)""")
+        val TMDB_ID_REGEX = Regex("""(?<!\w)"?themoviedb_id"?\s*:\s*(\d+)""")
+        val TMDB_SEASON_REGEX = Regex("""(?<!\w)"?tmdb"?\s*:\s*(\d+)""")
+        val SEASON_REGEX = Regex("""(?<!\w)"?season"?\s*:\s*(\d+)""")
+        val FORMAT_MOVIE_REGEX = Regex("""(?<!\w)"?format"?\s*:\s*"MOVIE"""", RegexOption.IGNORE_CASE)
+        val SUBBED_REGEX = Regex(""",\s*subbed:\s*(\d+)""")
+        val DUBBED_REGEX = Regex(""",\s*dubbed:\s*(\d+)""")
+
+        val EMBED_DATA_REGEX = Regex("""type:\s*"data",\s*data:\s*(\{.*?\})\s*,\s*uses:""", RegexOption.DOT_MATCHES_ALL)
+        val JSON5_KEY_REGEX = Regex("""([{,]\s*)([\w_]+)(\s*:)""")
+        val JSON5_TRAILING_COMMA_REGEX = Regex(""",\s*([}\]])""")
+        val JSON5_UNDEFINED_REGEX = Regex(""":\s*undefined\b""")
+
+        val HLS_SCRIPT_REGEX = Regex("""href="([^"]*hls\.js[^"]*)""")
+        val XOR_MASK_REGEX = Regex("""for\(var f=\[(\d{1,3}(?:,\d{1,3}){15})]""")
+        val LEGACY_PLAYER_SCRIPT_REGEX = Regex("""/(?:js/)?player/v\d+/e\d+-player\.min\.js""")
+        val LEGACY_MASK_REGEX = Regex("""\[(\s*(?:0x[0-9a-fA-F]+|\d+)\s*(?:,\s*(?:0x[0-9a-fA-F]+|\d+)\s*)*)\]""")
+    }
 }

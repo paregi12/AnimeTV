@@ -2,12 +2,15 @@ package com.paregi.animetv
 
 import android.net.Uri
 import android.util.Log
+import com.paregi.animetv.source.reanime.ReAnimeHlsProxy
 import java.io.BufferedInputStream
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -15,7 +18,6 @@ import java.security.MessageDigest
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
-import com.paregi.animetv.source.reanime.ReAnimeHlsProxy
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -52,9 +54,21 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         }
     }
 
-    fun createPlaylistUrl(source: String, key: String?, segmentBytes: Int): String {
+    fun createPlaylistUrl(
+        source: String,
+        key: String?,
+        segmentBytes: Int,
+        referer: String? = null
+    ): String {
         start()
-        return proxyUrl(source, key, segmentBytes, playlist = true)
+        return proxyUrl(source, key, segmentBytes, playlist = true, referer = referer)
+    }
+
+    fun createSubtitleUrl(source: String, referer: String? = null): String {
+        start()
+        val query = StringBuilder("url=").append(URLEncoder.encode(source, "UTF-8")).append("&sub=1")
+        if (referer != null) query.append("&ref=").append(URLEncoder.encode(referer, "UTF-8"))
+        return "http://127.0.0.1:" + port + "/proxy/subtitles.vtt?" + query
     }
 
     fun updateReAnimeMask(mask: ByteArray) {
@@ -95,22 +109,42 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                     }
                 }
                 val local = Uri.parse("http://127.0.0.1" + parts[1])
-                val upstream = local.getQueryParameter("url") ?: return badRequest(client.getOutputStream())
-                if (!upstream.startsWith("http://") && !upstream.startsWith("https://")) {
+                val upstreamUrl = local.getQueryParameter("url") ?: return badRequest(client.getOutputStream())
+                if (!upstreamUrl.startsWith("http://") && !upstreamUrl.startsWith("https://")) {
                     return badRequest(client.getOutputStream())
                 }
                 val key = local.getQueryParameter("key")
                 val segmentBytes = local.getQueryParameter("sb")?.toIntOrNull() ?: 0
+                val referer = local.getQueryParameter("ref")
                 when {
                     local.getQueryParameter("re") == "1" && local.getQueryParameter("m3u8") == "1" ->
-                        reAnimeProxy.servePlaylist(client.getOutputStream(), upstream, local.getQueryParameter("wp").orEmpty(), root = parts[1].startsWith("/manifest"))
+                        reAnimeProxy.servePlaylist(
+                            client.getOutputStream(),
+                            upstreamUrl,
+                            local.getQueryParameter("wp").orEmpty(),
+                            root = parts[1].startsWith("/manifest")
+                        )
                     local.getQueryParameter("re") == "1" ->
-                        reAnimeProxy.serveSegment(client.getOutputStream(), upstream, rangeStart)
+                        reAnimeProxy.serveSegment(client.getOutputStream(), upstreamUrl, rangeStart)
+                    local.getQueryParameter("sub") == "1" ->
+                        serveSubtitle(client.getOutputStream(), upstreamUrl, referer)
                     local.getQueryParameter("m3u8") == "1" ->
-                        servePlaylist(client.getOutputStream(), upstream, key, segmentBytes)
+                        servePlaylist(client.getOutputStream(), upstreamUrl, key, segmentBytes, referer)
                     local.getQueryParameter("plain") == "1" ->
-                        servePassthrough(client.getOutputStream(), upstream, rangeStart)
-                    else -> serveSegment(client.getOutputStream(), upstream, key, segmentBytes, rangeStart)
+                        servePassthrough(client.getOutputStream(), upstreamUrl, rangeStart, referer)
+                    else ->
+                        serveSegment(client.getOutputStream(), upstreamUrl, key, segmentBytes, rangeStart, referer)
+                }
+            } catch (_: SocketTimeoutException) {
+                Log.w(TAG, "Proxy upstream timeout")
+                runCatching {
+                    response(
+                        client.getOutputStream(),
+                        503,
+                        "Service Unavailable",
+                        "text/plain",
+                        "Upstream timeout".toByteArray(StandardCharsets.UTF_8)
+                    )
                 }
             } catch (error: Exception) {
                 Log.w(TAG, "Proxy request failed", error)
@@ -119,87 +153,188 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         }
     }
 
-    private fun servePlaylist(out: OutputStream, url: String, key: String?, segmentBytes: Int) {
-        val connection = upstream(url)
-        try {
-            val status = connection.responseCode
-            if (status !in 200..299) return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
-            val body = connection.inputStream?.use { it.readBytes() }
-                ?: return response(out, 502, "Bad Gateway", "text/plain", ByteArray(0))
-            val manifest = if (!key.isNullOrBlank() && body.size > 28) {
-                runCatching {
-                    val seed = AndroidGotakuCrypto.decodeUrlSafe(key) ?: error("Bad playlist key")
-                    val uri = Uri.parse(url)
-                    val token = uri.getQueryParameter("token") ?: uri.pathSegments.getOrNull(3).orEmpty()
-                    val plKey = AndroidGotakuCrypto.hkdf(seed, token.toByteArray(), "pl|v1".toByteArray(), 32)
-                        ?: error("Could not derive playlist key")
-                    AndroidGotakuCrypto.gcm(Cipher.DECRYPT_MODE, plKey, body.copyOfRange(0, 12), body.copyOfRange(12, body.size))
-                        ?.toString(StandardCharsets.UTF_8) ?: error("Could not decrypt playlist")
-                }.getOrElse { body.toString(StandardCharsets.UTF_8) }
-            } else body.toString(StandardCharsets.UTF_8)
-            val rewritten = rewriteManifest(manifest, url, key, segmentBytes).toByteArray(StandardCharsets.UTF_8)
-            response(out, 200, "OK", "application/vnd.apple.mpegurl", rewritten)
-        } finally {
-            connection.close()
+    private fun servePlaylist(
+        out: OutputStream,
+        url: String,
+        key: String?,
+        segmentBytes: Int,
+        referer: String?
+    ) {
+        var body: ByteArray? = null
+        var attempt = 0
+        while (body == null) {
+            var connection: AndroidNetworkResponse? = null
+            try {
+                connection = upstream(url, referer = referer)
+                val status = connection.responseCode
+                if (status !in 200..299) {
+                    return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
+                }
+                body = connection.inputStream?.use { it.readBytes() }
+                    ?: return response(out, 502, "Bad Gateway", "text/plain", ByteArray(0))
+            } catch (error: SocketTimeoutException) {
+                attempt++
+                if (attempt >= 3) throw error
+                Log.w(TAG, "Manifest timeout, retrying ($attempt/3)")
+            } finally {
+                connection?.close()
+            }
         }
+
+        val manifest = if (!key.isNullOrBlank()) {
+            try {
+                if (body.size < 28) error("Encrypted playlist too short (${body.size})")
+                val seed = AndroidGotakuCrypto.decodeUrlSafe(key) ?: error("Bad playlist key")
+                val uri = Uri.parse(url)
+                val token = uri.getQueryParameter("token") ?: uri.pathSegments.getOrNull(3).orEmpty()
+                val plKey = AndroidGotakuCrypto.hkdf(
+                    seed,
+                    token.toByteArray(StandardCharsets.UTF_8),
+                    "pl|v1".toByteArray(StandardCharsets.UTF_8),
+                    32
+                ) ?: error("Could not derive playlist key")
+                AndroidGotakuCrypto.gcm(
+                    Cipher.DECRYPT_MODE,
+                    plKey,
+                    body.copyOfRange(0, 12),
+                    body.copyOfRange(12, body.size)
+                )?.toString(StandardCharsets.UTF_8) ?: error("Could not decrypt playlist")
+            } catch (error: Exception) {
+                Log.w(TAG, "Playlist GCM decrypt failed: len=${body.size} - ${error.message}")
+                val asText = String(body, StandardCharsets.UTF_8)
+                if (asText.removePrefix("\uFEFF").trimStart().startsWith("#EXTM3U")) {
+                    asText
+                } else {
+                    return response(
+                        out,
+                        500,
+                        "Internal Server Error",
+                        "text/plain",
+                        "Playlist decrypt failed: ${error.message}".toByteArray(StandardCharsets.UTF_8)
+                    )
+                }
+            }
+        } else {
+            String(body, StandardCharsets.UTF_8)
+        }
+        val rewritten = rewriteManifest(manifest, url, key, segmentBytes, referer).toByteArray(StandardCharsets.UTF_8)
+        response(out, 200, "OK", "application/vnd.apple.mpegurl", rewritten)
     }
 
-    private fun rewriteManifest(text: String, parentUrl: String, key: String?, segmentBytes: Int): String {
+    private fun rewriteManifest(
+        text: String,
+        parentUrl: String,
+        key: String?,
+        segmentBytes: Int,
+        referer: String?
+    ): String {
         val parent = URL(parentUrl)
         val master = text.contains("#EXT-X-STREAM-INF")
-        val uriPattern = Regex("URI=\"([^\"]+)\"")
         return text.lineSequence().joinToString("\n", postfix = "\n") { line ->
             val trimmed = line.trim()
             when {
                 trimmed.isEmpty() -> line
                 !trimmed.startsWith("#") ->
-                    proxyUrl(URL(parent, trimmed).toString(), key, segmentBytes, master)
-                uriPattern.containsMatchIn(line) -> uriPattern.replace(line) { match ->
-                    val resolved = URL(parent, match.groupValues[1]).toString()
-                    val childIsPlaylist = line.contains("TYPE=SUBTITLES")
-                    "URI=\"" + proxyUrl(resolved, key, segmentBytes, childIsPlaylist) + "\""
-                }
+                    proxyUrl(URL(parent, trimmed).toString(), key, segmentBytes, master, referer = referer)
+                trimmed.contains("URI=\"") -> rewriteTagLine(trimmed, parent, key, segmentBytes, referer)
                 else -> line
             }
         }
     }
 
-    private fun proxyUrl(url: String, key: String?, segmentBytes: Int, playlist: Boolean): String {
+    private fun rewriteTagLine(
+        line: String,
+        parent: URL,
+        key: String?,
+        segmentBytes: Int,
+        referer: String?
+    ): String {
+        val match = URI_REGEX.find(line) ?: return line
+        val rawUri = match.groupValues[1]
+        if (rawUri.isEmpty()) return line
+        val resolved = URL(parent, rawUri).toString()
+        val replacement = when {
+            line.startsWith("#EXT-X-KEY") || line.startsWith("#EXT-X-SESSION-KEY") ->
+                proxyUrl(resolved, null, 0, playlist = false, plain = true, referer = referer)
+            line.startsWith("#EXT-X-MEDIA") ->
+                if (line.contains("TYPE=SUBTITLES")) {
+                    proxyUrl(resolved, key = null, segmentBytes = 0, playlist = true, referer = referer)
+                } else {
+                    proxyUrl(resolved, key, segmentBytes, playlist = true, referer = referer)
+                }
+            line.startsWith("#EXT-X-I-FRAME-STREAM-INF") ->
+                proxyUrl(resolved, key, segmentBytes, playlist = true, referer = referer)
+            else -> proxyUrl(resolved, key, segmentBytes, playlist = false, referer = referer)
+        }
+        // Lambda replacement keeps $ characters in upstream URLs literal.
+        return URI_REGEX.replace(line) { "URI=\"$replacement\"" }
+    }
+
+    private fun proxyUrl(
+        url: String,
+        key: String?,
+        segmentBytes: Int,
+        playlist: Boolean = false,
+        plain: Boolean = false,
+        referer: String? = null
+    ): String {
         val query = StringBuilder("url=").append(URLEncoder.encode(url, "UTF-8"))
-        if (!key.isNullOrBlank()) query.append("&key=").append(URLEncoder.encode(key, "UTF-8"))
-            .append("&sb=").append(segmentBytes)
+        if (!plain && !key.isNullOrBlank()) {
+            query.append("&key=").append(URLEncoder.encode(key, "UTF-8"))
+                .append("&sb=").append(segmentBytes)
+        }
         if (playlist) query.append("&m3u8=1")
+        if (plain) query.append("&plain=1")
+        if (referer != null) query.append("&ref=").append(URLEncoder.encode(referer, "UTF-8"))
         return "http://127.0.0.1:" + port + "/proxy?" + query
     }
 
-    private fun serveSegment(out: OutputStream, url: String, key: String?, segmentBytes: Int, rangeStart: Long) {
-        val connection = upstream(url, rangeStart)
+    private fun serveSegment(
+        out: OutputStream,
+        url: String,
+        key: String?,
+        segmentBytes: Int,
+        rangeStart: Long,
+        referer: String?
+    ) {
+        val connection = upstream(url, rangeStart, referer)
         try {
             val status = connection.responseCode
             if (status !in 200..299) return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
             val input = connection.inputStream
                 ?: return response(out, 502, "Bad Gateway", "text/plain", ByteArray(0))
             val stream = BufferedInputStream(input)
-            val keyBytes = key?.let { AndroidGotakuCrypto.decodeUrlSafe(it) }
+            val actualStart = if (status == 206) rangeStart else 0L
+            val keyBytes = key?.takeIf { it.isNotBlank() }?.let { AndroidGotakuCrypto.decodeUrlSafe(it) }
             var cipher: Cipher? = null
-            if (keyBytes != null && segmentBytes > 0 && rangeStart < segmentBytes) {
-                if (rangeStart == 0L) {
+            if (keyBytes != null && segmentBytes > 0 && actualStart < segmentBytes) {
+                if (actualStart == 0L) {
                     stream.mark(512)
                     val probe = ByteArray(384)
-                    val count = stream.read(probe).coerceAtLeast(0)
+                    var count = 0
+                    while (count < probe.size) {
+                        val read = stream.read(probe, count, probe.size - count)
+                        if (read <= 0) break
+                        count += read
+                    }
                     stream.reset()
                     val sample = probe.copyOf(count)
                     if (!looksLikeMedia(sample)) {
                         var fullPath = fullPathCounter
-                        if (fullPath == null) {
-                            fullPath = listOf(false, true).firstOrNull {
+                        if (fullPath == null && sample.size >= 189) {
+                            fullPath = listOf(true, false).firstOrNull {
                                 looksLikeMedia(decryptPreview(sample, url, keyBytes, it, segmentBytes))
-                            } ?: false
-                            fullPathCounter = fullPath
+                            }
+                            if (fullPath != null) {
+                                fullPathCounter = fullPath
+                                Log.i(TAG, "Counter interpretation: ${if (fullPath) "full URL" else "path only"}")
+                            }
                         }
-                        cipher = segmentCipher(keyBytes, url, fullPath, rangeStart)
+                        cipher = segmentCipher(keyBytes, url, fullPath ?: true, actualStart)
                     }
-                } else cipher = segmentCipher(keyBytes, url, fullPathCounter ?: false, rangeStart)
+                } else {
+                    cipher = segmentCipher(keyBytes, url, fullPathCounter ?: true, actualStart)
+                }
             }
             val length = connection.getHeaderFieldLong("Content-Length", -1)
             val partial = status == 206
@@ -211,27 +346,31 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
             connection.getHeaderField("Content-Range")?.let { headers.append("Content-Range: ").append(it).append("\r\n") }
             headers.append("Access-Control-Allow-Origin: *\r\n\r\n")
             out.write(headers.toString().toByteArray(StandardCharsets.UTF_8))
-            val buffer = ByteArray(8192)
-            var currentPos = rangeStart
-            while (true) {
-                val count = stream.read(buffer)
-                if (count < 0) break
-                if (cipher != null && currentPos < segmentBytes) {
-                    val n = minOf(count.toLong(), segmentBytes - currentPos).toInt()
-                    val mask = cipher.update(ByteArray(n)) ?: ByteArray(n)
-                    repeat(n) { i -> buffer[i] = (buffer[i].toInt() xor mask[i].toInt()).toByte() }
+
+            // Do not let mid-body exceptions emit an HTTP error status into the media stream.
+            runCatching {
+                val buffer = ByteArray(8192)
+                var currentPos = actualStart
+                while (true) {
+                    val count = stream.read(buffer)
+                    if (count < 0) break
+                    if (cipher != null && currentPos < segmentBytes) {
+                        val n = minOf(count.toLong(), segmentBytes - currentPos).toInt()
+                        val mask = cipher.update(ByteArray(n)) ?: ByteArray(n)
+                        repeat(n) { i -> buffer[i] = (buffer[i].toInt() xor mask[i].toInt()).toByte() }
+                    }
+                    currentPos += count
+                    out.write(buffer, 0, count)
                 }
-                currentPos += count
-                out.write(buffer, 0, count)
-            }
-            out.flush()
+                out.flush()
+            }.onFailure { Log.w(TAG, "Segment stream interrupted", it) }
         } finally {
             connection.close()
         }
     }
 
-    private fun servePassthrough(out: OutputStream, url: String, rangeStart: Long) {
-        val connection = upstream(url, rangeStart)
+    private fun servePassthrough(out: OutputStream, url: String, rangeStart: Long, referer: String?) {
+        val connection = upstream(url, rangeStart, referer)
         try {
             val status = connection.responseCode
             if (status !in 200..299) return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
@@ -246,17 +385,81 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
             connection.getHeaderField("Content-Range")?.let { headers.append("Content-Range: ").append(it).append("\r\n") }
             headers.append("Access-Control-Allow-Origin: *\r\n\r\n")
             out.write(headers.toString().toByteArray(StandardCharsets.UTF_8))
-            input.use { it.copyTo(out) }
+            runCatching {
+                input.use { it.copyTo(out) }
+                out.flush()
+            }.onFailure { Log.w(TAG, "Passthrough stream interrupted", it) }
+        } finally {
+            connection.close()
+        }
+    }
+
+    private fun serveSubtitle(out: OutputStream, url: String, referer: String?) {
+        val connection = upstream(url, referer = referer)
+        try {
+            val status = connection.responseCode
+            if (status !in 200..299) return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
+            val input = connection.inputStream
+                ?: return response(out, 502, "Bad Gateway", "text/plain", ByteArray(0))
+            val path = url.substringBefore('?')
+            val contentType = when {
+                path.endsWith(".ass", ignoreCase = true) -> "text/x-ass"
+                path.endsWith(".srt", ignoreCase = true) -> "application/x-subrip"
+                path.endsWith(".vtt", ignoreCase = true) -> "text/vtt"
+                else -> connection.getHeaderField("Content-Type") ?: "text/plain"
+            }
+            val bytes = try {
+                input.use { stream ->
+                    val bufferOut = ByteArrayOutputStream()
+                    val buf = ByteArray(8192)
+                    var total = 0
+                    while (true) {
+                        val n = stream.read(buf)
+                        if (n == -1) break
+                        total += n
+                        if (total > MAX_SUBTITLE_BYTES) error("Subtitle too large")
+                        bufferOut.write(buf, 0, n)
+                    }
+                    bufferOut.toByteArray()
+                }
+            } catch (_: Exception) {
+                return response(
+                    out,
+                    500,
+                    "Internal Server Error",
+                    "text/plain",
+                    "Subtitle too large / read error".toByteArray(StandardCharsets.UTF_8)
+                )
+            }
+            val headers = "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: $contentType\r\n" +
+                "Access-Control-Allow-Origin: *\r\n" +
+                "Access-Control-Allow-Headers: *\r\n" +
+                "Content-Length: ${bytes.size}\r\n\r\n"
+            out.write(headers.toByteArray(StandardCharsets.UTF_8))
+            out.write(bytes)
             out.flush()
         } finally {
             connection.close()
         }
     }
 
-    private fun upstream(url: String, rangeStart: Long = 0): AndroidNetworkResponse {
+    private fun upstream(url: String, rangeStart: Long = 0, referer: String? = null): AndroidNetworkResponse {
         val headers = buildMap {
             put("Accept", "*/*")
-            put("Referer", "https://gotaku.to/")
+            if (!referer.isNullOrBlank()) {
+                val origin = runCatching {
+                    val parsed = URL(referer)
+                    "${parsed.protocol}://${parsed.authority}"
+                }.getOrElse { referer.trimEnd('/') }
+                put("Referer", referer)
+                put("Origin", origin)
+                put("Sec-Fetch-Dest", "empty")
+                put("Sec-Fetch-Mode", "cors")
+                put("Sec-Fetch-Site", "cross-site")
+            } else {
+                put("Referer", "https://gotaku.to/")
+            }
             put("User-Agent", USER_AGENT)
             if (rangeStart > 0) put("Range", "bytes=" + rangeStart + "-")
         }
@@ -313,6 +516,8 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
 
     private companion object {
         const val TAG = "AndroidStreamProxy"
+        const val MAX_SUBTITLE_BYTES = 512 * 1024
         const val USER_AGENT = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/136.0.0.0 Mobile Safari/537.36"
+        val URI_REGEX = Regex("URI=\"([^\"]+)\"")
     }
 }
