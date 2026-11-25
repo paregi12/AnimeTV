@@ -1709,7 +1709,6 @@ internal fun PlaybackOsdContent(
 }
 
 @OptIn(ExperimentalLayoutApi::class)
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlaybackMetaLayer(
     visible: Boolean,
@@ -2890,7 +2889,7 @@ private fun PlaybackEpisodesSection(
                 style = LocalTextStyle.current.copy(shadow = shadow),
                 modifier = Modifier.align(Alignment.CenterStart)
             )
-            AnimatedVisibility(
+            androidx.compose.animation.AnimatedVisibility(
                 visible = hasPaging && active,
                 enter = if (tokens.tim3s == 0) EnterTransition.None else fadeIn(
                     tween(durationMillis = tokens.tim3s, easing = tokens.easing)
