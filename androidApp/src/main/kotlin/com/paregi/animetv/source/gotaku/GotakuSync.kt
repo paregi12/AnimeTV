@@ -326,7 +326,7 @@ internal class GotakuSync(private val networkStack: AndroidNetworkStack) {
                 v: WebView?,
                 request: WebResourceRequest?,
             ): WebResourceResponse? {
-                if (request == null) return super.shouldInterceptRequest(v, null)
+                if (request == null) return null
                 val reqUrl = request.url.toString()
                 val reqHeaders: Map<String, String>? = request.requestHeaders
                 if (!request.isForMainFrame) {
