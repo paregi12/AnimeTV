@@ -66,7 +66,7 @@ internal object GotakuSource {
             data.optJSONObject("data") ?: data
         }
         return Triple(
-            payload.optJSONArray("seasons").toBriefAnimeList(currentId, preferFullName = true),
+            payload.optJSONArray("seasons").toBriefAnimeList(currentId = null, preferFullName = true),
             payload.optJSONArray("relations").toBriefAnimeList(currentId, preferFullName = false),
             payload.optJSONArray("recommendations").toBriefAnimeList(currentId, preferFullName = false)
         )

@@ -21,6 +21,11 @@ interface AnimeRepository {
         preferDub: Boolean = false,
         mirrorIndex: Int = 0,
         subtitleLanguage: String = "",
-        hasSub: Boolean = true
+        hasSub: Boolean = true,
+        requestedStreamType: PlaybackStreamType? = null
     ): PlaybackChoice
+    suspend fun translatePlaybackSubtitle(
+        choice: PlaybackChoice,
+        targetLanguage: String
+    ): SubtitleTrack? = null
 }

@@ -4,6 +4,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.hoverable
@@ -42,10 +43,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -115,6 +118,7 @@ private enum class ValuePickerType {
     CACHE_SIZE
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Suppress("UNUSED_PARAMETER")
 @Composable
 internal fun SettingsScreen(
@@ -138,9 +142,16 @@ internal fun SettingsScreen(
     val showToast = LocalAppToast.current
     val accountScope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
+    val firstItemRequester = remember { FocusRequester() }
 
     var entered by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { entered = true }
+    LaunchedEffect(Unit) {
+        entered = true
+        if (!tokens.isTouch) {
+            yield()
+            runCatching { firstItemRequester.requestFocus() }
+        }
+    }
     val slideProgress by animateFloatAsState(
         targetValue = if (entered) 1f else 0f,
         animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
@@ -374,6 +385,8 @@ internal fun SettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .focusGroup()
+            .focusProperties { onExit = { cancelFocusChange() } }
             .graphicsLayer {
                 translationX = (1f - slideProgress) * size.width * 0.5f
                 alpha = slideProgress
@@ -397,14 +410,16 @@ internal fun SettingsScreen(
         ) {
             item { SettingsGroupTitle("Subtitle & Languages") }
             item {
-                SettingValueRow(
-                    SettingValue(
-                        label = "Subtitle Language",
-                        value = selectedSubtitleLanguage.label,
-                        valueIcon = subtitleValueIcon,
-                        valueBadge = subtitleValueBadge
-                    ) { subtitleLanguageDialog = true }
-                )
+                Box(Modifier.focusRequester(firstItemRequester)) {
+                    SettingValueRow(
+                        SettingValue(
+                            label = "Subtitle Language",
+                            value = selectedSubtitleLanguage.label,
+                            valueIcon = subtitleValueIcon,
+                            valueBadge = subtitleValueBadge
+                        ) { subtitleLanguageDialog = true }
+                    )
+                }
             }
             item {
                 SettingValueRow(

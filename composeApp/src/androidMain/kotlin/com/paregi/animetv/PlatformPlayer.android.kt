@@ -13,11 +13,18 @@ import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
+import android.text.Spanned
+import android.text.style.StyleSpan
+import android.text.style.UnderlineSpan
+import android.view.View
 import android.view.WindowManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -32,14 +39,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -51,6 +65,8 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
@@ -65,8 +81,14 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
+import coil3.compose.AsyncImage
+import com.paregi.animetv.core.theme.AnimeTvTokens
 import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.theme.LocalAnimeTvColors
+import com.paregi.animetv.core.theme.LocalAnimeTvTokens
+import com.paregi.animetv.core.theme.LocalAppToast
+import com.paregi.animetv.core.theme.LocalImageCdn
+import com.paregi.animetv.core.ui.imageCdnUrl
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.PlaybackStreamType
@@ -75,11 +97,14 @@ import com.paregi.animetv.domain.SubtitleStyleCatalog
 import com.paregi.animetv.domain.SubtitleTrack
 import com.paregi.animetv.features.player.PlaybackOsdContent
 import com.paregi.animetv.features.player.PlayerOsdHudState
+import com.paregi.animetv.features.player.VttSubtitleCueOverlay
+import com.paregi.animetv.features.player.subtitleBoldSpanWeight
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
+import kotlin.math.floor
 
 private object PlaybackCache {
     private var cache: SimpleCache? = null
@@ -260,28 +285,42 @@ actual fun PlatformPlayer(
     selectedSubtitleIndexOverride: Int?,
     onAvailableAudioLanguagesChanged: ((Set<String>) -> Unit)?,
     onDetectedVideoHeightsChanged: ((Int, List<Int>) -> Unit)?,
-    showBackHint: Boolean
+    showBackHint: Boolean,
+    currentAnimeId: String,
+    metadataFormat: String?,
+    metadataQuality: String?,
+    metadataRating: String?,
+    settingsOverlayOpen: Boolean
 ) {
     val context = LocalContext.current
     val colors = LocalAnimeTvColors.current
+    val tokens = LocalAnimeTvTokens.current
+    val showToast = LocalAppToast.current
     val coroutineScope = rememberCoroutineScope()
 
-    var positionMs by remember(url) { mutableStateOf(startPositionMs) }
-    var durationMs by remember(url) { mutableStateOf(0L) }
-    var bufferedPositionMs by remember(url) { mutableStateOf(0L) }
-    var playing by remember(url) { mutableStateOf(true) }
-    var isBuffering by remember(url) { mutableStateOf(true) }
-    var ended by remember(url) { mutableStateOf(false) }
-    var firstFrameRendered by remember(url) { mutableStateOf(false) }
-    var playbackErrorMessage by remember(url) { mutableStateOf<String?>(null) }
-    var statusText by remember(url) { mutableStateOf<String?>("LOADING SERVER") }
-    var detectedVideoHeight by remember(url) { mutableIntStateOf(0) }
-    var availableVideoHeights by remember(url) { mutableStateOf<List<Int>>(emptyList()) }
-    var currentTracks by remember(url) { mutableStateOf(Tracks.EMPTY) }
+    var positionMs by remember(url, html5Player) { mutableStateOf(startPositionMs) }
+    var durationMs by remember(url, html5Player) { mutableStateOf(0L) }
+    var bufferedPositionMs by remember(url, html5Player) { mutableStateOf(0L) }
+    var playing by remember(url, html5Player) { mutableStateOf(true) }
+    var isBuffering by remember(url, html5Player) { mutableStateOf(true) }
+    var ended by remember(url, html5Player) { mutableStateOf(false) }
+    var firstFrameRendered by remember(url, html5Player) { mutableStateOf(false) }
+    var playbackErrorMessage by remember(url, html5Player) { mutableStateOf<String?>(null) }
+    var statusText by remember(url, html5Player) { mutableStateOf<String?>("LOADING SERVER") }
+    var detectedVideoHeight by remember(url, html5Player) { mutableIntStateOf(0) }
+    var availableVideoHeights by remember(url, html5Player) { mutableStateOf<List<Int>>(emptyList()) }
+    var currentTracks by remember(url, html5Player) { mutableStateOf(Tracks.EMPTY) }
+    var activeCues by remember(url, html5Player) { mutableStateOf<List<Cue>>(emptyList()) }
 
-    var osdState by remember(url) { mutableStateOf<PlayerOsdHudState?>(null) }
-    var seekIndicatorSide by remember(url) { mutableStateOf<Int?>(null) }
-    var seekDebounceJob by remember(url) { mutableStateOf<Job?>(null) }
+    var osdState by remember(url, html5Player) { mutableStateOf<PlayerOsdHudState?>(null) }
+    var osdNonce by remember(url, html5Player) { mutableIntStateOf(0) }
+    var seekIndicatorSide by remember(url, html5Player) { mutableStateOf<Int?>(null) }
+    var seekDebounceJob by remember(url, html5Player) { mutableStateOf<Job?>(null) }
+
+    fun showOsdHud(state: PlayerOsdHudState) {
+        osdState = state
+        osdNonce += 1
+    }
 
     var html5PositionMs by remember(url, html5Player) { mutableStateOf(startPositionMs) }
     var html5DurationMs by remember(url, html5Player) { mutableStateOf(0L) }
@@ -290,9 +329,27 @@ actual fun PlatformPlayer(
     var html5Ended by remember(url, html5Player) { mutableStateOf(false) }
     var html5Ready by remember(url, html5Player) { mutableStateOf(false) }
 
-    val initialStartPositionMs = remember(url, headers, subtitles, html5Player) { startPositionMs }
+    val initialStartPositionMs = remember(url, headers, html5Player) { startPositionMs }
     val primary1Hex = remember(colors.primary1) { colors.primary1.toHexString() }
     val accent1Hex = remember(colors.accent1) { colors.accent1.toHexString() }
+    val fontSizeTier = remember(tokens.fs10, tokens.u, tokens.portrait) {
+        val ratio = tokens.fs10.value / tokens.u.value.coerceAtLeast(0.01f)
+        if (tokens.portrait) {
+            when {
+                ratio <= 1.3f -> 0
+                ratio <= 1.55f -> 1
+                ratio <= 1.8f -> 2
+                else -> 3
+            }
+        } else {
+            when {
+                ratio <= 1.1f -> 0
+                ratio <= 1.3f -> 1
+                ratio <= 1.45f -> 2
+                else -> 3
+            }
+        }
+    }
 
     val html5Bridge = remember(url, html5Player) {
         Html5PlaybackBridge(
@@ -311,13 +368,11 @@ actual fun PlatformPlayer(
                 }
             },
             onError = { errorMsg ->
-                playbackErrorMessage = errorMsg.ifBlank { "Playback error" }
+                isBuffering = false
+                val msg = errorMsg.ifBlank { "Playback error" }
+                playbackErrorMessage = msg
                 statusText = "PLAYBACK ERROR"
-                osdState = PlayerOsdHudState(
-                    icon = IconGlyphs.Warning,
-                    text = playbackErrorMessage ?: "Playback error",
-                    progressPercent = 0f
-                )
+                showToast(msg)
             },
             onVideoInfo = { height, audioLangs, heights ->
                 if (height > 0) detectedVideoHeight = height
@@ -327,8 +382,9 @@ actual fun PlatformPlayer(
             }
         )
     }
+    html5Bridge.allowedSubtitleUrls = subtitles.map { it.url }.toSet()
 
-    val html5View = remember(url, headers, subtitles, html5Player) {
+    val html5View = remember(url, headers, html5Player) {
         if (!html5Player) null else WebView(context).apply {
             isFocusable = false
             isFocusableInTouchMode = false
@@ -357,6 +413,7 @@ actual fun PlatformPlayer(
                 }
             }
             setBackgroundColor(AndroidColor.BLACK)
+            alpha = 0f
             loadDataWithBaseURL(
                 "file:///android_asset/",
                 html5PlayerDocument(
@@ -365,7 +422,8 @@ actual fun PlatformPlayer(
                     subtitles = subtitles,
                     startPositionMs = initialStartPositionMs,
                     primary1Hex = primary1Hex,
-                    accent1Hex = accent1Hex
+                    accent1Hex = accent1Hex,
+                    fontSizeTier = fontSizeTier
                 ),
                 "text/html",
                 "UTF-8",
@@ -385,7 +443,8 @@ actual fun PlatformPlayer(
         }
     }
 
-    val player = remember(url, headers, subtitles, videoBuffer, progressiveCache, cacheSizeMb, html5Player) {
+    val player = remember(url, headers, videoBuffer, progressiveCache, cacheSizeMb, html5Player) {
+        if (html5Player) return@remember null
         val httpFactory = DefaultHttpDataSource.Factory().setDefaultRequestProperties(headers)
         val upstreamFactory: DataSource.Factory = DefaultDataSource.Factory(context, httpFactory)
         val dataSourceFactory: DataSource.Factory = if (progressiveCache) {
@@ -419,30 +478,15 @@ actual fun PlatformPlayer(
             .setBackBuffer(backBufferDuration, true)
             .setBufferDurationsMs(bufferDurations[0], bufferDurations[1], bufferDurations[2], bufferDurations[3])
             .build()
-        val subtitleConfigs = subtitles.map { track ->
-            val ext = track.url.substringBefore('?').substringAfterLast('.').lowercase()
-            MediaItem.SubtitleConfiguration.Builder(Uri.parse(track.url))
-                .setMimeType(
-                    when (ext) {
-                        "srt" -> MimeTypes.APPLICATION_SUBRIP
-                        "ass", "ssa" -> MimeTypes.TEXT_SSA
-                        else -> MimeTypes.TEXT_VTT
-                    }
-                )
-                .setLanguage(track.language)
-                .setLabel(track.label)
-                .setSelectionFlags(if (track.defaultSelected) C.SELECTION_FLAG_DEFAULT else 0)
-                .build()
-        }
-        val mediaItem = MediaItem.Builder().setUri(url).setSubtitleConfigurations(subtitleConfigs).build()
+        val mediaItem = buildPlaybackMediaItem(url, subtitles)
         var playerRetryCount = 0
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(loadControl)
             .build().apply {
                 setMediaItem(mediaItem)
-                if (startPositionMs > 0 && !html5Player) seekTo(startPositionMs)
-                playWhenReady = !html5Player
+                if (startPositionMs > 0) seekTo(startPositionMs)
+                playWhenReady = true
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         isBuffering = playbackState == Player.STATE_BUFFERING
@@ -495,6 +539,10 @@ actual fun PlatformPlayer(
                         }
                     }
 
+                    override fun onCues(cueGroup: CueGroup) {
+                        activeCues = cueGroup.cues
+                    }
+
                     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                         if (playerRetryCount < 2) {
                             playerRetryCount++
@@ -503,26 +551,24 @@ actual fun PlatformPlayer(
                             prepare()
                             play()
                         } else {
-                            playbackErrorMessage = "Playback error: ${error.errorCodeName}"
+                            isBuffering = false
+                            val msg = "Playback error: ${error.errorCodeName}"
+                            playbackErrorMessage = msg
                             statusText = "PLAYBACK ERROR"
-                            osdState = PlayerOsdHudState(
-                                icon = IconGlyphs.Warning,
-                                text = playbackErrorMessage ?: "Playback error",
-                                progressPercent = 0f
-                            )
+                            showToast(msg)
                         }
                     }
                 })
-                if (!html5Player) prepare()
+                prepare()
             }
     }
 
     DisposableEffect(player) {
-        onDispose { player.release() }
+        onDispose { player?.release() }
     }
 
-    fun currentPosition(): Long = if (html5Player) html5PositionMs else player.currentPosition.coerceAtLeast(0)
-    fun currentDuration(): Long = if (html5Player) html5DurationMs else player.duration.coerceAtLeast(0)
+    fun currentPosition(): Long = if (html5Player) html5PositionMs else (player?.currentPosition ?: 0L).coerceAtLeast(0)
+    fun currentDuration(): Long = if (html5Player) html5DurationMs else (player?.duration ?: 0L).coerceAtLeast(0)
 
     fun seekToImmediate(targetMs: Long) {
         seekDebounceJob?.cancel()
@@ -533,7 +579,7 @@ actual fun PlatformPlayer(
         if (html5Player) {
             html5View?.evaluateJavascript("window.animeTvCommand('seek', ${target / 1000.0});", null)
         } else {
-            player.seekTo(target)
+            player?.seekTo(target)
         }
     }
 
@@ -547,7 +593,7 @@ actual fun PlatformPlayer(
             if (html5Player) {
                 html5View?.evaluateJavascript("window.animeTvCommand('seek', ${target / 1000.0});", null)
             } else {
-                player.seekTo(target)
+                player?.seekTo(target)
             }
         }
     }
@@ -556,7 +602,7 @@ actual fun PlatformPlayer(
         if (html5Player) {
             html5View?.evaluateJavascript("window.animeTvCommand('${if (shouldPlay) "play" else "pause"}', 0);", null)
         } else {
-            player.playWhenReady = shouldPlay
+            player?.playWhenReady = shouldPlay
         }
     }
 
@@ -606,7 +652,7 @@ actual fun PlatformPlayer(
                 html5View?.evaluateJavascript("window.animeTvCommand('speed', $playbackSpeed);", null)
             }
         } else {
-            player.setPlaybackSpeed(playbackSpeed)
+            player?.setPlaybackSpeed(playbackSpeed)
         }
     }
 
@@ -616,6 +662,34 @@ actual fun PlatformPlayer(
                 "window.animeTvCommand('themeColors', ${JSONObject.quote("$primary1Hex,$accent1Hex")});",
                 null
             )
+        }
+    }
+
+    LaunchedEffect(html5View, html5Ready, html5Player, fontSizeTier) {
+        if (html5Player && html5Ready) {
+            html5View?.evaluateJavascript("window.animeTvCommand('fontSizeTier', $fontSizeTier);", null)
+        }
+    }
+
+    var appliedSubtitles by remember(url, html5Player) { mutableStateOf(subtitles) }
+    LaunchedEffect(player, html5View, html5Ready, html5Player, subtitles) {
+        if (subtitles == appliedSubtitles) return@LaunchedEffect
+        if (html5Player) {
+            if (html5Ready) {
+                html5View?.evaluateJavascript(
+                    "window.animeTvCommand('syncSubtitles', ${JSONObject.quote(subtitleTracksJsonArray(subtitles).toString())});",
+                    null
+                )
+                appliedSubtitles = subtitles
+            }
+        } else {
+            val exoPlayer = player ?: return@LaunchedEffect
+            val resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val shouldPlay = exoPlayer.playWhenReady
+            exoPlayer.setMediaItem(buildPlaybackMediaItem(url, subtitles), resumeMs)
+            exoPlayer.playWhenReady = shouldPlay
+            exoPlayer.prepare()
+            appliedSubtitles = subtitles
         }
     }
 
@@ -647,7 +721,7 @@ actual fun PlatformPlayer(
     }
 
     LaunchedEffect(
-        player, html5View, html5Ready, subtitles, effectiveSubtitleIndex, audioLanguage,
+        player, html5View, html5Ready, html5Player, subtitles, effectiveSubtitleIndex, audioLanguage,
         playbackQuality, videoScale, subtitleStyle, currentTracks, availableVideoHeights
     ) {
         if (html5Player) {
@@ -660,7 +734,8 @@ actual fun PlatformPlayer(
             }
             return@LaunchedEffect
         }
-        val builder = player.trackSelectionParameters.buildUpon()
+        val exoPlayer = player ?: return@LaunchedEffect
+        val builder = exoPlayer.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, effectiveSubtitleIndex < 0)
 
@@ -674,22 +749,36 @@ actual fun PlatformPlayer(
 
         builder.setPreferredAudioLanguage(audioLanguage.takeIf { it.isNotBlank() })
 
-        val maxHeight = when (playbackQuality.coerceIn(0, 3)) {
-            1 -> availableVideoHeights.getOrNull(0) ?: 1080
-            2 -> availableVideoHeights.getOrNull(1) ?: 720
-            3 -> availableVideoHeights.getOrNull(2) ?: 480
-            else -> Int.MAX_VALUE
+        builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        val qualityTier = playbackQuality.coerceIn(0, 3)
+        if (qualityTier == 0) {
+            builder.clearVideoSizeConstraints()
+        } else if (availableVideoHeights.isNotEmpty()) {
+            val targetHeight = availableVideoHeights.getOrNull(qualityTier - 1) ?: availableVideoHeights.last()
+            findMatchingVideoGroup(currentTracks, targetHeight)?.let { (group, trackIndices) ->
+                builder.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndices))
+            }
+            builder.setMinVideoSize(0, targetHeight)
+            builder.setMaxVideoSize(Int.MAX_VALUE, targetHeight)
+        } else {
+            val fallbackMaxHeight = when (qualityTier) {
+                1 -> Int.MAX_VALUE
+                2 -> 720
+                3 -> 480
+                else -> Int.MAX_VALUE
+            }
+            builder.setMinVideoSize(0, 0)
+            builder.setMaxVideoSize(Int.MAX_VALUE, fallbackMaxHeight)
         }
-        builder.setMaxVideoSize(Int.MAX_VALUE, maxHeight)
-        player.trackSelectionParameters = builder.build()
+        exoPlayer.trackSelectionParameters = builder.build()
     }
 
-    LaunchedEffect(player, skipRanges, autoSkipIntro, skipFiller) {
+    LaunchedEffect(player, html5Player, skipRanges, autoSkipIntro, skipFiller) {
         var lastReport = 0L
         var endedReported = false
         while (true) {
             delay(500)
-            val isEnded = if (html5Player) html5Ended else player.playbackState == Player.STATE_ENDED
+            val isEnded = if (html5Player) html5Ended else player?.playbackState == Player.STATE_ENDED
             if (isEnded) {
                 ended = true
                 updateMediaSessionState(PlaybackState.STATE_STOPPED, currentPosition(), 0f)
@@ -712,10 +801,12 @@ actual fun PlatformPlayer(
                 }
                 if (fillerSkip != null) {
                     seekToImmediate((fillerSkip.endSeconds * 1000).toLong())
-                    osdState = PlayerOsdHudState(
-                        icon = IconGlyphs.FastForward,
-                        text = "Filler skipped",
-                        progressPercent = 100f
+                    showOsdHud(
+                        PlayerOsdHudState(
+                            icon = IconGlyphs.FastForward,
+                            text = "Filler skipped",
+                            progressPercent = 100f
+                        )
                     )
                 }
             }
@@ -723,8 +814,8 @@ actual fun PlatformPlayer(
                 positionMs = currentPosition()
             }
             durationMs = currentDuration()
-            bufferedPositionMs = if (html5Player) html5BufferedMs else player.bufferedPosition.coerceAtLeast(0)
-            playing = if (html5Player) html5Playing else player.isPlaying
+            bufferedPositionMs = if (html5Player) html5BufferedMs else (player?.bufferedPosition ?: 0L).coerceAtLeast(0)
+            playing = if (html5Player) html5Playing else player?.isPlaying == true
             updateMediaSessionState(
                 if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
                 positionMs,
@@ -737,7 +828,7 @@ actual fun PlatformPlayer(
         }
     }
 
-    LaunchedEffect(osdState) {
+    LaunchedEffect(osdState, osdNonce) {
         if (osdState != null) {
             delay(1_500L)
             osdState = null
@@ -754,6 +845,20 @@ actual fun PlatformPlayer(
     val selectedSubtitleLabel = subtitles.getOrNull(effectiveSubtitleIndex)?.let { track ->
         track.label.ifBlank { track.language.uppercase().ifBlank { "CC" } }
     }
+    val boldSpanWeight = subtitleBoldSpanWeight(subtitleStyle)
+    val visibleRawCues = if (!html5Player && effectiveSubtitleIndex >= 0) activeCues else emptyList()
+    val hasBitmapCue = visibleRawCues.any { it.bitmap != null }
+    val cueLines = remember(visibleRawCues, hasBitmapCue, boldSpanWeight) {
+        if (hasBitmapCue) {
+            emptyList()
+        } else {
+            visibleRawCues.mapNotNull { cue ->
+                cue.text?.takeIf { it.isNotBlank() }?.toSubtitleAnnotatedString(boldSpanWeight)
+            }
+        }
+    }
+    val useComposeCueOverlay = cueLines.isNotEmpty() && !hasBitmapCue
+    val showNativeSubtitleViewState = rememberUpdatedState(!useComposeCueOverlay)
 
     PlaybackOsdContent(
         metadataTitle = metadataTitle,
@@ -797,7 +902,7 @@ actual fun PlatformPlayer(
         isTracked = isTracked,
         osdHudState = osdState,
         seekIndicatorSide = seekIndicatorSide,
-        onShowOsdHud = { osdState = it },
+        onShowOsdHud = ::showOsdHud,
         onShowSeekIndicator = { seekIndicatorSide = it },
         onDebouncedSeek = ::seekToDebounced,
         onImmediateSeek = ::seekToImmediate,
@@ -824,11 +929,13 @@ actual fun PlatformPlayer(
         onTrackingClick = onTrackingClick,
         onSearchGenre = onSearchGenre,
         onAdjustBrightness = { direction ->
-            val brightness = adjustWindowBrightness(context, direction * 0.04f)
-            osdState = PlayerOsdHudState(
-                icon = IconGlyphs.LightMode,
-                text = "Brightness",
-                progressPercent = (brightness * 100f).coerceIn(0f, 100f)
+            val brightness = adjustWindowBrightness(context, direction * (10f / 255f))
+            showOsdHud(
+                PlayerOsdHudState(
+                    icon = IconGlyphs.LightMode,
+                    text = "Brightness",
+                    progressPercent = floor((brightness * 100f).toDouble()).toFloat().coerceIn(0f, 100f)
+                )
             )
         },
         onAdjustVolume = { direction ->
@@ -839,53 +946,165 @@ actual fun PlatformPlayer(
                 volume < 70 -> IconGlyphs.VolumeDown
                 else -> IconGlyphs.VolumeUp
             }
-            osdState = PlayerOsdHudState(
-                icon = volIcon,
-                text = "Volume",
-                progressPercent = volume.toFloat().coerceIn(0f, 100f)
+            showOsdHud(
+                PlayerOsdHudState(
+                    icon = volIcon,
+                    text = "Volume",
+                    progressPercent = volume.toFloat().coerceIn(0f, 100f)
+                )
             )
         },
         onBack = onBack,
+        currentAnimeId = currentAnimeId,
+        metadataFormat = metadataFormat,
+        metadataQuality = metadataQuality,
+        metadataRating = metadataRating,
+        settingsOverlayOpen = settingsOverlayOpen,
         videoContent = {
             if (html5Player) {
-                html5View?.let { view ->
-                    AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
+                val html5Alpha by animateFloatAsState(
+                    targetValue = if (firstFrameRendered) 1f else 0f,
+                    animationSpec = tween(durationMillis = tokens.tim10s, easing = tokens.easing),
+                    label = "html5-ready-fade"
+                )
+                Box(
+                    modifier = Modifier.fillMaxSize().background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (html5Alpha < 0.999f) {
+                        val model = imageCdnUrl(artworkUrl, LocalImageCdn.current)
+                        if (!model.isNullOrBlank()) {
+                            AsyncImage(
+                                model = model,
+                                contentDescription = metadataTitle,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                    html5View?.let { view ->
+                        AndroidView(
+                            factory = { view },
+                            update = { it.alpha = html5Alpha },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
             } else {
                 val primary1Argb = colors.primary1.toArgb()
                 val accent1Argb = colors.accent1.toArgb()
-                AndroidView(
-                    factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            this.player = player
-                            useController = false
-                            applySubtitleStyle(this, subtitleStyle, primary1Argb, accent1Argb)
-                            resizeMode = when (videoScale) {
+                Box(Modifier.fillMaxSize()) {
+                    AndroidView(
+                        factory = { ctx ->
+                            PlayerView(ctx).apply {
+                                this.player = player
+                                useController = false
+                                subtitleView?.visibility =
+                                    if (showNativeSubtitleViewState.value) View.VISIBLE else View.GONE
+                                applySubtitleStyle(this, subtitleStyle, primary1Argb, accent1Argb, tokens)
+                                resizeMode = when (videoScale) {
+                                    1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                    2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                }
+                                setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                                setKeepContentOnPlayerReset(true)
+                                isFocusable = false
+                                isFocusableInTouchMode = false
+                                post {
+                                    subtitleView?.visibility =
+                                        if (showNativeSubtitleViewState.value) View.VISIBLE else View.GONE
+                                    applySubtitleStyle(this, subtitleStyle, primary1Argb, accent1Argb, tokens)
+                                }
+                            }
+                        },
+                        update = {
+                            it.player = player
+                            it.subtitleView?.visibility =
+                                if (showNativeSubtitleViewState.value) View.VISIBLE else View.GONE
+                            applySubtitleStyle(it, subtitleStyle, primary1Argb, accent1Argb, tokens)
+                            it.resizeMode = when (videoScale) {
                                 1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                                 2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                                 else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                             }
-                            setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                            setKeepContentOnPlayerReset(true)
-                            isFocusable = false
-                            isFocusableInTouchMode = false
-                            post { applySubtitleStyle(this, subtitleStyle, primary1Argb, accent1Argb) }
-                        }
-                    },
-                    update = {
-                        it.player = player
-                        applySubtitleStyle(it, subtitleStyle, primary1Argb, accent1Argb)
-                        it.resizeMode = when (videoScale) {
-                            1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                            2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    if (useComposeCueOverlay) {
+                        VttSubtitleCueOverlay(
+                            cueLines = cueLines,
+                            style = subtitleStyle,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
             }
         }
     )
+}
+
+private fun buildPlaybackMediaItem(
+    url: String,
+    subtitles: List<SubtitleTrack>
+): MediaItem {
+    val subtitleConfigs = subtitles.map { track ->
+        val ext = track.url.substringBefore('?').substringAfterLast('.').lowercase()
+        MediaItem.SubtitleConfiguration.Builder(Uri.parse(track.url))
+            .setMimeType(
+                when (ext) {
+                    "srt" -> MimeTypes.APPLICATION_SUBRIP
+                    "ass", "ssa" -> MimeTypes.TEXT_SSA
+                    else -> MimeTypes.TEXT_VTT
+                }
+            )
+            .setLanguage(track.language)
+            .setLabel(track.label)
+            .setSelectionFlags(if (track.defaultSelected) C.SELECTION_FLAG_DEFAULT else 0)
+            .build()
+    }
+    return MediaItem.Builder().setUri(url).setSubtitleConfigurations(subtitleConfigs).build()
+}
+
+private fun CharSequence.toSubtitleAnnotatedString(boldWeight: FontWeight): AnnotatedString {
+    val rawText = toString()
+    if (this !is Spanned) return AnnotatedString(rawText)
+    return buildAnnotatedString {
+        append(rawText)
+        getSpans(0, rawText.length, Any::class.java).forEach { span ->
+            val start = getSpanStart(span).coerceIn(0, rawText.length)
+            val end = getSpanEnd(span).coerceIn(start, rawText.length)
+            if (start >= end) return@forEach
+            when (span) {
+                is StyleSpan -> when (span.style) {
+                    Typeface.BOLD -> addStyle(SpanStyle(fontWeight = boldWeight), start, end)
+                    Typeface.ITALIC -> addStyle(SpanStyle(fontStyle = FontStyle.Italic), start, end)
+                    Typeface.BOLD_ITALIC -> addStyle(
+                        SpanStyle(fontWeight = boldWeight, fontStyle = FontStyle.Italic),
+                        start,
+                        end
+                    )
+                }
+                is UnderlineSpan -> addStyle(SpanStyle(textDecoration = TextDecoration.Underline), start, end)
+            }
+        }
+    }
+}
+
+private fun findMatchingVideoGroup(
+    tracks: Tracks,
+    targetHeight: Int
+): Pair<Tracks.Group, List<Int>>? {
+    for (group in tracks.groups) {
+        if (group.type != C.TRACK_TYPE_VIDEO) continue
+        val indices = (0 until group.length).filter { i ->
+            group.getTrackFormat(i).height == targetHeight
+        }
+        if (indices.isNotEmpty()) {
+            return group to indices
+        }
+    }
+    return null
 }
 
 private fun Color.toHexString(): String {
@@ -975,7 +1194,7 @@ private fun adjustWindowBrightness(context: Context, delta: Float): Float {
             Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
         }.getOrDefault(0.5f)
     }
-    val updated = (current + delta).coerceIn(0.02f, 1f)
+    val updated = (current + delta).coerceIn(0f, 1f)
     attributes.screenBrightness = updated
     window.attributes = attributes
     return updated
@@ -991,7 +1210,8 @@ private fun applySubtitleStyle(
     playerView: PlayerView,
     style: Int,
     primary1Argb: Int,
-    accent1Argb: Int
+    accent1Argb: Int,
+    tokens: AnimeTvTokens
 ) {
     val subtitles = playerView.subtitleView ?: return
     val fontIndex = SubtitleStyleCatalog.selectedIndex(style, 0)
@@ -1026,7 +1246,6 @@ private fun applySubtitleStyle(
     val edgeType = if (outlineIndex == 0) CaptionStyleCompat.EDGE_TYPE_NONE
     else CaptionStyleCompat.EDGE_TYPE_OUTLINE
     val edgeColor = if (colorIndex in listOf(1, 6, 7)) AndroidColor.WHITE else AndroidColor.BLACK
-    subtitles.setApplyEmbeddedStyles(false)
     subtitles.setApplyEmbeddedFontSizes(false)
     subtitles.setStyle(
         CaptionStyleCompat(
@@ -1038,11 +1257,14 @@ private fun applySubtitleStyle(
             typeface
         )
     )
-    val viewportRatio = if (playerView.width > 0 && playerView.height > 0) {
-        playerView.width.toFloat() / playerView.height
-    } else 16f / 9f
-    val widthBasedTextSizes = floatArrayOf(0.03f, 0.025f, 0.02f, 0.03233f)
-    subtitles.setFractionalTextSize(widthBasedTextSizes[sizeIndex] * viewportRatio)
+    val subtitleSizeDp = when (sizeIndex) {
+        0 -> tokens.fs30
+        1 -> tokens.fs25
+        2 -> tokens.fs20
+        else -> tokens.fs30 + (tokens.fs7 / 3f)
+    }
+    val screenHeightDp = tokens.screenHeight.value.coerceAtLeast(1f)
+    subtitles.setFractionalTextSize(subtitleSizeDp.value / screenHeightDp)
 }
 
 private object SubtitleTypefaceCache {

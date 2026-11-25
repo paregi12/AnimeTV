@@ -10,7 +10,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 internal class Html5PlaybackBridge(
-    private val allowedSubtitleUrls: Set<String>,
+    @Volatile var allowedSubtitleUrls: Set<String>,
     private val headers: Map<String, String>,
     private val onState: (positionMs: Long, durationMs: Long, bufferedMs: Long, playing: Boolean, ended: Boolean) -> Unit,
     private val onError: ((String) -> Unit)? = null,
@@ -65,27 +65,30 @@ internal class Html5PlaybackBridge(
     }
 }
 
+internal fun subtitleTracksJsonArray(subtitles: List<SubtitleTrack>): JSONArray = JSONArray().apply {
+    subtitles.forEach { subtitle ->
+        put(
+            JSONObject()
+                .put("src", subtitle.url)
+                .put("srclang", subtitle.language)
+                .put("label", subtitle.label)
+                .put("kind", "subtitles")
+                .put("default", subtitle.defaultSelected)
+        )
+    }
+}
+
 internal fun html5PlayerDocument(
     url: String,
     headers: Map<String, String>,
     subtitles: List<SubtitleTrack>,
     startPositionMs: Long,
     primary1Hex: String = "#440066",
-    accent1Hex: String = "#CC55FF"
+    accent1Hex: String = "#CC55FF",
+    fontSizeTier: Int = 2
 ): String {
     val headerObject = JSONObject().apply { headers.forEach { (name, value) -> put(name, value) } }
-    val subtitleArray = JSONArray().apply {
-        subtitles.forEach { subtitle ->
-            put(
-                JSONObject()
-                    .put("src", subtitle.url)
-                    .put("srclang", subtitle.language)
-                    .put("label", subtitle.label)
-                    .put("kind", "subtitles")
-                    .put("default", subtitle.defaultSelected)
-            )
-        }
-    }
+    val subtitleArray = subtitleTracksJsonArray(subtitles)
     val configuration = JSONObject()
         .put("src", url)
         .put("headers", headerObject)
@@ -93,12 +96,14 @@ internal fun html5PlayerDocument(
         .put("start", startPositionMs.coerceAtLeast(0) / 1000.0)
         .put("primary1", primary1Hex)
         .put("accent1", accent1Hex)
+        .put("fontSizeTier", fontSizeTier.coerceIn(0, 3))
     return """
         <!doctype html>
         <html><head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
           <style>
+            :root{--fs-7vw:.7vw;--fs-20vw:2vw;--fs-25vw:2.5vw;--fs-30vw:3vw}
             html,body,#player{margin:0;width:100%;height:100%;background:#000;overflow:hidden}
             .video-js{position:absolute;inset:0;width:100%;height:100%;background:#000}
             .video-js video{width:100%;height:100%;object-fit:contain}
@@ -120,7 +125,7 @@ internal fun html5PlayerDocument(
             @font-face{font-family:AnimeComicNeue;font-weight:300;src:url('subtitle-fonts/comic_neue_300.ttf') format('truetype')}
             @font-face{font-family:AnimeComicNeue;font-weight:400;src:url('subtitle-fonts/comic_neue.ttf') format('truetype')}
             @font-face{font-family:AnimeComicNeue;font-weight:700;src:url('subtitle-fonts/comic_neue_700.ttf') format('truetype')}
-            video::cue{font-family:var(--caption-font,sans-serif);font-size:var(--caption-size,3vw);font-weight:var(--caption-weight,400);color:var(--caption-color,#fff);background:var(--caption-bg,transparent);text-shadow:var(--caption-outline,none)}
+            video::cue{font-family:var(--caption-font,sans-serif);font-size:var(--caption-size,3vw);line-height:var(--caption-line-height,1.15);font-weight:var(--caption-weight,400);color:var(--caption-color,#fff);background:var(--caption-bg,transparent);text-shadow:var(--caption-outline,none)}
           </style>
           <script>window.HELP_IMPROVE_VIDEOJS=false;</script>
           <script src="video.min.js"></script>
@@ -131,7 +136,10 @@ internal fun html5PlayerDocument(
             var activeQuality=0;
             var activeSubtitleIndex=-1;
             var activeStyle=0;
+            var activeFontTier=Math.max(0,Math.min(3,Number(config.fontSizeTier)||0));
+            var pendingAudioLanguage='';
             var convertedTracks=[];
+            var registeredTracks={};
             var sourceType='application/x-mpegURL';
             var lowerSrc=String(config.src||'').split('?')[0].split('#')[0].toLowerCase();
             if(/\.mp4$/i.test(lowerSrc)||lowerSrc.indexOf('/video.mp4')>-1){
@@ -149,6 +157,32 @@ internal fun html5PlayerDocument(
               controls:false,autoplay:true,preload:'auto',responsive:false,
               sources:[{src:config.src,type:sourceType}],tracks:[]
             });
+            var landscapeTierVars=[
+              {f7:0.7,f20:2.0,f25:2.5,f30:3.0},
+              {f7:0.9,f20:2.2,f25:2.7,f30:3.0},
+              {f7:1.1,f20:2.4,f25:2.9,f30:3.4},
+              {f7:1.2,f20:2.5,f25:3.0,f30:3.5}
+            ];
+            var portraitTierVars=[
+              {f7:0.9,f20:2.2,f25:2.7,f30:3.0},
+              {f7:1.1,f20:2.4,f25:2.9,f30:3.4},
+              {f7:1.4,f20:2.7,f25:3.2,f30:3.7},
+              {f7:1.6,f20:2.9,f25:3.4,f30:3.9}
+            ];
+            function isPortraitViewport(){
+              return (window.matchMedia&&window.matchMedia('(orientation: portrait)').matches)||window.innerHeight>window.innerWidth;
+            }
+            function applyFontSizeTier(tier){
+              activeFontTier=Math.max(0,Math.min(3,Number(tier)||0));
+              var portrait=isPortraitViewport();
+              var unit=portrait?'vh':'vw';
+              var entry=(portrait?portraitTierVars:landscapeTierVars)[activeFontTier];
+              var root=document.documentElement;
+              root.style.setProperty('--fs-7vw',entry.f7+unit);
+              root.style.setProperty('--fs-20vw',entry.f20+unit);
+              root.style.setProperty('--fs-25vw',entry.f25+unit);
+              root.style.setProperty('--fs-30vw',entry.f30+unit);
+            }
             function normalizeVttTime(ts){
               var raw=String(ts||'').trim().replace(',','.');
               var parts=raw.split(':');
@@ -230,41 +264,58 @@ internal fun html5PlayerDocument(
             }
             function applySubtitle(index){
               activeSubtitleIndex=Number(index);
-              var items=config.subtitles||[];
-              var target=(activeSubtitleIndex>=0&&activeSubtitleIndex<items.length)?items[activeSubtitleIndex]:null;
+              var targetTrack=(activeSubtitleIndex>=0)?(registeredTracks[activeSubtitleIndex]||null):null;
+              var targetId=(activeSubtitleIndex>=0)?('animetv-sub-'+activeSubtitleIndex):null;
               var textTracks=video.textTracks();
               for(var i=0;i<textTracks.length;i++){
                 var track=textTracks[i];
-                var matches=target&&(track.label===target.label||track.language===target.srclang);
+                if(track.kind!=='subtitles'&&track.kind!=='captions')continue;
+                var matches=(activeSubtitleIndex>=0)&&((targetTrack&&track===targetTrack)||(targetId&&track.id===targetId));
                 track.mode=matches?'showing':'disabled';
               }
+            }
+            function loadSingleSubtitle(sub,idx){
+              if(!sub||!sub.src||registeredTracks[idx]||convertedTracks[idx])return;
+              function registerVtt(vttText){
+                var srcUrl=sub.src;
+                if(vttText){
+                  var blob=new Blob([vttText],{type:'text/vtt'});
+                  srcUrl=URL.createObjectURL(blob);
+                }
+                convertedTracks[idx]=srcUrl;
+                var trackEl=video.addRemoteTextTrack({
+                  id:'animetv-sub-'+idx,src:srcUrl,srclang:sub.srclang,label:sub.label,kind:'subtitles',default:false
+                },false);
+                if(trackEl&&trackEl.track){
+                  registeredTracks[idx]=trackEl.track;
+                }
+                applySubtitle(activeSubtitleIndex);
+              }
+              fetch(sub.src).then(function(r){
+                if(!r.ok)throw new Error('HTTP '+r.status);
+                return r.text();
+              }).then(function(txt){
+                registerVtt(convertToVttText(txt,sub.src));
+              }).catch(function(){
+                var fetched='';
+                try{fetched=AnimeTV.fetchSubtitle(sub.src)||'';}catch(e){}
+                registerVtt(fetched?convertToVttText(fetched,sub.src):'');
+              });
             }
             function loadAllSubtitles(){
               var list=config.subtitles||[];
               list.forEach(function(sub,idx){
-                function registerVtt(vttText){
-                  var srcUrl=sub.src;
-                  if(vttText){
-                    var blob=new Blob([vttText],{type:'text/vtt'});
-                    srcUrl=URL.createObjectURL(blob);
-                  }
-                  convertedTracks[idx]=srcUrl;
-                  video.addRemoteTextTrack({
-                    src:srcUrl,srclang:sub.srclang,label:sub.label,kind:'subtitles',default:!!sub.default
-                  },false);
-                  if(activeSubtitleIndex>=0)applySubtitle(activeSubtitleIndex);
-                }
-                fetch(sub.src).then(function(r){
-                  if(!r.ok)throw new Error('HTTP '+r.status);
-                  return r.text();
-                }).then(function(txt){
-                  registerVtt(convertToVttText(txt,sub.src));
-                }).catch(function(){
-                  var fetched='';
-                  try{fetched=AnimeTV.fetchSubtitle(sub.src)||'';}catch(e){}
-                  registerVtt(fetched?convertToVttText(fetched,sub.src):'');
-                });
+                loadSingleSubtitle(sub,idx);
               });
+            }
+            function syncSubtitles(raw){
+              var next=Array.isArray(raw)?raw:JSON.parse(String(raw||'[]'));
+              var current=config.subtitles||[];
+              for(var i=current.length;i<next.length;i++){
+                current.push(next[i]);
+                loadSingleSubtitle(next[i],i);
+              }
+              config.subtitles=current;
             }
             function sortedQualityHeights(){
               var levels=video.qualityLevels?video.qualityLevels():null;
@@ -289,6 +340,26 @@ internal fun html5PlayerDocument(
               var targetHeight=res[Math.min(activeQuality-1,res.length-1)];
               for(var i=0;i<levels.length;i++){
                 levels[i].enabled=(Number(levels[i].height)===targetHeight);
+              }
+            }
+            function applyAudioLanguage(value){
+              pendingAudioLanguage=String(value||'').toLowerCase().trim();
+              var tracks=video.audioTracks?video.audioTracks():null;
+              if(!tracks||!tracks.length)return;
+              var req=pendingAudioLanguage;
+              var matched=false;
+              for(var i=0;i<tracks.length;i++){
+                var tr=tracks[i];
+                var lbl=(tr.label||'').toLowerCase().trim();
+                var lang=(tr.language||'').toLowerCase().trim();
+                var hit=req&&(lbl===req||lang===req||lbl.indexOf(req)>=0||lbl.slice(0,3)===req.slice(0,3)||lang.slice(0,3)===req.slice(0,3));
+                tr.enabled=!!hit;
+                if(hit)matched=true;
+              }
+              if(!matched&&tracks.length>0){
+                for(var j=0;j<tracks.length;j++){
+                  tracks[j].enabled=(j===0);
+                }
               }
             }
             function collectAudioLangs(){
@@ -322,6 +393,9 @@ internal fun html5PlayerDocument(
               var rgb=parseInt(clean,16);
               return [(rgb>>16)&255,(rgb>>8)&255,rgb&255];
             }
+            function fmtNum(v){
+              return Number(v.toFixed(4)).toString();
+            }
             function applySubtitleStyle(value){
               activeStyle=Number(value)||0;
               var root=document.documentElement;
@@ -336,27 +410,49 @@ internal fun html5PlayerDocument(
                 'serif','AnimeFira','AnimeItim','AnimeSalsa','AnimeOutfit',
                 'AnimeMerriweather','AnimeCantora','AnimeOpenSans','AnimeRuluko','AnimeComicNeue'
               ];
-              var sizes=['3vw','2.5vw','2vw','3.23vw'];
+              var lineHeights=[1.15,1.15,1.15,1.1,1.1,1.15,1.1,1.1,1.1,1.2];
+              var portrait=isPortraitViewport();
+              var unit=portrait?'vh':'vw';
+              var tierEntry=(portrait?portraitTierVars:landscapeTierVars)[activeFontTier];
+              var sizes=[
+                tierEntry.f30+unit,
+                tierEntry.f25+unit,
+                tierEntry.f20+unit,
+                fmtNum(tierEntry.f30+tierEntry.f7/3)+unit
+              ];
               var weights=['400','700','900','300'];
               var backgrounds=[0,.25,.5,.75,1];
               var colors=['#ffffff','#000000','#00ffff','#ffff00','#ff0000','#00ff00','#6666ff',config.primary1||'#440066',config.accent1||'#cc55ff'];
               var opacities=[1,.95,.9,.85,.8,.75,.7,.65,.6];
+              var opacity=opacities[opacityIndex];
               var rgb=parseHexRgb(colors[colorIndex]);
-              var color='rgba('+rgb[0]+','+rgb[1]+','+rgb[2]+','+opacities[opacityIndex]+')';
-              var background='rgba(0,0,0,'+backgrounds[backgroundIndex]+')';
-              var outlineWidths=[0,1,2,3,4];
-              var outlineWidth=outlineWidths[outlineIndex];
-              var shadowColor=(colorIndex===1||colorIndex===6||colorIndex===7)?'#ffffff':'#000000';
+              var color='rgba('+rgb[0]+','+rgb[1]+','+rgb[2]+','+opacity+')';
+              var background='rgba(0,0,0,'+fmtNum(backgrounds[backgroundIndex]*opacity)+')';
+              var outlineWidths=[0,0.2,0.4,0.6,0.8];
+              var outlineW=outlineWidths[outlineIndex];
+              var shadowRgb=(colorIndex===1||colorIndex===6||colorIndex===7)?'255,255,255':'0,0,0';
+              var shadowColor='rgba('+shadowRgb+','+opacity+')';
               var shadows=[];
-              if(outlineWidth===0){
-                shadows.push('0 0 2px '+shadowColor);
+              if(outlineW===0){
+                shadows.push('0 0 0.1vw '+shadowColor);
               }else{
-                for(var x=-outlineWidth;x<=outlineWidth;x++)for(var y=-outlineWidth;y<=outlineWidth;y++){
-                  if((x!==0||y!==0)&&Math.max(Math.abs(x),Math.abs(y))<=outlineWidth)shadows.push(x+'px '+y+'px 0 '+shadowColor);
+                var steps=16;
+                var radii=(outlineW>=0.4)?[outlineW,outlineW*0.5]:[outlineW];
+                for(var ri=0;ri<radii.length;ri++){
+                  var r=radii[ri];
+                  for(var k=0;k<steps;k++){
+                    var ang=(k*2*Math.PI)/steps;
+                    var dx=fmtNum(Math.cos(ang)*r);
+                    var dy=fmtNum(Math.sin(ang)*r);
+                    shadows.push(dx+'vw '+dy+'vw 0 '+shadowColor);
+                  }
                 }
+                var dropOffset=[0,0.15,0.15,0.2,0.25][outlineIndex];
+                shadows.push(dropOffset+'vw '+dropOffset+'vw 0.05vw rgba(10,10,10,'+fmtNum(0.5*opacity)+')');
               }
               root.style.setProperty('--caption-font',fonts[fontIndex]);
               root.style.setProperty('--caption-size',sizes[sizeIndex]);
+              root.style.setProperty('--caption-line-height',String(lineHeights[fontIndex]));
               root.style.setProperty('--caption-weight',weights[weightIndex]);
               root.style.setProperty('--caption-color',color);
               root.style.setProperty('--caption-bg',background);
@@ -370,26 +466,17 @@ internal fun html5PlayerDocument(
                 else if(command==='speed')video.playbackRate(Number(value)||1);
                 else if(command==='quality')applyQuality(value);
                 else if(command==='subtitle')applySubtitle(value);
-                else if(command==='audio'){
-                  var tracks=video.audioTracks?video.audioTracks():null;
-                  if(tracks){
-                    var req=String(value||'').toLowerCase().trim();
-                    var matched=false;
-                    for(var i=0;i<tracks.length;i++){
-                      var tr=tracks[i];
-                      var lbl=(tr.label||tr.language||'').toLowerCase();
-                      var hit=req&&(lbl.indexOf(req)>=0||lbl.slice(0,3)===req.slice(0,3));
-                      tr.enabled=!!hit;
-                      if(hit)matched=true;
-                    }
-                    if(!matched&&tracks.length>0)tracks[0].enabled=true;
-                  }
-                }else if(command==='scale'){
+                else if(command==='syncSubtitles')syncSubtitles(value);
+                else if(command==='audio')applyAudioLanguage(value);
+                else if(command==='scale'){
                   var fit=Number(value)===1?'cover':Number(value)===2?'fill':'contain';
                   document.documentElement.className='scale-'+(Number(value)||0);
                   var element=document.querySelector('video');if(element)element.style.objectFit=fit;
                 }else if(command==='subtitleStyle'){
                   applySubtitleStyle(value);
+                }else if(command==='fontSizeTier'){
+                  applyFontSizeTier(value);
+                  applySubtitleStyle(activeStyle);
                 }else if(command==='themeColors'){
                   var parts=String(value||'').split(',');
                   if(parts[0])config.primary1=parts[0];
@@ -398,13 +485,38 @@ internal fun html5PlayerDocument(
                 }
               }catch(error){}
             };
+            applyFontSizeTier(activeFontTier);
+            applySubtitleStyle(activeStyle);
+            window.addEventListener('resize',function(){
+              applyFontSizeTier(activeFontTier);
+              applySubtitleStyle(activeStyle);
+            });
+            if(video.textTracks&&video.textTracks()){
+              video.textTracks().on('addtrack',function(ev){
+                var t=ev&&ev.track;
+                if(t&&(t.kind==='subtitles'||t.kind==='captions')){
+                  applySubtitle(activeSubtitleIndex);
+                }
+              });
+            }
+            if(video.audioTracks&&video.audioTracks()){
+              video.audioTracks().on('addtrack',function(){
+                applyAudioLanguage(pendingAudioLanguage);
+                reportVideoInfo();
+              });
+              video.audioTracks().on('change',reportVideoInfo);
+            }
             loadAllSubtitles();
             video.on('loadedmetadata',function(){
               if(config.start>0)video.currentTime(config.start);
               applyQuality(activeQuality);
+              if(pendingAudioLanguage)applyAudioLanguage(pendingAudioLanguage);
               reportVideoInfo();
             });
-            video.on('loadeddata',reportVideoInfo);
+            video.on('loadeddata',function(){
+              if(pendingAudioLanguage)applyAudioLanguage(pendingAudioLanguage);
+              reportVideoInfo();
+            });
             video.on('resize',reportVideoInfo);
             if(video.qualityLevels&&video.qualityLevels()){
               video.qualityLevels().on('addqualitylevel',function(){

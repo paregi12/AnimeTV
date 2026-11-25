@@ -37,6 +37,7 @@ internal class ReAnimePlaybackResolver(
         episodeId: String,
         preferDub: Boolean,
         mirrorIndex: Int,
+        requestedStreamType: PlaybackStreamType? = null,
         source: CatalogSource
     ): PlaybackChoice {
         val parts = episodeId.split('|')
@@ -64,9 +65,14 @@ internal class ReAnimePlaybackResolver(
         val serversArray = flixData.optJSONArray("servers") ?: flixRoot.optJSONArray("servers") ?: JSONArray()
         val allServers = (0 until serversArray.length()).mapNotNull { serversArray.optJSONObject(it) }
             .filter { !it.isNull("dataLink") && it.optString("dataLink").isNotBlank() }
+        val wantDub = when (requestedStreamType) {
+            PlaybackStreamType.DUB -> true
+            PlaybackStreamType.SUB, PlaybackStreamType.SOFTSUB -> false
+            null -> preferDub
+        }
         val preferredServers = allServers.filter {
             val type = it.optString("dataType")
-            if (preferDub) type.equals("dub", ignoreCase = true)
+            if (wantDub) type.equals("dub", ignoreCase = true)
             else !type.equals("dub", ignoreCase = true)
         }
         val candidates = preferredServers.ifEmpty { allServers }
@@ -147,10 +153,10 @@ internal class ReAnimePlaybackResolver(
             headers = mapOf("Referer" to FLIXCLOUD_REFERER),
             subtitles = subtitles,
             skipRanges = skipRanges,
-            selectedStreamType = if (selected.optString("dataType").equals("dub", ignoreCase = true)) {
-                PlaybackStreamType.DUB
-            } else {
-                PlaybackStreamType.SUB
+            selectedStreamType = when {
+                selected.optString("dataType").equals("dub", ignoreCase = true) -> PlaybackStreamType.DUB
+                subtitles.isNotEmpty() -> PlaybackStreamType.SOFTSUB
+                else -> PlaybackStreamType.SUB
             },
             streamServerNames = serverNames,
             selectedStreamServerIndex = selectedServerIndex

@@ -77,7 +77,12 @@ expect fun PlatformPlayer(
     selectedSubtitleIndexOverride: Int? = null,
     onAvailableAudioLanguagesChanged: ((Set<String>) -> Unit)? = null,
     onDetectedVideoHeightsChanged: ((Int, List<Int>) -> Unit)? = null,
-    showBackHint: Boolean = false
+    showBackHint: Boolean = false,
+    currentAnimeId: String = "",
+    metadataFormat: String? = null,
+    metadataQuality: String? = null,
+    metadataRating: String? = null,
+    settingsOverlayOpen: Boolean = false
 )
 
 @Composable

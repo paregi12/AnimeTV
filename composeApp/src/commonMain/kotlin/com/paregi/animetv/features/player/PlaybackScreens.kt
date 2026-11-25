@@ -1,7 +1,11 @@
 package com.paregi.animetv.features.player
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColor
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -14,6 +18,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -40,6 +48,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -54,6 +63,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -65,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
@@ -77,6 +88,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
@@ -84,10 +96,12 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -130,7 +144,9 @@ import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.PlaybackChoice
 import com.paregi.animetv.domain.PlaybackStreamType
 import com.paregi.animetv.domain.SkipRange
+import com.paregi.animetv.domain.SubtitleLanguageCatalog
 import com.paregi.animetv.domain.SubtitleStyleCatalog
+import com.paregi.animetv.domain.SubtitleTrack
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformSubtitleFontFamily
@@ -157,6 +173,15 @@ internal data class PlayerOsdHudState(
     val text: String,
     val progressPercent: Float
 )
+
+private enum class PlaybackQuickDialog {
+    SPEED,
+    STREAM_TYPE,
+    STREAM_SERVER,
+    AUDIO_LANGUAGE,
+    QUALITY,
+    SUBTITLES
+}
 
 @Composable
 internal fun PlaybackScreen(
@@ -197,7 +222,7 @@ internal fun PlaybackScreen(
     startPositionMs: Long,
     seekSeconds: Int,
     videoScale: Int,
-    onVideoScaleChange: (Int) -> Unit = {},
+    @Suppress("UNUSED_PARAMETER") onVideoScaleChange: (Int) -> Unit = {},
     videoBuffer: Int,
     progressiveCache: Boolean,
     cacheSizeMb: Int,
@@ -215,16 +240,15 @@ internal fun PlaybackScreen(
     onToggleWatchlist: (() -> Unit)? = null,
     isTracked: Boolean = false,
     onTrackingClick: (() -> Unit)? = null,
-    onSearchGenre: ((String) -> Unit)? = null
+    onSearchGenre: ((String) -> Unit)? = null,
+    currentAnimeId: String = "",
+    animeFormat: String? = null,
+    animeQuality: String? = null,
+    animeRating: String? = null,
+    settingsOverlayOpen: Boolean = false
 ) {
-    var speedDialogOpen by remember { mutableStateOf(false) }
-    var streamTypeDialogOpen by remember { mutableStateOf(false) }
-    var streamServerDialogOpen by remember { mutableStateOf(false) }
-    var audioLanguageDialogOpen by remember { mutableStateOf(false) }
+    var activeDialog by remember { mutableStateOf<PlaybackQuickDialog?>(null) }
     var subtitleStyleDialogOpen by remember { mutableStateOf(false) }
-    var qualityDialogOpen by remember { mutableStateOf(false) }
-    var scaleDialogOpen by remember { mutableStateOf(false) }
-    var subtitlesDialogOpen by remember { mutableStateOf(false) }
     var dialogSubtitleIndex by remember(choice.url) { mutableIntStateOf(-1) }
     var selectedSubtitleOverride by remember(choice.url, subtitleLanguage, choice.subtitles) {
         mutableStateOf<Int?>(null)
@@ -232,12 +256,12 @@ internal fun PlaybackScreen(
     var availableAudioLanguages by remember(choice.url) { mutableStateOf<Set<String>>(emptySet()) }
     var detectedVideoHeights by remember(choice.url) { mutableStateOf<List<Int>>(emptyList()) }
 
-    val playbackSpeeds = remember { (1..10).map { it * 0.25f } }
     val selectedAudioLanguage = AudioLanguageCatalog.all.firstOrNull { it.code == audioLanguage }
         ?: AudioLanguageCatalog.all.first()
-    val streamTypes = buildList {
-        if (hasSubStream) add(PlaybackStreamType.SUB)
-        if (hasDubStream) add(PlaybackStreamType.DUB)
+    val effectiveAudioLabel = if (isAudioLanguageAvailable(audioLanguage, availableAudioLanguages)) {
+        selectedAudioLanguage.label
+    } else {
+        AudioLanguageCatalog.all.first().label
     }
     val effectiveStreamServerNames = if (streamServerNames.isNotEmpty()) streamServerNames else listOf("Main", "Mirror")
     val selectedStreamServer = effectiveStreamServerNames.getOrNull(selectedStreamServerIndex)
@@ -267,32 +291,32 @@ internal fun PlaybackScreen(
             headers = choice.headers,
             subtitles = choice.subtitles,
             playbackSpeed = playbackSpeed,
-            onPlaybackSpeedDialogRequest = { speedDialogOpen = true },
+            onPlaybackSpeedDialogRequest = { activeDialog = PlaybackQuickDialog.SPEED },
             currentStreamType = choice.selectedStreamType,
             hasSubStream = hasSubStream,
             hasDubStream = hasDubStream,
             subStreamLabel = subStreamLabel,
-            onStreamTypeDialogRequest = { streamTypeDialogOpen = true },
+            onStreamTypeDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_TYPE },
             streamServerLabel = selectedStreamServer,
-            onStreamServerDialogRequest = { streamServerDialogOpen = true },
+            onStreamServerDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_SERVER },
             subtitleLanguage = subtitleLanguage,
             subtitleVariant = subtitleVariant,
             onSubtitleVariantSelected = onSubtitleVariantSelected,
             audioLanguage = audioLanguage,
-            audioLanguageLabel = selectedAudioLanguage.label,
-            onAudioLanguageDialogRequest = { audioLanguageDialogOpen = true },
+            audioLanguageLabel = effectiveAudioLabel,
+            onAudioLanguageDialogRequest = { activeDialog = PlaybackQuickDialog.AUDIO_LANGUAGE },
             subtitleStyle = subtitleStyle,
             onSubtitleStyleDialogRequest = { subtitleStyleDialogOpen = true },
             playbackQuality = playbackQuality,
             onPlaybackQualityChange = onPlaybackQualityChange,
-            onPlaybackQualityDialogRequest = { qualityDialogOpen = true },
+            onPlaybackQualityDialogRequest = { activeDialog = PlaybackQuickDialog.QUALITY },
             skipRanges = choice.skipRanges,
             autoSkipIntro = autoSkipIntro,
             skipFiller = skipFiller,
             startPositionMs = startPositionMs,
             seekSeconds = seekSeconds,
             videoScale = videoScale,
-            onVideoScaleDialogRequest = { scaleDialogOpen = true },
+            onVideoScaleDialogRequest = null,
             videoBuffer = videoBuffer,
             progressiveCache = progressiveCache,
             cacheSizeMb = cacheSizeMb,
@@ -316,19 +340,106 @@ internal fun PlaybackScreen(
             onSearchGenre = onSearchGenre,
             onSubtitlesDialogRequest = { activeIndex ->
                 dialogSubtitleIndex = activeIndex
-                subtitlesDialogOpen = true
+                activeDialog = PlaybackQuickDialog.SUBTITLES
             },
             selectedSubtitleIndexOverride = selectedSubtitleOverride,
             onAvailableAudioLanguagesChanged = { availableAudioLanguages = it },
             onDetectedVideoHeightsChanged = { _, heights -> detectedVideoHeights = heights },
-            showBackHint = showBackHint
+            showBackHint = showBackHint,
+            currentAnimeId = currentAnimeId,
+            metadataFormat = animeFormat,
+            metadataQuality = animeQuality,
+            metadataRating = animeRating,
+            settingsOverlayOpen = settingsOverlayOpen
         )
 
-        AppToastOverlay(
-            message = if (showBackHint) "Press back again to close playback..." else null
+        if (showBackHint) {
+            AppToastOverlay(message = "Press back again to close playback...")
+        }
+
+        PlaybackQuickOptionDialogs(
+            activeDialog = activeDialog,
+            onDismiss = { activeDialog = null },
+            playbackSpeed = playbackSpeed,
+            onPlaybackSpeedChange = onPlaybackSpeedChange,
+            currentStreamType = choice.selectedStreamType,
+            hasSubStream = hasSubStream,
+            hasDubStream = hasDubStream,
+            subStreamLabel = subStreamLabel,
+            onStreamTypeChange = onStreamTypeChange,
+            streamServerNames = effectiveStreamServerNames,
+            selectedStreamServerIndex = selectedStreamServerIndex,
+            onStreamServerChange = onStreamServerChange,
+            audioLanguage = audioLanguage,
+            availableAudioLanguages = availableAudioLanguages,
+            onAudioLanguageChange = onAudioLanguageChange,
+            playbackQuality = playbackQuality,
+            detectedVideoHeights = detectedVideoHeights,
+            onPlaybackQualityChange = onPlaybackQualityChange,
+            subtitles = choice.subtitles,
+            subtitleLanguage = subtitleLanguage,
+            dialogSubtitleIndex = dialogSubtitleIndex,
+            onSubtitleTrackSelect = { trackIndex, formattedVariant ->
+                selectedSubtitleOverride = trackIndex
+                onSubtitleVariantSelected(formattedVariant)
+            }
         )
 
-        if (speedDialogOpen) {
+        if (subtitleStyleDialogOpen) {
+            SubtitleStylePickerDialog(
+                style = subtitleStyle,
+                onChange = onSubtitleStyleChange,
+                onDismiss = { subtitleStyleDialogOpen = false }
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaybackQuickOptionDialogs(
+    activeDialog: PlaybackQuickDialog?,
+    onDismiss: () -> Unit,
+    playbackSpeed: Float,
+    onPlaybackSpeedChange: (Float) -> Unit,
+    currentStreamType: PlaybackStreamType,
+    hasSubStream: Boolean,
+    hasDubStream: Boolean,
+    subStreamLabel: String,
+    onStreamTypeChange: (PlaybackStreamType) -> Unit,
+    streamServerNames: List<String>,
+    selectedStreamServerIndex: Int,
+    onStreamServerChange: (Int) -> Unit,
+    audioLanguage: String,
+    availableAudioLanguages: Set<String>,
+    onAudioLanguageChange: (String) -> Unit,
+    playbackQuality: Int,
+    detectedVideoHeights: List<Int>,
+    onPlaybackQualityChange: (Int) -> Unit,
+    subtitles: List<SubtitleTrack> = emptyList(),
+    subtitleLanguage: String = "",
+    dialogSubtitleIndex: Int = -1,
+    onSubtitleTrackSelect: ((Int, String) -> Unit)? = null
+) {
+    val playbackSpeeds = remember { (1..10).map { it * 0.25f } }
+    val streamTypes = buildList {
+        if (hasSubStream) {
+            if (subStreamLabel.equals("Sub", ignoreCase = true)) {
+                add(if (currentStreamType == PlaybackStreamType.SOFTSUB) PlaybackStreamType.SOFTSUB else PlaybackStreamType.SUB)
+            } else {
+                add(PlaybackStreamType.SUB)
+                add(PlaybackStreamType.SOFTSUB)
+            }
+        } else if (currentStreamType == PlaybackStreamType.SUB || currentStreamType == PlaybackStreamType.SOFTSUB) {
+            add(currentStreamType)
+        }
+        if (hasDubStream || currentStreamType == PlaybackStreamType.DUB) {
+            add(PlaybackStreamType.DUB)
+        }
+    }
+    val effectiveServers = if (streamServerNames.isNotEmpty()) streamServerNames else listOf("Main", "Mirror")
+
+    when (activeDialog) {
+        PlaybackQuickDialog.SPEED -> {
             val selectedIndex = playbackSpeeds.indexOfFirst { abs(it - playbackSpeed) < 0.01f }.coerceAtLeast(0)
             ListOrderDialog(
                 title = "Playback Speed",
@@ -341,45 +452,39 @@ internal fun PlaybackScreen(
                 },
                 mode = ListOrderMode.LIST,
                 initialSelectedIndex = selectedIndex,
-                onDismiss = { speedDialogOpen = false },
+                onDismiss = onDismiss,
                 onSelect = { index, _ ->
                     onPlaybackSpeedChange(playbackSpeeds[index])
-                    speedDialogOpen = false
+                    onDismiss()
                 }
             )
         }
-
-        if (streamTypeDialogOpen) {
-            val selectedIndex = streamTypes.indexOf(choice.selectedStreamType).coerceAtLeast(0)
+        PlaybackQuickDialog.STREAM_TYPE -> {
+            val selectedIndex = streamTypes.indexOf(currentStreamType).coerceAtLeast(0)
             ListOrderDialog(
                 title = "Stream Type",
                 items = streamTypes.map { streamType ->
-                    val label = when (streamType) {
-                        PlaybackStreamType.SUB -> subStreamLabel
-                        PlaybackStreamType.DUB -> "Dub"
-                    }
                     ListOrderItem(
                         id = streamType.name,
-                        title = label,
-                        selected = streamType == choice.selectedStreamType
+                        title = streamTypeDisplayLabel(streamType, subStreamLabel),
+                        selected = streamType == currentStreamType
                     )
                 },
                 mode = ListOrderMode.LIST,
                 initialSelectedIndex = selectedIndex,
-                onDismiss = { streamTypeDialogOpen = false },
+                onDismiss = onDismiss,
                 onSelect = { index, _ ->
                     val chosen = streamTypes[index]
-                    streamTypeDialogOpen = false
-                    if (chosen != choice.selectedStreamType) onStreamTypeChange(chosen)
+                    onDismiss()
+                    if (chosen != currentStreamType) onStreamTypeChange(chosen)
                 }
             )
         }
-
-        if (streamServerDialogOpen) {
-            val selectedIndex = selectedStreamServerIndex.coerceIn(0, effectiveStreamServerNames.lastIndex.coerceAtLeast(0))
+        PlaybackQuickDialog.STREAM_SERVER -> {
+            val selectedIndex = selectedStreamServerIndex.coerceIn(0, effectiveServers.lastIndex.coerceAtLeast(0))
             ListOrderDialog(
                 title = "Stream Server",
-                items = effectiveStreamServerNames.mapIndexed { index, name ->
+                items = effectiveServers.mapIndexed { index, name ->
                     ListOrderItem(
                         id = "server_$index",
                         title = name,
@@ -388,23 +493,21 @@ internal fun PlaybackScreen(
                 },
                 mode = ListOrderMode.LIST,
                 initialSelectedIndex = selectedIndex,
-                onDismiss = { streamServerDialogOpen = false },
+                onDismiss = onDismiss,
                 onSelect = { index, _ ->
-                    streamServerDialogOpen = false
+                    onDismiss()
                     if (index != selectedStreamServerIndex) onStreamServerChange(index)
                 }
             )
         }
-
-        if (audioLanguageDialogOpen) {
+        PlaybackQuickDialog.AUDIO_LANGUAGE -> {
             val selectedIndex = AudioLanguageCatalog.all.indexOfFirst { it.code == audioLanguage }.coerceAtLeast(0)
             ListOrderDialog(
                 title = "Audio Language",
                 items = AudioLanguageCatalog.all.map { language ->
                     val available = isAudioLanguageAvailable(
                         code = language.code,
-                        availableTracks = availableAudioLanguages,
-                        hasDubStream = hasDubStream
+                        availableTracks = availableAudioLanguages
                     )
                     ListOrderItem(
                         id = language.code.ifBlank { "original" },
@@ -415,15 +518,14 @@ internal fun PlaybackScreen(
                 },
                 mode = ListOrderMode.LIST,
                 initialSelectedIndex = selectedIndex,
-                onDismiss = { audioLanguageDialogOpen = false },
+                onDismiss = onDismiss,
                 onSelect = { index, _ ->
                     onAudioLanguageChange(AudioLanguageCatalog.all[index].code)
-                    audioLanguageDialogOpen = false
+                    onDismiss()
                 }
             )
         }
-
-        if (qualityDialogOpen) {
+        PlaybackQuickDialog.QUALITY -> {
             val qualityNames = listOf("Auto", "High", "Medium", "Low")
             val selectedIndex = playbackQuality.coerceIn(0, qualityNames.lastIndex)
             ListOrderDialog(
@@ -439,85 +541,115 @@ internal fun PlaybackScreen(
                 },
                 mode = ListOrderMode.LIST,
                 initialSelectedIndex = selectedIndex,
-                onDismiss = { qualityDialogOpen = false },
+                onDismiss = onDismiss,
                 onSelect = { index, _ ->
                     onPlaybackQualityChange(index)
-                    qualityDialogOpen = false
+                    onDismiss()
                 }
             )
         }
-
-        if (scaleDialogOpen) {
-            val scales = listOf("Normal", "Cover", "Stretch")
-            val selectedIndex = videoScale.coerceIn(0, scales.lastIndex)
-            ListOrderDialog(
-                title = "Video Scaling",
-                items = scales.mapIndexed { index, name ->
+        PlaybackQuickDialog.SUBTITLES -> {
+            val variants = resolveSubVariants(subtitles, subtitleLanguage)
+            if (variants.size > 1) {
+                val langName = targetSubtitleLanguageName(subtitleLanguage)
+                val subtitleRows = variants.map { (origIdx, track) ->
+                    val rawName = track.label.ifBlank { track.language.uppercase().ifBlank { "Track ${origIdx + 1}" } }
+                    val formatted = formatVariantName(rawName, langName)
                     ListOrderItem(
-                        id = "scale_$index",
-                        title = name,
-                        selected = index == selectedIndex
+                        id = "cc_${track.id}_$origIdx",
+                        title = formatted,
+                        selected = origIdx == dialogSubtitleIndex
                     )
-                },
-                mode = ListOrderMode.LIST,
-                initialSelectedIndex = selectedIndex,
-                onDismiss = { scaleDialogOpen = false },
-                onSelect = { index, _ ->
-                    onVideoScaleChange(index)
-                    scaleDialogOpen = false
                 }
-            )
-        }
-
-        if (subtitlesDialogOpen) {
-            val subtitleRows = buildList {
-                add(
-                    ListOrderItem(
-                        id = "cc_off",
-                        title = "Disable Subtitle",
-                        selected = dialogSubtitleIndex < 0
-                    )
-                )
-                choice.subtitles.forEachIndexed { index, track ->
-                    val label = track.label.ifBlank { track.language.uppercase().ifBlank { "Track ${index + 1}" } }
-                    add(
-                        ListOrderItem(
-                            id = "cc_${track.id}_$index",
-                            title = label,
-                            value = track.language.takeIf { it.isNotBlank() && !label.equals(it, ignoreCase = true) }?.uppercase(),
-                            selected = index == dialogSubtitleIndex
+                val initialRowIndex = variants.indexOfFirst { it.first == dialogSubtitleIndex }.coerceAtLeast(0)
+                ListOrderDialog(
+                    title = "Subtitles",
+                    items = subtitleRows,
+                    mode = ListOrderMode.LIST,
+                    initialSelectedIndex = initialRowIndex,
+                    onDismiss = onDismiss,
+                    onSelect = { rowIndex, _ ->
+                        val (origIdx, track) = variants[rowIndex]
+                        val formatted = formatVariantName(
+                            track.label.ifBlank { track.language },
+                            langName
                         )
-                    )
-                }
-            }
-            val initialRowIndex = if (dialogSubtitleIndex >= 0) dialogSubtitleIndex + 1 else 0
-            ListOrderDialog(
-                title = "Subtitles",
-                items = subtitleRows,
-                mode = ListOrderMode.LIST,
-                initialSelectedIndex = initialRowIndex.coerceIn(0, subtitleRows.lastIndex.coerceAtLeast(0)),
-                onDismiss = { subtitlesDialogOpen = false },
-                onSelect = { rowIndex, _ ->
-                    val trackIndex = rowIndex - 1
-                    selectedSubtitleOverride = trackIndex
-                    if (trackIndex >= 0 && trackIndex in choice.subtitles.indices) {
-                        onSubtitleVariantSelected(choice.subtitles[trackIndex].label)
-                    } else {
-                        onSubtitleVariantSelected("")
+                        onSubtitleTrackSelect?.invoke(origIdx, formatted)
+                        onDismiss()
                     }
-                    subtitlesDialogOpen = false
-                }
-            )
+                )
+            } else {
+                onDismiss()
+            }
         }
+        null -> Unit
+    }
+}
 
-        if (subtitleStyleDialogOpen) {
-            SubtitleStylePickerDialog(
-                style = subtitleStyle,
-                onChange = onSubtitleStyleChange,
-                onDismiss = { subtitleStyleDialogOpen = false }
-            )
+private val SUBTITLE_MATCH_LANG_ALIASES = mapOf(
+    "it" to listOf("ita"),
+    "es" to listOf("esp", "spa"),
+    "ar" to listOf("ara"),
+    "fr" to listOf("fra", "fre"),
+    "ru" to listOf("rus"),
+    "de" to listOf("deu", "ger"),
+    "pt" to listOf("por", "bra")
+)
+
+private fun targetSubtitleLanguageCode(subtitleLanguage: String): String =
+    if (subtitleLanguage.isBlank() || subtitleLanguage.equals("hard", ignoreCase = true)) "en"
+    else subtitleLanguage
+
+private fun targetSubtitleLanguageName(subtitleLanguage: String): String? {
+    val code = targetSubtitleLanguageCode(subtitleLanguage)
+    return SubtitleLanguageCatalog.all.firstOrNull { it.code.equals(code, ignoreCase = true) }?.label
+}
+
+private fun resolveSubVariants(
+    subtitles: List<SubtitleTrack>,
+    subtitleLanguage: String
+): List<Pair<Int, SubtitleTrack>> {
+    if (subtitles.size <= 1 || subtitleLanguage.equals("nosub", ignoreCase = true)) return emptyList()
+    val targetLang = targetSubtitleLanguageCode(subtitleLanguage).lowercase()
+    val aliases = SUBTITLE_MATCH_LANG_ALIASES[targetLang]
+    val matches = mutableListOf<Pair<Int, SubtitleTrack>>()
+    if (aliases != null) {
+        subtitles.forEachIndexed { idx, track ->
+            val labelLower = track.label.lowercase()
+            val langLower = track.language.lowercase()
+            if (aliases.any { alias -> labelLower.contains(alias) || langLower.contains(alias) }) {
+                matches += idx to track
+            }
         }
     }
+    if (matches.isEmpty()) {
+        val langName = targetSubtitleLanguageName(subtitleLanguage)?.lowercase()
+        subtitles.forEachIndexed { idx, track ->
+            val labelLower = track.label.lowercase()
+            val langLower = track.language.lowercase()
+            val isMatch = (langName != null && (labelLower == langName || labelLower.contains(langName))) ||
+                langLower == targetLang ||
+                langLower.substringBefore('-') == targetLang.substringBefore('-') ||
+                (targetLang == "en" && (labelLower.contains("eng") || langLower.startsWith("en")))
+            if (isMatch) matches += idx to track
+        }
+    }
+    return matches
+}
+
+private fun formatVariantName(name: String, langName: String?): String {
+    val clean = name.trim()
+    if (!langName.isNullOrBlank()) {
+        val reg = Regex("^${Regex.escape(langName)}\\s*\\((.*)\\)$", RegexOption.IGNORE_CASE)
+        reg.matchEntire(clean)?.groupValues?.getOrNull(1)?.let { return it }
+    }
+    return clean
+}
+
+private fun streamTypeDisplayLabel(type: PlaybackStreamType, subStreamLabel: String): String = when (type) {
+    PlaybackStreamType.SUB -> subStreamLabel
+    PlaybackStreamType.SOFTSUB -> "Softsub"
+    PlaybackStreamType.DUB -> "Dub"
 }
 
 private val ISO_2_TO_3 = mapOf(
@@ -538,11 +670,10 @@ private val ISO_2_TO_3 = mapOf(
 
 private fun isAudioLanguageAvailable(
     code: String,
-    availableTracks: Set<String>,
-    hasDubStream: Boolean
+    availableTracks: Set<String>
 ): Boolean {
     if (code.isEmpty()) return true
-    if (availableTracks.isEmpty()) return hasDubStream && code == "eng"
+    if (availableTracks.isEmpty()) return false
     val target = code.lowercase()
     return availableTracks.any { raw ->
         val norm = raw.substringBefore('-').lowercase()
@@ -639,7 +770,13 @@ internal fun PlaybackOsdContent(
     onAdjustBrightness: (Int) -> Unit,
     onAdjustVolume: (Int) -> Unit,
     onBack: () -> Unit,
-    videoContent: @Composable BoxScope.() -> Unit = {}
+    videoContent: @Composable BoxScope.() -> Unit = {},
+    currentAnimeId: String = "",
+    metadataFormat: String? = null,
+    metadataQuality: String? = null,
+    metadataRating: String? = null,
+    settingsOverlayOpen: Boolean = false,
+    subtitles: List<SubtitleTrack> = emptyList()
 ) {
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
@@ -667,7 +804,7 @@ internal fun PlaybackOsdContent(
     var osdVisible by remember(metadataTitle, episodeLabel) { mutableStateOf(true) }
     var activeZone by remember(metadataTitle, episodeLabel) {
         mutableStateOf(
-            if (hasError || tokens.isTouch) PlaybackMenuZone.TRACKS else PlaybackMenuZone.SETTINGS
+            if (hasError) PlaybackMenuZone.TRACKS else PlaybackMenuZone.SETTINGS
         )
     }
     if (activeZone !in menuZones) {
@@ -679,6 +816,11 @@ internal fun PlaybackOsdContent(
             if (activeZone < PlaybackMenuZone.TRACKS) {
                 activeZone = PlaybackMenuZone.TRACKS
             }
+        }
+    }
+    LaunchedEffect(osdVisible, hasError) {
+        if (!osdVisible && !hasError) {
+            activeZone = PlaybackMenuZone.GENRES
         }
     }
 
@@ -695,8 +837,8 @@ internal fun PlaybackOsdContent(
         }
     }
 
-    // Intercept Back only when OSD is open (on normal playback) or in error mode.
-    PlatformBackHandler(enabled = osdVisible && !hasError) {
+    // Intercept Back only when OSD is open (on normal playback) and Settings drawer is closed.
+    PlatformBackHandler(enabled = osdVisible && !hasError && !settingsOverlayOpen) {
         playClickSound()
         osdVisible = false
     }
@@ -710,7 +852,8 @@ internal fun PlaybackOsdContent(
     val relatedFocusRequester = remember { FocusRequester() }
     val recsFocusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(osdVisible, activeZone) {
+    LaunchedEffect(osdVisible, activeZone, settingsOverlayOpen) {
+        if (settingsOverlayOpen) return@LaunchedEffect
         yield()
         val requester = if (!osdVisible) {
             rootFocusRequester
@@ -731,12 +874,12 @@ internal fun PlaybackOsdContent(
     val currentMenuZones by rememberUpdatedState(menuZones)
     val currentActiveZone by rememberUpdatedState(activeZone)
 
-    fun moveZone(delta: Int): Boolean {
+    fun moveZone(delta: Int, fromTouchSwipe: Boolean = false): Boolean {
         val zones = currentMenuZones
         val currentIdx = zones.indexOf(currentActiveZone).coerceAtLeast(0)
         val targetIdx = currentIdx + delta
         if (targetIdx < 0) {
-            if (!tokens.isTouch && !hasError) {
+            if (!fromTouchSwipe && !hasError) {
                 playClickSound()
                 osdVisible = false
             }
@@ -763,13 +906,6 @@ internal fun PlaybackOsdContent(
         if (!osdVisible && autoSkipIntro) {
             delay(1_800L)
             onImmediateSeek(((range.endSeconds + 1.0) * 1000.0).toLong())
-            onShowOsdHud(
-                PlayerOsdHudState(
-                    icon = IconGlyphs.FastForward,
-                    text = if (range.kind == SkipRange.Kind.INTRO) "Intro skipped" else "Outro skipped",
-                    progressPercent = 100f
-                )
-            )
         }
     }
 
@@ -778,6 +914,7 @@ internal fun PlaybackOsdContent(
     val currentDurState by rememberUpdatedState(durationMs)
     val currentSeekSeconds by rememberUpdatedState(seekSeconds)
     val currentOsdVisible by rememberUpdatedState(osdVisible)
+    val currentSettingsOverlayOpen by rememberUpdatedState(settingsOverlayOpen)
     val currentMoveZone by rememberUpdatedState(::moveZone)
     val currentAdjustBrightness by rememberUpdatedState(onAdjustBrightness)
     val currentAdjustVolume by rememberUpdatedState(onAdjustVolume)
@@ -798,20 +935,35 @@ internal fun PlaybackOsdContent(
         val target = (base + deltaMs).let { if (end > 0L) it.coerceIn(0L, end) else it.coerceAtLeast(0L) }
         gestureSeekMs = target
         currentDebouncedSeek(target)
-        val pct = if (end > 0L) (target.toFloat() / end * 100f).coerceIn(0f, 100f) else 0f
-        currentShowOsdHud(
-            PlayerOsdHudState(
-                icon = if (direction > 0) IconGlyphs.FastForward else IconGlyphs.FastRewind,
-                text = "${formatPlaybackTime(target, end)} of ${formatPlaybackTime(end, end)}",
-                progressPercent = pct
+        if (!currentOsdVisible) {
+            val pct = if (end > 0L) (target.toFloat() / end * 100f).coerceIn(0f, 100f) else 0f
+            currentShowOsdHud(
+                PlayerOsdHudState(
+                    icon = if (direction > 0) IconGlyphs.FastForward else IconGlyphs.FastRewind,
+                    text = "${formatPlaybackTime(target, end)} of ${formatPlaybackTime(end, end)}",
+                    progressPercent = pct
+                )
             )
-        )
+        }
     }
     val currentPerformDeltaSeek by rememberUpdatedState(::performDeltaSeek)
 
     var lastTapTime by remember { mutableStateOf(0L) }
     var lastTapSide by remember { mutableIntStateOf(0) }
     var pendingTapJob by remember { mutableStateOf<Job?>(null) }
+
+    var localRippleSide by remember { mutableStateOf<Int?>(null) }
+    var localRippleNonce by remember { mutableIntStateOf(0) }
+    LaunchedEffect(seekIndicatorSide) {
+        if (seekIndicatorSide != null && seekIndicatorSide != localRippleSide) {
+            localRippleSide = seekIndicatorSide
+            localRippleNonce += 1
+        }
+    }
+    fun triggerLocalSeekRipple(direction: Int) {
+        localRippleSide = direction
+        localRippleNonce += 1
+    }
 
     val epPageSize = 50
     val currentEpIdx = remember(episodes, selectedEpisodeId) {
@@ -820,6 +972,14 @@ internal fun PlaybackOsdContent(
     var episodePage by remember(episodes.size, selectedEpisodeId) {
         mutableIntStateOf(currentEpIdx / epPageSize)
     }
+    var episodePageFocusTarget by remember { mutableStateOf<Int?>(null) }
+    var shelfJumpTarget by remember { mutableStateOf<Pair<PlaybackMenuZone, Boolean>?>(null) }
+
+    fun changeEpisodePage(newPage: Int, focusLast: Boolean) {
+        episodePageFocusTarget = if (focusLast) Int.MAX_VALUE else 0
+        episodePage = newPage
+        bumpInteraction()
+    }
 
     BoxWithConstraints(
         modifier = Modifier
@@ -827,7 +987,9 @@ internal fun PlaybackOsdContent(
             .background(Color.Black)
             .focusRequester(rootFocusRequester)
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                if (currentSettingsOverlayOpen || event.type != KeyEventType.KeyDown) {
+                    return@onPreviewKeyEvent false
+                }
                 bumpInteraction()
                 when (event.key) {
                     Key.Spacebar, Key.MediaPlayPause, Key.MediaPlay, Key.MediaPause -> {
@@ -844,40 +1006,56 @@ internal fun PlaybackOsdContent(
                         }
                         true
                     }
-                    Key.MediaNext -> {
-                        if (hasNext) {
-                            onNextEpisode()
-                        }
-                        true
-                    }
-                    Key.MediaPrevious -> {
-                        if (hasPrevious) {
-                            onPreviousEpisode()
-                        }
-                        true
-                    }
-                    Key.PageUp -> {
-                        if (currentOsdVisible && currentActiveZone == PlaybackMenuZone.EPISODES && episodes.size > epPageSize) {
-                            val maxPage = (episodes.size - 1) / epPageSize
-                            if (episodePage < maxPage) {
-                                playClickSound()
-                                episodePage += 1
+                    Key.MediaNext, Key.MediaPrevious, Key.PageUp, Key.PageDown, Key.ChannelUp, Key.ChannelDown -> {
+                        val isNextKey = event.key == Key.MediaNext
+                        val isPrevKey = event.key == Key.MediaPrevious
+                        val isPgUpKey = event.key == Key.PageUp || event.key == Key.ChannelUp
+                        val isPgDownKey = event.key == Key.PageDown || event.key == Key.ChannelDown
+                        if (!currentOsdVisible || currentActiveZone == PlaybackMenuZone.TRACKS) {
+                            if (episodes.isNotEmpty()) {
+                                activeZone = PlaybackMenuZone.EPISODES
+                                osdVisible = true
                             }
-                        } else if (hasNext) {
-                            onNextEpisode()
-                        }
-                        true
-                    }
-                    Key.PageDown -> {
-                        if (currentOsdVisible && currentActiveZone == PlaybackMenuZone.EPISODES && episodes.size > epPageSize) {
-                            if (episodePage > 0) {
-                                playClickSound()
-                                episodePage -= 1
+                            if (isNextKey || isPgUpKey) {
+                                if (hasNext) onNextEpisode()
+                            } else if (isPrevKey || isPgDownKey) {
+                                if (hasPrevious) onPreviousEpisode()
                             }
-                        } else if (hasPrevious) {
-                            onPreviousEpisode()
+                            true
+                        } else if (currentActiveZone == PlaybackMenuZone.EPISODES) {
+                            val maxPage = (episodes.size - 1).coerceAtLeast(0) / epPageSize
+                            if (isPgUpKey || isPrevKey) {
+                                if (episodes.size > epPageSize && episodePage > 0) {
+                                    playClickSound()
+                                    changeEpisodePage(episodePage - 1, focusLast = true)
+                                } else {
+                                    playClickSound()
+                                    shelfJumpTarget = PlaybackMenuZone.EPISODES to false
+                                }
+                            } else {
+                                if (episodes.size > epPageSize && episodePage < maxPage) {
+                                    playClickSound()
+                                    changeEpisodePage(episodePage + 1, focusLast = false)
+                                } else {
+                                    playClickSound()
+                                    shelfJumpTarget = PlaybackMenuZone.EPISODES to true
+                                }
+                            }
+                            true
+                        } else if (currentActiveZone in setOf(
+                                PlaybackMenuZone.GENRES,
+                                PlaybackMenuZone.SETTINGS,
+                                PlaybackMenuZone.SEASONS,
+                                PlaybackMenuZone.RELATED,
+                                PlaybackMenuZone.RECS
+                            )
+                        ) {
+                            playClickSound()
+                            shelfJumpTarget = currentActiveZone to (isPgDownKey || isNextKey)
+                            true
+                        } else {
+                            false
                         }
-                        true
                     }
                     Key.Back, Key.Escape -> {
                         if (hasError) {
@@ -943,6 +1121,46 @@ internal fun PlaybackOsdContent(
                 }
             }
             .focusable()
+            .pointerInput(hasError) {
+                var wheelAccum = 0f
+                var wheelExpireMs = 0L
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (currentSettingsOverlayOpen || event.type != PointerEventType.Scroll) continue
+                        val rawDelta = event.changes.fold(0f) { acc, change -> acc + change.scrollDelta.y }
+                        if (rawDelta == 0f) continue
+                        val nowMs = gestureClock.elapsedNow().inWholeMilliseconds
+                        if (wheelExpireMs < nowMs) {
+                            wheelAccum = 0f
+                        }
+                        wheelExpireMs = nowMs + 1_000L
+                        val scaledDelta = if (abs(rawDelta) in 0.01f..10f) rawDelta * 100f else rawDelta
+                        wheelAccum += scaledDelta
+                        if (wheelAccum <= -100f) {
+                            wheelAccum = 0f
+                            if (!currentOsdVisible && !hasError) {
+                                playClickSound()
+                                activeZone = PlaybackMenuZone.SETTINGS
+                                osdVisible = true
+                                bumpInteraction()
+                            } else if (currentOsdVisible) {
+                                currentMoveZone(-1, true)
+                            }
+                        } else if (wheelAccum >= 100f) {
+                            wheelAccum = 0f
+                            if (!currentOsdVisible && !hasError) {
+                                playClickSound()
+                                activeZone = PlaybackMenuZone.TRACKS
+                                osdVisible = true
+                                bumpInteraction()
+                            } else if (currentOsdVisible) {
+                                currentMoveZone(1, true)
+                            }
+                        }
+                    }
+                }
+            }
     ) {
         val screenHeightPx = with(density) { maxHeight.toPx() }.roundToInt().coerceAtLeast(1)
 
@@ -971,12 +1189,13 @@ internal fun PlaybackOsdContent(
                 .pointerInput(disableTouchGestures, seekSeconds, hasError) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.isConsumed) return@awaitEachGesture
+                        if (down.isConsumed || currentSettingsOverlayOpen) return@awaitEachGesture
                         val downX = down.position.x
                         val downY = down.position.y
                         val downTime = gestureClock.elapsedNow().inWholeMilliseconds
                         var isDrag = false
-                        var mode = 0 // 1=horiz seek, 2=left brightness, 3=right volume, 4=center zone swipe
+                        // 1=horiz seek, 2=left brightness, 3=right volume, 4=OSD zone swipe, 5=closed center/disabled vert swipe
+                        var mode = 0
                         var horizontalCarry = 0f
                         var verticalCarry = 0f
                         var nextSeekThreshold = size.width * 0.07f
@@ -1003,10 +1222,11 @@ internal fun PlaybackOsdContent(
                                     pendingTapJob?.cancel()
                                     pendingTapJob = null
                                     mode = when {
-                                        totalDx > totalDy && !disableTouchGestures && !hasError -> 1
-                                        totalDy > totalDx && !disableTouchGestures && downX < size.width * 0.2f -> 2
-                                        totalDy > totalDx && !disableTouchGestures && downX > size.width * 0.8f -> 3
+                                        totalDx > totalDy && !currentOsdVisible && !disableTouchGestures && !hasError -> 1
+                                        totalDy > totalDx && !currentOsdVisible && !disableTouchGestures && downX < size.width * 0.2f -> 2
+                                        totalDy > totalDx && !currentOsdVisible && !disableTouchGestures && downX > size.width * 0.8f -> 3
                                         totalDy > totalDx && currentOsdVisible -> 4
+                                        totalDy > totalDx && !currentOsdVisible && !hasError -> 5
                                         else -> 0
                                     }
                                 }
@@ -1035,11 +1255,24 @@ internal fun PlaybackOsdContent(
                                     }
                                     4 -> {
                                         verticalCarry += dragAmount.y
-                                        val stepPx = size.height * 0.08f
-                                        if (abs(verticalCarry) >= stepPx) {
+                                        val stepPx = size.width * 0.07f
+                                        if (stepPx > 0f && abs(verticalCarry) >= stepPx) {
                                             val delta = if (verticalCarry < 0f) 1 else -1
                                             verticalCarry = 0f
-                                            currentMoveZone(delta)
+                                            currentMoveZone(delta, true)
+                                        }
+                                    }
+                                    5 -> {
+                                        verticalCarry += dragAmount.y
+                                        val stepPx = size.width * 0.07f
+                                        if (stepPx > 0f && abs(verticalCarry) >= stepPx) {
+                                            val openingTracks = verticalCarry < 0f
+                                            verticalCarry = 0f
+                                            playClickSound()
+                                            bumpInteraction()
+                                            activeZone = if (openingTracks) PlaybackMenuZone.TRACKS else PlaybackMenuZone.SETTINGS
+                                            osdVisible = true
+                                            mode = 4
                                         }
                                     }
                                 }
@@ -1057,7 +1290,7 @@ internal fun PlaybackOsdContent(
                                     downX > size.width * 0.8f -> 2
                                     else -> 0
                                 }
-                                if (tapSide == 0 || disableTouchGestures || hasError) {
+                                if (tapSide == 0 || hasError) {
                                     pendingTapJob?.cancel()
                                     pendingTapJob = null
                                     lastTapTime = 0L
@@ -1070,10 +1303,11 @@ internal fun PlaybackOsdContent(
                                     if (isDouble) {
                                         pendingTapJob?.cancel()
                                         pendingTapJob = null
-                                        lastTapTime = 0L
-                                        lastTapSide = 0
+                                        lastTapTime = downTime
+                                        lastTapSide = tapSide
                                         val direction = if (tapSide == 2) 1 else -1
                                         currentPerformDeltaSeek(direction)
+                                        triggerLocalSeekRipple(direction)
                                         currentShowSeekIndicator(direction)
                                     } else {
                                         lastTapTime = downTime
@@ -1095,6 +1329,20 @@ internal fun PlaybackOsdContent(
                 }
         )
 
+        // #pb_loading sits behind #pb_meta & #pb_actions (z-index: 10 vs 30/50).
+        AnimatedVisibility(
+            visible = isLoading && !hasError,
+            enter = if (tokens.tim5s == 0) EnterTransition.None else fadeIn(
+                tween(durationMillis = tokens.tim5s, easing = tokens.easing)
+            ),
+            exit = if (tokens.tim5s == 0) ExitTransition.None else fadeOut(
+                tween(durationMillis = tokens.tim5s, easing = tokens.easing)
+            ),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            PlaybackLoadingScreen()
+        }
+
         // #pb_meta: Zone 1 (active when osdVisible && activeZone <= SETTINGS)
         val isMetaVisible = osdVisible && (activeZone == PlaybackMenuZone.GENRES || activeZone == PlaybackMenuZone.SETTINGS)
         PlaybackMetaLayer(
@@ -1103,9 +1351,11 @@ internal fun PlaybackOsdContent(
             title = metadataTitle,
             description = metadataDescription,
             genres = metadataGenres,
+            metadataFormat = metadataFormat,
+            metadataQuality = metadataQuality,
+            metadataRating = metadataRating,
             episodesCount = episodes.size,
             seasonsCount = seasons.size,
-            detectedVideoHeight = detectedVideoHeight,
             currentStreamType = currentStreamType,
             hasSubStream = hasSubStream,
             hasDubStream = hasDubStream,
@@ -1113,15 +1363,20 @@ internal fun PlaybackOsdContent(
             streamServerLabel = streamServerLabel,
             playbackSpeed = playbackSpeed,
             playbackQuality = playbackQuality,
+            detectedVideoHeight = detectedVideoHeight,
+            subtitleLanguage = subtitleLanguage,
+            subtitles = subtitles,
             subtitlesCount = subtitlesCount,
             selectedSubtitleLabel = selectedSubtitleLabel,
             audioLanguageLabel = audioLanguageLabel,
             inWatchlist = inWatchlist,
             isTracked = isTracked,
             activeZone = activeZone,
+            shelfJumpTarget = shelfJumpTarget,
+            onShelfJumpHandled = { shelfJumpTarget = null },
             genresFocusRequester = genresFocusRequester,
             settingsFocusRequester = settingsFocusRequester,
-            onMoveZone = ::moveZone,
+            onMoveZone = { d -> moveZone(d) },
             onBumpInteraction = ::bumpInteraction,
             onToggleWatchlist = onToggleWatchlist,
             onTrackingClick = onTrackingClick,
@@ -1155,10 +1410,17 @@ internal fun PlaybackOsdContent(
             episodes = episodes,
             selectedEpisodeId = selectedEpisodeId,
             episodePage = episodePage,
-            onEpisodePageChange = { episodePage = it },
+            episodePageFocusTarget = episodePageFocusTarget,
+            onEpisodePageFocusHandled = { episodePageFocusTarget = null },
+            onEpisodePageChange = { newPage, focusLast ->
+                changeEpisodePage(newPage, focusLast)
+            },
+            currentAnimeId = currentAnimeId,
             seasons = seasons,
             related = related,
             recommendations = recommendations,
+            shelfJumpTarget = shelfJumpTarget,
+            onShelfJumpHandled = { shelfJumpTarget = null },
             tracksFocusRequester = tracksFocusRequester,
             episodesFocusRequester = episodesFocusRequester,
             seasonsFocusRequester = seasonsFocusRequester,
@@ -1168,7 +1430,7 @@ internal fun PlaybackOsdContent(
                 activeZone = zone
                 bumpInteraction()
             },
-            onMoveZone = ::moveZone,
+            onMoveZone = { d -> moveZone(d) },
             onSeekDelta = ::performDeltaSeek,
             onSeekTarget = { target ->
                 gestureSeekMs = target
@@ -1216,26 +1478,29 @@ internal fun PlaybackOsdContent(
                             .align(Alignment.TopStart)
                             .padding(start = tokens.vw * 3f, top = tokens.vw * 3f)
                     )
-                    if (!isLoading || hasError) {
+                    val showCenterTouchControls = !(isLoading && durationMs <= 0L) && !hasError
+                    if (showCenterTouchControls) {
+                        val sideButtonSize = tokens.fs30 + tokens.vw * 3f
                         Row(
                             modifier = Modifier.align(Alignment.Center),
                             horizontalArrangement = Arrangement.spacedBy(tokens.vw * 8f),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (hasPrevious && !hasError) {
+                            if (hasPrevious) {
                                 PlaybackTouchCircleButton(
                                     icon = IconGlyphs.Previous,
-                                    buttonSize = tokens.fs30 + tokens.vw * 3f,
+                                    buttonSize = sideButtonSize,
                                     iconSize = fsSp(tokens.fs30),
                                     onClick = {
                                         onPreviousEpisode()
                                         bumpInteraction()
                                     }
                                 )
+                            } else {
+                                Spacer(Modifier.size(sideButtonSize))
                             }
                             PlaybackTouchCircleButton(
                                 icon = when {
-                                    hasError -> IconGlyphs.Warning
                                     isEnded -> IconGlyphs.Replay
                                     isPlaying -> IconGlyphs.Pause
                                     else -> IconGlyphs.Play
@@ -1243,24 +1508,22 @@ internal fun PlaybackOsdContent(
                                 buttonSize = tokens.fs60 + tokens.vw * 6f,
                                 iconSize = fsSp(tokens.fs60),
                                 onClick = {
-                                    if (!hasError) {
-                                        onTogglePlay(true)
-                                        if (!isPlaying) osdVisible = false
-                                    } else {
-                                        activeZone = PlaybackMenuZone.SETTINGS
-                                    }
+                                    onTogglePlay(true)
+                                    if (!isPlaying) osdVisible = false
                                 }
                             )
-                            if (hasNext && !hasError) {
+                            if (hasNext) {
                                 PlaybackTouchCircleButton(
                                     icon = IconGlyphs.Next,
-                                    buttonSize = tokens.fs30 + tokens.vw * 3f,
+                                    buttonSize = sideButtonSize,
                                     iconSize = fsSp(tokens.fs30),
                                     onClick = {
                                         onNextEpisode()
                                         bumpInteraction()
                                     }
                                 )
+                            } else {
+                                Spacer(Modifier.size(sideButtonSize))
                             }
                         }
                     }
@@ -1268,13 +1531,14 @@ internal fun PlaybackOsdContent(
             }
         }
 
-        // #pb_action_streamtype: top-right badge visible whenever OSD is shown.
+        // #pb_action_streamtype: top-right badge visible whenever OSD is shown (hidden on error).
+        val showStreamType = osdVisible && !hasError
         val streamTypeAlpha by animateFloatAsState(
-            targetValue = if (osdVisible) 1f else 0f,
+            targetValue = if (showStreamType) 1f else 0f,
             animationSpec = tween(durationMillis = tokens.tim5s, easing = tokens.easing),
             label = "pb-streamtype-alpha"
         )
-        if (osdVisible || streamTypeAlpha > 0.01f) {
+        if (showStreamType || streamTypeAlpha > 0.01f) {
             StreamTypeTopBadge(
                 currentStreamType = currentStreamType,
                 subStreamLabel = subStreamLabel,
@@ -1292,32 +1556,63 @@ internal fun PlaybackOsdContent(
             )
         }
 
-        // #pb_events: Skip Intro / Outro pill, hidden while OSD is open.
-        if (!osdVisible && activeSkip != null) {
-            PlaybackSkipEventPill(
-                skipRange = activeSkip,
-                autoSkip = autoSkipIntro,
-                tokens = tokens,
-                colors = colors,
-                shadowsDisabled = shadowsDisabled,
-                textShadowDisabled = textShadowDisabled,
-                onSkip = {
-                    onImmediateSeek(((activeSkip.endSeconds + 1.0) * 1000.0).toLong())
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = tokens.vw * 5f, bottom = tokens.vw * 5f)
-            )
+        // #pb_events: Skip Intro / Outro pill, fades over 200ms when OSD opens/closes.
+        var lastSkipForFade by remember { mutableStateOf<SkipRange?>(null) }
+        if (activeSkip != null) {
+            lastSkipForFade = activeSkip
+        }
+        AnimatedVisibility(
+            visible = !osdVisible && activeSkip != null,
+            enter = if (tokens.tim2s == 0) EnterTransition.None else fadeIn(
+                tween(durationMillis = tokens.tim2s, easing = tokens.easing)
+            ),
+            exit = if (tokens.tim2s == 0) ExitTransition.None else fadeOut(
+                tween(durationMillis = tokens.tim2s, easing = tokens.easing)
+            ),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = tokens.vw * 5f, bottom = tokens.vw * 5f)
+        ) {
+            val skipToRender = activeSkip ?: lastSkipForFade
+            if (skipToRender != null) {
+                PlaybackSkipEventPill(
+                    skipRange = skipToRender,
+                    autoSkip = autoSkipIntro,
+                    tokens = tokens,
+                    colors = colors,
+                    shadowsDisabled = shadowsDisabled,
+                    textShadowDisabled = textShadowDisabled,
+                    onSkip = {
+                        onImmediateSeek(((skipToRender.endSeconds + 1.0) * 1000.0).toLong())
+                    }
+                )
+            }
         }
 
-        // Blank double-tap seek edge indicator circle.
-        AnimatedVisibility(
-            visible = seekIndicatorSide != null,
-            enter = fadeIn(tween(80)) + scaleIn(initialScale = 0.8f, animationSpec = tween(80)),
-            exit = fadeOut(tween(tokens.tim4s)) + scaleOut(targetScale = 0.1f, animationSpec = tween(tokens.tim4s)),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            seekIndicatorSide?.let { side ->
+        // Blank double-tap seek edge indicator semicircle (edge-anchored scaleX 0.8 -> 0.1).
+        val rippleAlpha = remember { Animatable(0f) }
+        val rippleScaleX = remember { Animatable(0.8f) }
+        LaunchedEffect(localRippleNonce) {
+            val side = localRippleSide
+            if (localRippleNonce > 0 && side != null) {
+                rippleAlpha.snapTo(1f)
+                rippleScaleX.snapTo(0.8f)
+                delay(50L)
+                coroutineScope.launch {
+                    rippleScaleX.animateTo(
+                        targetValue = 0.1f,
+                        animationSpec = tween(durationMillis = tokens.tim4s, easing = EaseOut)
+                    )
+                }
+                rippleAlpha.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(durationMillis = tokens.tim4s, easing = EaseOut)
+                )
+                localRippleSide = null
+            }
+        }
+        localRippleSide?.let { side ->
+            if (rippleAlpha.value > 0.005f) {
                 val isRight = side > 0
                 val circleSize = maxHeight
                 Box(
@@ -1328,6 +1623,11 @@ internal fun PlaybackOsdContent(
                         modifier = Modifier
                             .size(circleSize)
                             .offset(x = if (isRight) circleSize * 0.5f else -circleSize * 0.5f)
+                            .graphicsLayer {
+                                scaleX = rippleScaleX.value
+                                alpha = rippleAlpha.value
+                                transformOrigin = TransformOrigin.Center
+                            }
                             .clip(CircleShape)
                             .background(Color(230, 230, 230).copy(alpha = 0.20f))
                     )
@@ -1336,12 +1636,15 @@ internal fun PlaybackOsdContent(
         }
 
         // #pb_osd: Top-center floating HUD for seek, volume, and brightness.
+        val osdSlidePx = with(density) { (tokens.vw * 2f).roundToPx() }
         AnimatedVisibility(
             visible = osdHudState != null,
             enter = fadeIn(tween(tokens.tim3s, easing = tokens.easing)) +
-                scaleIn(initialScale = 0.9f, animationSpec = tween(tokens.tim3s, easing = tokens.easing)),
+                scaleIn(initialScale = 0.9f, animationSpec = tween(tokens.tim3s, easing = tokens.easing)) +
+                slideInVertically(tween(tokens.tim3s, easing = tokens.easing)) { -osdSlidePx },
             exit = fadeOut(tween(tokens.tim3s, easing = tokens.easing)) +
-                scaleOut(targetScale = 0.9f, animationSpec = tween(tokens.tim3s, easing = tokens.easing)),
+                scaleOut(targetScale = 0.9f, animationSpec = tween(tokens.tim3s, easing = tokens.easing)) +
+                slideOutVertically(tween(tokens.tim3s, easing = tokens.easing)) { -osdSlidePx },
             modifier = Modifier.align(Alignment.TopCenter).padding(top = tokens.vw * 3f)
         ) {
             osdHudState?.let { osd ->
@@ -1358,7 +1661,7 @@ internal fun PlaybackOsdContent(
                     ) {
                         Text(
                             text = osd.icon,
-                            color = Color.White,
+                            color = Color.White.copy(alpha = 0.8f),
                             fontFamily = LocalIconFont.current,
                             fontSize = fsSp(tokens.fs14)
                         )
@@ -1369,35 +1672,43 @@ internal fun PlaybackOsdContent(
                         )
                     }
                     Spacer(Modifier.height(tokens.vw * 0.5f))
+                    val osdBorderWidth = (tokens.vw * 0.1f).coerceAtLeast(0.5.dp)
+                    val osdPad = (tokens.vw * 0.1f).coerceAtLeast(1.dp)
                     Box(
                         modifier = Modifier
-                            .width(tokens.vw * 20f)
-                            .height(tokens.vw * 1f)
                             .clip(RoundedCornerShape(tokens.vw * 1f))
                             .background(Color.Black.copy(alpha = 0.8f))
-                            .border((tokens.vw * 0.1f).coerceAtLeast(0.5.dp), Color.White.copy(alpha = 0.5f), RoundedCornerShape(tokens.vw * 1f))
-                            .padding((tokens.vw * 0.1f).coerceAtLeast(1.dp))
+                            .border(osdBorderWidth, Color.White.copy(alpha = 0.5f), RoundedCornerShape(tokens.vw * 1f))
+                            .padding(osdBorderWidth + osdPad)
                     ) {
-                        val animatedWidth by animateFloatAsState(
-                            targetValue = (osd.progressPercent / 100f).coerceIn(0f, 1f),
-                            animationSpec = tween(durationMillis = tokens.tim5s, easing = tokens.easing),
-                            label = "pb-osd-progress"
-                        )
                         Box(
                             modifier = Modifier
-                                .fillMaxHeight()
-                                .fillMaxWidth(animatedWidth)
+                                .width(tokens.vw * 20f)
+                                .height(tokens.vw * 1f)
                                 .clip(RoundedCornerShape(tokens.vw * 1f))
-                                .background(colors.accent1)
-                        )
+                        ) {
+                            val animatedWidth by animateFloatAsState(
+                                targetValue = (osd.progressPercent / 100f).coerceIn(0f, 1f),
+                                animationSpec = tween(durationMillis = tokens.tim5s, easing = tokens.easing),
+                                label = "pb-osd-progress"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(animatedWidth)
+                                    .clip(RoundedCornerShape(tokens.vw * 1f))
+                                    .background(colors.accent1)
+                            )
+                        }
                     }
-                    Spacer(Modifier.height(tokens.vw * 0.3f))
+                    Spacer(Modifier.height(tokens.vw * 0.5f))
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlaybackMetaLayer(
@@ -1406,9 +1717,11 @@ private fun PlaybackMetaLayer(
     title: String,
     description: String,
     genres: List<String>,
+    metadataFormat: String?,
+    metadataQuality: String?,
+    metadataRating: String?,
     episodesCount: Int,
     seasonsCount: Int,
-    detectedVideoHeight: Int,
     currentStreamType: PlaybackStreamType,
     hasSubStream: Boolean,
     hasDubStream: Boolean,
@@ -1416,12 +1729,17 @@ private fun PlaybackMetaLayer(
     streamServerLabel: String?,
     playbackSpeed: Float,
     playbackQuality: Int,
+    detectedVideoHeight: Int,
+    subtitleLanguage: String,
+    subtitles: List<SubtitleTrack>,
     subtitlesCount: Int,
     selectedSubtitleLabel: String?,
     audioLanguageLabel: String,
     inWatchlist: Boolean,
     isTracked: Boolean,
     activeZone: PlaybackMenuZone,
+    shelfJumpTarget: Pair<PlaybackMenuZone, Boolean>?,
+    onShelfJumpHandled: () -> Unit,
     genresFocusRequester: FocusRequester,
     settingsFocusRequester: FocusRequester,
     onMoveZone: (Int) -> Boolean,
@@ -1464,7 +1782,7 @@ private fun PlaybackMetaLayer(
     )
     val genresOffset by animateFloatAsState(
         targetValue = if (visible) 0f else 1f,
-        animationSpec = tween(durationMillis = tokens.tim5s, easing = tokens.easing),
+        animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing),
         label = "pb-genres-slide"
     )
     val settingsOffset by animateFloatAsState(
@@ -1479,6 +1797,8 @@ private fun PlaybackMetaLayer(
 
     val genresState = rememberLazyListState()
     val settingsState = rememberLazyListState()
+    var genresSelectedIdx by remember(genres) { mutableIntStateOf(0) }
+    var settingsSelectedIdx by remember { mutableIntStateOf(0) }
 
     Box(
         modifier = Modifier
@@ -1496,15 +1816,13 @@ private fun PlaybackMetaLayer(
         Column(
             modifier = Modifier.align(Alignment.TopStart)
         ) {
-            // #pb_title: 40vw width, no metadataArtist underneath.
+            // #pb_title: 40vw width, unrestricted lines like CSS.
             Text(
                 text = title,
                 color = Color.White,
                 fontSize = fsSp(tokens.vw * 3f),
                 fontWeight = FontWeight.Bold,
                 lineHeight = fsSp(tokens.vw * 3.4f),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
                 style = LocalTextStyle.current.copy(shadow = metaTextShadow),
                 modifier = Modifier
                     .width(tokens.vw * 40f)
@@ -1512,7 +1830,7 @@ private fun PlaybackMetaLayer(
                     .graphicsLayer { translationX = (tokens.vw * 5f).toPx() * titleOffset }
             )
 
-            // #pb_genres: Watchlist, Tracking, and all genres (uncapped).
+            // #pb_genres: Watchlist, Tracking, optional format/type pill, and all genres.
             val genreItems = buildList {
                 if (onToggleWatchlist != null) {
                     add(
@@ -1529,8 +1847,18 @@ private fun PlaybackMetaLayer(
                         PlaybackChipSpec(
                             id = "tracking",
                             icon = IconGlyphs.DataExploration,
-                            label = if (isTracked) "Tracked" else "Tracking",
+                            label = "Tracking",
                             onClick = onTrackingClick
+                        )
+                    )
+                }
+                metadataFormat?.trim()?.takeIf { it.isNotEmpty() }?.let { formatLabel ->
+                    add(
+                        PlaybackChipSpec(
+                            id = "format_$formatLabel",
+                            icon = null,
+                            label = formatLabel,
+                            onClick = { onSearchGenre?.invoke(formatLabel) }
                         )
                     )
                 }
@@ -1547,6 +1875,22 @@ private fun PlaybackMetaLayer(
             }
             if (genreItems.isNotEmpty()) {
                 val genresRowActive = visible && activeZone == PlaybackMenuZone.GENRES
+                val safeGenresSel = genresSelectedIdx.coerceIn(0, genreItems.lastIndex)
+                val genresFadeLeft by remember(genresState) {
+                    derivedStateOf {
+                        genresState.firstVisibleItemIndex > 0 || genresState.firstVisibleItemScrollOffset > 0
+                    }
+                }
+                LaunchedEffect(shelfJumpTarget, genreItems.size, genresRowActive) {
+                    if (genresRowActive && shelfJumpTarget?.first == PlaybackMenuZone.GENRES) {
+                        val target = if (shelfJumpTarget.second) genreItems.lastIndex else 0
+                        genresSelectedIdx = target
+                        genresState.scrollToItem(target)
+                        yield()
+                        runCatching { genresFocusRequester.requestFocus() }
+                        onShelfJumpHandled()
+                    }
+                }
                 LazyRow(
                     state = genresState,
                     horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.5f),
@@ -1554,7 +1898,11 @@ private fun PlaybackMetaLayer(
                         .width(tokens.vw * 50f)
                         .padding(bottom = tokens.vw * 1f)
                         .graphicsLayer { translationX = (tokens.vw * 20f).toPx() * genresOffset }
-                        .then(if (!maskDisabled) Modifier.horizontalEdgeFadeMask() else Modifier)
+                        .then(
+                            if (!maskDisabled) {
+                                Modifier.horizontalEdgeFadeMask(fadeLeft = genresFadeLeft, fadeRight = true)
+                            } else Modifier
+                        )
                         .onPreviewKeyEvent { ev ->
                             if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                             when (ev.key) {
@@ -1574,11 +1922,13 @@ private fun PlaybackMetaLayer(
                             textShadowDisabled = textShadowDisabled,
                             tokens = tokens,
                             colors = colors,
-                            modifier = if (idx == 0) Modifier.focusRequester(genresFocusRequester) else Modifier,
+                            modifier = if (idx == safeGenresSel) Modifier.focusRequester(genresFocusRequester) else Modifier,
                             onFocused = {
+                                genresSelectedIdx = idx
                                 onBumpInteraction()
                             },
                             onClick = {
+                                genresSelectedIdx = idx
                                 onBumpInteraction()
                                 item.onClick()
                             }
@@ -1587,12 +1937,11 @@ private fun PlaybackMetaLayer(
                 }
             }
 
-            // #pb_desc: 50vw width with dark info pills and synopsis.
+            // #pb_desc: 50vw width with type/quality/rating/seasons/episodes pills and synopsis.
             val infoPills = buildList {
-                if (detectedVideoHeight > 0) add("${detectedVideoHeight}P")
-                if (hasSubStream || hasDubStream) {
-                    add(if (currentStreamType == PlaybackStreamType.DUB) "DUB" else subStreamLabel.uppercase())
-                }
+                metadataFormat?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
+                metadataQuality?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
+                metadataRating?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
                 if (seasonsCount > 0) add("$seasonsCount SEASONS")
                 if (episodesCount > 1) add("$episodesCount EPISODES")
             }
@@ -1600,6 +1949,7 @@ private fun PlaybackMetaLayer(
                 modifier = Modifier
                     .width(tokens.vw * 50f)
                     .padding(bottom = tokens.vw * 1.5f)
+                    .heightIn(max = (tokens.screenHeight - tokens.vw * 26f).coerceAtLeast(tokens.vw * 10f))
                     .graphicsLayer { translationX = (tokens.vw * 15f).toPx() * descOffset }
             ) {
                 if (infoPills.isNotEmpty()) {
@@ -1637,7 +1987,7 @@ private fun PlaybackMetaLayer(
                     }
                 }
                 if (description.isNotBlank()) {
-                    val maxDescLines = if (tokens.fs13 > tokens.u * 1.5f) 8 else 10
+                    val maxDescLines = if (tokens.fs13 > tokens.u * 1.35f) 8 else 10
                     Text(
                         text = description,
                         color = Color.White,
@@ -1663,6 +2013,12 @@ private fun PlaybackMetaLayer(
             append(qualityNames[playbackQuality.coerceIn(0, qualityNames.lastIndex)])
             if (detectedVideoHeight > 0) append(" ${detectedVideoHeight}p")
         }
+        val subVariants = resolveSubVariants(subtitles, subtitleLanguage)
+        val langNameForVariant = targetSubtitleLanguageName(subtitleLanguage)
+        val subTrackChipLabel = selectedSubtitleLabel
+            ?.takeIf { it.isNotBlank() }
+            ?.let { formatVariantName(it, langNameForVariant) }
+            ?: "Subtitles"
         val settingsChips = buildList {
             if (onOpenSettings != null) {
                 add(PlaybackChipSpec("settings", IconGlyphs.Settings, "Settings") { onOpenSettings() })
@@ -1692,16 +2048,16 @@ private fun PlaybackMetaLayer(
                     PlaybackChipSpec(
                         "streamtype",
                         if (isDub) IconGlyphs.Mic else IconGlyphs.ClosedCaption,
-                        if (isDub) "Dub" else subStreamLabel
+                        streamTypeDisplayLabel(currentStreamType, subStreamLabel)
                     ) { onStreamTypeDialogRequest() }
                 )
             }
-            if (subtitlesCount > 0 && onSubtitlesDialogRequest != null) {
+            if ((subVariants.size > 1 && subtitlesCount > 1) && onSubtitlesDialogRequest != null) {
                 add(
                     PlaybackChipSpec(
                         "subtrack",
                         IconGlyphs.ClosedCaption,
-                        selectedSubtitleLabel ?: "CC Off"
+                        subTrackChipLabel
                     ) { onSubtitlesDialogRequest() }
                 )
             }
@@ -1714,6 +2070,22 @@ private fun PlaybackMetaLayer(
             )
         }
         val settingsRowActive = visible && activeZone == PlaybackMenuZone.SETTINGS
+        val safeSettingsSel = settingsSelectedIdx.coerceIn(0, settingsChips.lastIndex.coerceAtLeast(0))
+        val settingsFadeLeft by remember(settingsState) {
+            derivedStateOf {
+                settingsState.firstVisibleItemIndex > 0 || settingsState.firstVisibleItemScrollOffset > 0
+            }
+        }
+        LaunchedEffect(shelfJumpTarget, settingsChips.size, settingsRowActive) {
+            if (settingsRowActive && shelfJumpTarget?.first == PlaybackMenuZone.SETTINGS && settingsChips.isNotEmpty()) {
+                val target = if (shelfJumpTarget.second) settingsChips.lastIndex else 0
+                settingsSelectedIdx = target
+                settingsState.scrollToItem(target)
+                yield()
+                runCatching { settingsFocusRequester.requestFocus() }
+                onShelfJumpHandled()
+            }
+        }
         LazyRow(
             state = settingsState,
             horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.5f),
@@ -1722,7 +2094,11 @@ private fun PlaybackMetaLayer(
                 .width(tokens.vw * 80f)
                 .padding(bottom = tokens.vw * 1f)
                 .graphicsLayer { translationX = (tokens.vw * 25f).toPx() * settingsOffset }
-                .then(if (!maskDisabled) Modifier.horizontalEdgeFadeMask() else Modifier)
+                .then(
+                    if (!maskDisabled) {
+                        Modifier.horizontalEdgeFadeMask(fadeLeft = settingsFadeLeft, fadeRight = true)
+                    } else Modifier
+                )
                 .onPreviewKeyEvent { ev ->
                     if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (ev.key) {
@@ -1742,11 +2118,13 @@ private fun PlaybackMetaLayer(
                     textShadowDisabled = textShadowDisabled,
                     tokens = tokens,
                     colors = colors,
-                    modifier = if (idx == 0) Modifier.focusRequester(settingsFocusRequester) else Modifier,
+                    modifier = if (idx == safeSettingsSel) Modifier.focusRequester(settingsFocusRequester) else Modifier,
                     onFocused = {
+                        settingsSelectedIdx = idx
                         onBumpInteraction()
                     },
                     onClick = {
+                        settingsSelectedIdx = idx
                         onBumpInteraction()
                         item.onClick()
                     }
@@ -1782,8 +2160,9 @@ private fun PbMenuChip(
     val hovered by interactionSource.collectIsHoveredAsState()
     val pressed by interactionSource.collectIsPressedAsState()
 
+    val isFocusedActive = rowActive && focused
     val bgColor = when {
-        pressed || (rowActive && focused) || focused -> colors.primary1
+        pressed || isFocusedActive -> colors.primary1
         hovered -> colors.primary3
         rowActive -> Color(0x70FAFDFF)
         else -> Color(0x59A0A5A7)
@@ -1792,7 +2171,7 @@ private fun PbMenuChip(
     Row(
         modifier = modifier
             .then(
-                if (!shadowsDisabled && (pressed || focused)) {
+                if (!shadowsDisabled && (pressed || isFocusedActive)) {
                     Modifier.shadow(tokens.vw * 0.4f, RoundedCornerShape(tokens.u * 0.2f), clip = false)
                 } else Modifier
             )
@@ -1814,7 +2193,7 @@ private fun PbMenuChip(
                 text = icon,
                 color = Color.White,
                 fontFamily = LocalIconFont.current,
-                fontSize = fsSp(tokens.fs11),
+                fontSize = fsSp(tokens.fs10),
                 style = LocalTextStyle.current.copy(
                     shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
                 )
@@ -1852,10 +2231,15 @@ private fun PlaybackActionsLayer(
     episodes: List<Episode>,
     selectedEpisodeId: String,
     episodePage: Int,
-    onEpisodePageChange: (Int) -> Unit,
+    episodePageFocusTarget: Int?,
+    onEpisodePageFocusHandled: () -> Unit,
+    onEpisodePageChange: (Int, Boolean) -> Unit,
+    currentAnimeId: String,
     seasons: List<Anime>,
     related: List<Anime>,
     recommendations: List<Anime>,
+    shelfJumpTarget: Pair<PlaybackMenuZone, Boolean>?,
+    onShelfJumpHandled: () -> Unit,
     tracksFocusRequester: FocusRequester,
     episodesFocusRequester: FocusRequester,
     seasonsFocusRequester: FocusRequester,
@@ -1899,9 +2283,7 @@ private fun PlaybackActionsLayer(
         recsHeightPx,
         totalIactionsHeightPx
     ) {
-        if (!osdVisible) {
-            screenHeightPx + peekHeightPx
-        } else if (activeZone == PlaybackMenuZone.GENRES || activeZone == PlaybackMenuZone.SETTINGS) {
+        if (!osdVisible || activeZone == PlaybackMenuZone.GENRES || activeZone == PlaybackMenuZone.SETTINGS) {
             screenHeightPx - peekHeightPx
         } else {
             val activeIdx = menuZones.indexOf(activeZone)
@@ -1955,6 +2337,11 @@ private fun PlaybackActionsLayer(
                 .wrapContentHeight(align = Alignment.Top, unbounded = true)
                 .offset { IntOffset(0, animatedOffsetY) }
                 .onSizeChanged { totalIactionsHeightPx = it.height }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    enabled = osdVisible
+                ) { onActivateZone(activeZone) }
                 .background(
                     Brush.verticalGradient(
                         0f to Color.Transparent,
@@ -1998,7 +2385,11 @@ private fun PlaybackActionsLayer(
                         episodes = episodes,
                         selectedEpisodeId = selectedEpisodeId,
                         episodePage = episodePage,
+                        episodePageFocusTarget = episodePageFocusTarget,
+                        onEpisodePageFocusHandled = onEpisodePageFocusHandled,
                         onEpisodePageChange = onEpisodePageChange,
+                        shelfJumpTarget = shelfJumpTarget,
+                        onShelfJumpHandled = onShelfJumpHandled,
                         focusRequester = episodesFocusRequester,
                         onActivate = { onActivateZone(PlaybackMenuZone.EPISODES) },
                         onMoveZone = onMoveZone,
@@ -2014,9 +2405,13 @@ private fun PlaybackActionsLayer(
                 if (seasons.isNotEmpty()) {
                     PlaybackPosterShelf(
                         title = "Seasons",
+                        zone = PlaybackMenuZone.SEASONS,
                         active = osdVisible && activeZone == PlaybackMenuZone.SEASONS,
                         focusEnabled = listFocusEnabled,
                         animes = seasons,
+                        playingAnimeId = currentAnimeId,
+                        shelfJumpTarget = shelfJumpTarget,
+                        onShelfJumpHandled = onShelfJumpHandled,
                         focusRequester = seasonsFocusRequester,
                         onActivate = { onActivateZone(PlaybackMenuZone.SEASONS) },
                         onMoveZone = onMoveZone,
@@ -2031,9 +2426,12 @@ private fun PlaybackActionsLayer(
                 if (related.isNotEmpty()) {
                     PlaybackPosterShelf(
                         title = "Related",
+                        zone = PlaybackMenuZone.RELATED,
                         active = osdVisible && activeZone == PlaybackMenuZone.RELATED,
                         focusEnabled = listFocusEnabled,
                         animes = related,
+                        shelfJumpTarget = shelfJumpTarget,
+                        onShelfJumpHandled = onShelfJumpHandled,
                         focusRequester = relatedFocusRequester,
                         onActivate = { onActivateZone(PlaybackMenuZone.RELATED) },
                         onMoveZone = onMoveZone,
@@ -2048,9 +2446,12 @@ private fun PlaybackActionsLayer(
                 if (recommendations.isNotEmpty()) {
                     PlaybackPosterShelf(
                         title = "Recommendation",
+                        zone = PlaybackMenuZone.RECS,
                         active = osdVisible && activeZone == PlaybackMenuZone.RECS,
                         focusEnabled = listFocusEnabled,
                         animes = recommendations,
+                        shelfJumpTarget = shelfJumpTarget,
+                        onShelfJumpHandled = onShelfJumpHandled,
                         focusRequester = recsFocusRequester,
                         onActivate = { onActivateZone(PlaybackMenuZone.RECS) },
                         onMoveZone = onMoveZone,
@@ -2113,125 +2514,17 @@ private fun PlaybackTracksSection(
     }
     val displayDurText = if (durationMs > 0L) formatPlaybackTime(durationMs, durationMs) else ""
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = if (active) 1f else 0.8f }
             .padding(horizontal = tokens.vw * 5f)
             .padding(bottom = tokens.vw * 1f)
     ) {
-        // Header row (#pb_track_left, #pb_track_title, #pb_track_dur)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(tokens.vw * 2.5f),
-            contentAlignment = Alignment.Center
-        ) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .navigationClickable(enabled = !hasError) {
-                        onActivate()
-                        onTogglePlay()
-                    },
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val ctlIcon = when {
-                    hasError -> IconGlyphs.Warning
-                    isLoading && durationMs <= 0L -> IconGlyphs.ProgressActivity
-                    isEnded -> IconGlyphs.Replay
-                    isPlaying -> IconGlyphs.Pause
-                    else -> IconGlyphs.Play
-                }
-                val isSpinning = !hasError && isLoading && durationMs <= 0L
-                Text(
-                    text = ctlIcon,
-                    color = Color.White,
-                    fontFamily = LocalIconFont.current,
-                    fontSize = fsSp(tokens.vw * 2f),
-                    lineHeight = fsSp(tokens.vw * 2f),
-                    textAlign = TextAlign.Center,
-                    style = LocalTextStyle.current.copy(
-                        shadow = when {
-                            active && !textShadowDisabled -> Shadow(colors.primary2, Offset.Zero, 14f)
-                            !textShadowDisabled -> Shadow(Color.Black, Offset.Zero, 4f)
-                            else -> null
-                        }
-                    ),
-                    modifier = Modifier
-                        .size(tokens.vw * 2f)
-                        .graphicsLayer { if (isSpinning) rotationZ = spinAngle }
-                )
-                Text(
-                    text = displayPosText,
-                    color = Color.White,
-                    fontSize = fsSp(tokens.fs13),
-                    fontWeight = FontWeight.Bold,
-                    lineHeight = fsSp(tokens.vw * 2f),
-                    style = LocalTextStyle.current.copy(shadow = trackTextShadow),
-                    modifier = Modifier.padding(start = tokens.vw * 0.5f)
-                )
-            }
-
-            Text(
-                text = episodeLabel.uppercase(),
-                color = Color.White,
-                fontSize = fsSp(tokens.fs10),
-                fontWeight = FontWeight.Bold,
-                lineHeight = fsSp(tokens.vw * 2f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                style = LocalTextStyle.current.copy(shadow = trackTextShadow),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .padding(horizontal = tokens.vw * 15f)
-            )
-
-            if (displayDurText.isNotEmpty()) {
-                Text(
-                    text = displayDurText,
-                    color = Color.White,
-                    fontSize = fsSp(tokens.fs13),
-                    fontWeight = FontWeight.Bold,
-                    lineHeight = fsSp(tokens.vw * 2f),
-                    style = LocalTextStyle.current.copy(shadow = trackTextShadow),
-                    modifier = Modifier.align(Alignment.TopEnd)
-                )
-            }
-        }
-
-        // #pb_track seek bar (focusable for D-pad scrubbing, plus tap/drag on touch)
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(tokens.vw * 2f)
-                .focusRequester(tracksFocusRequester)
-                .onFocusChanged {
-                    if (it.isFocused) onActivate()
-                }
-                .onPreviewKeyEvent { ev ->
-                    if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                    when (ev.key) {
-                        Key.DirectionUp -> onMoveZone(-1)
-                        Key.DirectionDown -> onMoveZone(1)
-                        Key.DirectionLeft -> {
-                            if (!hasError) onSeekDelta(-1)
-                            true
-                        }
-                        Key.DirectionRight -> {
-                            if (!hasError) onSeekDelta(1)
-                            true
-                        }
-                        Key.DirectionCenter, Key.Enter -> {
-                            if (!hasError) onTogglePlay()
-                            true
-                        }
-                        else -> false
-                    }
-                }
-                .navigationFocusable(enabled = focusEnabled)
+                .wrapContentHeight()
                 .pointerInput(durationMs, hasError) {
                     if (hasError) return@pointerInput
                     detectTapGestures { offset ->
@@ -2260,70 +2553,237 @@ private fun PlaybackTracksSection(
                             }
                         }
                     )
-                },
-            contentAlignment = Alignment.Center
+                }
         ) {
-            val trackWidth = maxWidth
-            val safeDuration = durationMs.coerceAtLeast(1L)
-            val progressPct = if (durationMs > 0L) (positionMs.toFloat() / safeDuration).coerceIn(0f, 1f) else 0f
-            val bufferPct = if (durationMs > 0L) (bufferedPositionMs.toFloat() / safeDuration).coerceIn(0f, 1f) else 0f
-            val barShape = RoundedCornerShape(tokens.vw * 0.5f)
-
+            // Header row (#pb_track_left, #pb_track_title, #pb_track_dur) pinned at top (2vw).
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(tokens.vw * 0.6f)
-                    .clip(barShape)
-                    .background(Color.White.copy(alpha = if (active) 0.9f else 0.5f))
-                    .border(
-                        width = (tokens.vw * if (active) 0.1f else 0.05f).coerceAtLeast(0.5.dp),
-                        color = Color.White.copy(alpha = if (active) 0.8f else 0.4f),
-                        shape = barShape
-                    )
+                    .height(tokens.vw * 2f)
+                    .align(Alignment.TopCenter),
+                contentAlignment = Alignment.Center
             ) {
-                // z = 1: buffer bar
-                if (bufferPct > 0f) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .fillMaxWidth(bufferPct)
-                            .clip(barShape)
-                            .background(colors.accent1.copy(alpha = 0.5f))
-                    )
-                }
-                // z = 2: progress fill
-                if (progressPct > 0f) {
-                    val fillBrush = if (active) {
-                        Brush.verticalGradient(listOf(colors.primary3, colors.primary1))
-                    } else {
-                        Brush.verticalGradient(listOf(colors.dimm1, colors.dimm1))
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            enabled = !hasError
+                        ) {
+                            onActivate()
+                            onTogglePlay()
+                        },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val ctlIcon = when {
+                        hasError -> IconGlyphs.Warning
+                        isLoading && durationMs <= 0L -> IconGlyphs.ProgressActivity
+                        isEnded -> IconGlyphs.Replay
+                        isPlaying -> IconGlyphs.Pause
+                        else -> IconGlyphs.Play
                     }
+                    val isSpinning = !hasError && isLoading && durationMs <= 0L
+                    val density = LocalDensity.current
                     Box(
                         modifier = Modifier
-                            .fillMaxHeight()
-                            .fillMaxWidth(progressPct)
-                            .clip(barShape)
-                            .background(fillBrush)
+                            .size(tokens.vw * 2f)
+                            .graphicsLayer { if (isSpinning) rotationZ = spinAngle },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (active && !textShadowDisabled) {
+                            Text(
+                                text = ctlIcon,
+                                color = colors.primary2,
+                                fontFamily = LocalIconFont.current,
+                                fontSize = fsSp(tokens.vw * 2f),
+                                lineHeight = fsSp(tokens.vw * 2f),
+                                textAlign = TextAlign.Center,
+                                style = LocalTextStyle.current.copy(
+                                    shadow = Shadow(
+                                        Color.White,
+                                        Offset.Zero,
+                                        with(density) { (tokens.vw * 2f).toPx() }.coerceAtLeast(1f)
+                                    )
+                                )
+                            )
+                            Text(
+                                text = ctlIcon,
+                                color = colors.primary1,
+                                fontFamily = LocalIconFont.current,
+                                fontSize = fsSp(tokens.vw * 2f),
+                                lineHeight = fsSp(tokens.vw * 2f),
+                                textAlign = TextAlign.Center,
+                                style = LocalTextStyle.current.copy(
+                                    shadow = Shadow(
+                                        colors.primary2,
+                                        Offset.Zero,
+                                        with(density) { (tokens.vw * 1f).toPx() }.coerceAtLeast(1f)
+                                    )
+                                )
+                            )
+                        }
+                        Text(
+                            text = ctlIcon,
+                            color = Color.White,
+                            fontFamily = LocalIconFont.current,
+                            fontSize = fsSp(tokens.vw * 2f),
+                            lineHeight = fsSp(tokens.vw * 2f),
+                            textAlign = TextAlign.Center,
+                            style = LocalTextStyle.current.copy(
+                                shadow = when {
+                                    active && !textShadowDisabled -> Shadow(
+                                        colors.primary1,
+                                        Offset.Zero,
+                                        with(density) { (tokens.vw * 0.4f).toPx() }.coerceAtLeast(1f)
+                                    )
+                                    !textShadowDisabled -> Shadow(Color.Black, Offset.Zero, 4f)
+                                    else -> null
+                                }
+                            )
+                        )
+                    }
+                    Text(
+                        text = displayPosText,
+                        color = Color.White,
+                        fontSize = fsSp(tokens.fs13),
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = fsSp(tokens.vw * 2f),
+                        style = LocalTextStyle.current.copy(shadow = trackTextShadow),
+                        modifier = Modifier.padding(start = tokens.vw * 0.5f)
                     )
                 }
-                // z = 3: skip markers rendered ON TOP of progress fill
-                if (durationMs > 0L) {
-                    skipRanges.filter { it.kind == SkipRange.Kind.INTRO || it.kind == SkipRange.Kind.OUTRO }
-                        .take(2)
-                        .forEach { range ->
-                            val startPct = (range.startSeconds * 1000.0 / safeDuration).toFloat().coerceIn(0f, 1f)
-                            val endPct = (range.endSeconds * 1000.0 / safeDuration).toFloat().coerceIn(0f, 1f)
-                            val widthPct = (endPct - startPct).coerceAtLeast(0f)
-                            if (widthPct > 0f) {
-                                Box(
-                                    modifier = Modifier
-                                        .offset(x = trackWidth * startPct)
-                                        .width(trackWidth * widthPct)
-                                        .fillMaxHeight()
-                                        .background(colors.primaryBg.copy(alpha = 0.6f))
-                                )
+
+                Text(
+                    text = episodeLabel.uppercase(),
+                    color = Color.White,
+                    fontSize = fsSp(tokens.fs10),
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = fsSp(tokens.vw * 2f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    style = LocalTextStyle.current.copy(shadow = trackTextShadow),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = tokens.vw * 15f)
+                )
+
+                if (displayDurText.isNotEmpty()) {
+                    Text(
+                        text = displayDurText,
+                        color = Color.White,
+                        fontSize = fsSp(tokens.fs13),
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = fsSp(tokens.vw * 2f),
+                        style = LocalTextStyle.current.copy(shadow = trackTextShadow),
+                        modifier = Modifier.align(Alignment.TopEnd)
+                    )
+                }
+            }
+
+            // #pb_track seek bar at padding(top = 2.5vw), sitting cleanly inside 4vw collapsed peek.
+            val outlineWidth = (tokens.vw * if (active) 0.1f else 0.05f).coerceAtLeast(0.5.dp)
+            val outlineShape = RoundedCornerShape(tokens.vw * 0.6f)
+            val barShape = RoundedCornerShape(tokens.vw * 0.5f)
+            BoxWithConstraints(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .padding(top = (tokens.vw * 2.5f - outlineWidth).coerceAtLeast(0.dp))
+                    .focusRequester(tracksFocusRequester)
+                    .onFocusChanged {
+                        if (it.isFocused) onActivate()
+                    }
+                    .onPreviewKeyEvent { ev ->
+                        if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (ev.key) {
+                            Key.DirectionUp -> onMoveZone(-1)
+                            Key.DirectionDown -> onMoveZone(1)
+                            Key.DirectionLeft -> {
+                                if (!hasError) onSeekDelta(-1)
+                                true
                             }
+                            Key.DirectionRight -> {
+                                if (!hasError) onSeekDelta(1)
+                                true
+                            }
+                            Key.DirectionCenter, Key.Enter -> {
+                                if (!hasError) onTogglePlay()
+                                true
+                            }
+                            else -> false
                         }
+                    }
+                    .navigationFocusable(enabled = focusEnabled)
+                    .then(
+                        if (active) Modifier.shadow(tokens.vw * 0.56f, outlineShape, clip = false)
+                        else Modifier.shadow(tokens.vw * 0.03f, outlineShape, clip = false)
+                    )
+                    .border(
+                        width = outlineWidth,
+                        color = Color.White.copy(alpha = if (active) 0.8f else 0.4f),
+                        shape = outlineShape
+                    )
+                    .padding(outlineWidth)
+            ) {
+                val trackWidth = maxWidth
+                val safeDuration = durationMs.coerceAtLeast(1L)
+                val progressPct = if (durationMs > 0L) (positionMs.toFloat() / safeDuration).coerceIn(0f, 1f) else 0f
+                val bufferPct = if (durationMs > 0L) (bufferedPositionMs.toFloat() / safeDuration).coerceIn(0f, 1f) else 0f
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(tokens.vw * 0.6f)
+                        .clip(barShape)
+                        .background(Color.White.copy(alpha = if (active) 0.9f else 0.5f))
+                ) {
+                    // z = 1: buffer bar
+                    if (bufferPct > 0f) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth(bufferPct)
+                                .clip(barShape)
+                                .background(colors.accent1.copy(alpha = 0.5f))
+                        )
+                    }
+                    // z = 2: progress fill
+                    if (progressPct > 0f) {
+                        val fillBrush = if (active) {
+                            Brush.verticalGradient(listOf(colors.primary3, colors.primary1))
+                        } else {
+                            Brush.verticalGradient(listOf(colors.dimm1, colors.dimm1))
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth(progressPct)
+                                .clip(barShape)
+                                .background(fillBrush)
+                        )
+                    }
+                    // z = 3: skip markers rendered ON TOP of progress fill
+                    if (durationMs > 0L) {
+                        skipRanges.filter { it.kind == SkipRange.Kind.INTRO || it.kind == SkipRange.Kind.OUTRO }
+                            .take(2)
+                            .forEach { range ->
+                                val startPct = (range.startSeconds * 1000.0 / safeDuration).toFloat().coerceIn(0f, 1f)
+                                val endPct = (range.endSeconds * 1000.0 / safeDuration).toFloat().coerceIn(0f, 1f)
+                                val widthPct = (endPct - startPct).coerceAtLeast(0f)
+                                if (widthPct > 0f) {
+                                    Box(
+                                        modifier = Modifier
+                                            .offset(x = trackWidth * startPct)
+                                            .width(trackWidth * widthPct)
+                                            .fillMaxHeight()
+                                            .background(colors.primaryBg.copy(alpha = 0.6f))
+                                    )
+                                }
+                            }
+                    }
                 }
             }
         }
@@ -2337,7 +2797,11 @@ private fun PlaybackEpisodesSection(
     episodes: List<Episode>,
     selectedEpisodeId: String,
     episodePage: Int,
-    onEpisodePageChange: (Int) -> Unit,
+    episodePageFocusTarget: Int?,
+    onEpisodePageFocusHandled: () -> Unit,
+    onEpisodePageChange: (Int, Boolean) -> Unit,
+    shelfJumpTarget: Pair<PlaybackMenuZone, Boolean>?,
+    onShelfJumpHandled: () -> Unit,
     focusRequester: FocusRequester,
     onActivate: () -> Unit,
     onMoveZone: (Int) -> Boolean,
@@ -2363,12 +2827,33 @@ private fun PlaybackEpisodesSection(
 
     val listState = rememberLazyListState()
     val selectedInPageIdx = pageEpisodes.indexOfFirst { it.id == selectedEpisodeId }
-    val initialFocusTileIdx = if (selectedInPageIdx >= 0) selectedInPageIdx else 0
+    val initialFocusTileIdx = (episodePageFocusTarget ?: if (selectedInPageIdx >= 0) selectedInPageIdx else 0)
+        .coerceIn(0, pageEpisodes.lastIndex.coerceAtLeast(0))
 
-    LaunchedEffect(safePage, selectedEpisodeId) {
-        val target = if (selectedInPageIdx >= 0) selectedInPageIdx else 0
+    LaunchedEffect(safePage, selectedEpisodeId, episodePageFocusTarget, active, focusEnabled) {
+        val target = initialFocusTileIdx
         if (target in pageEpisodes.indices) {
             listState.scrollToItem(target)
+        }
+        if (episodePageFocusTarget != null && active && focusEnabled && pageEpisodes.isNotEmpty()) {
+            yield()
+            runCatching { focusRequester.requestFocus() }
+            onEpisodePageFocusHandled()
+        }
+    }
+
+    LaunchedEffect(shelfJumpTarget, pageEpisodes.size, active, focusEnabled) {
+        if (active && focusEnabled && shelfJumpTarget?.first == PlaybackMenuZone.EPISODES && pageEpisodes.isNotEmpty()) {
+            val target = if (shelfJumpTarget.second) pageEpisodes.lastIndex else 0
+            listState.scrollToItem(target)
+            onEpisodePageChange(safePage, shelfJumpTarget.second)
+            onShelfJumpHandled()
+        }
+    }
+
+    val fadeLeft by remember(listState) {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0
         }
     }
 
@@ -2383,20 +2868,18 @@ private fun PlaybackEpisodesSection(
         label = "pb-ep-playing-color"
     )
     val shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
+    val density = LocalDensity.current
+    val hintSlidePx = with(density) { (tokens.vw * 10f).roundToPx() }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(
-                start = tokens.vw * 5f,
-                end = tokens.vw * 5f,
-                top = tokens.vw * 0.2f,
-                bottom = tokens.vw * 2.5f
-            )
+            .padding(top = tokens.vw * 0.2f, bottom = tokens.vw * 2.5f)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(horizontal = tokens.vw * 5f)
                 .padding(bottom = tokens.vw * 0.5f)
         ) {
             Text(
@@ -2407,47 +2890,32 @@ private fun PlaybackEpisodesSection(
                 style = LocalTextStyle.current.copy(shadow = shadow),
                 modifier = Modifier.align(Alignment.CenterStart)
             )
-            if (hasPaging && active) {
-                Row(
-                    modifier = Modifier.align(Alignment.CenterEnd),
-                    horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.4f),
-                    verticalAlignment = Alignment.CenterVertically
+            AnimatedVisibility(
+                visible = hasPaging && active,
+                enter = if (tokens.tim3s == 0) EnterTransition.None else fadeIn(
+                    tween(durationMillis = tokens.tim3s, easing = tokens.easing)
+                ) + slideInHorizontally(
+                    tween(durationMillis = tokens.tim3s, easing = tokens.easing)
+                ) { -hintSlidePx },
+                exit = if (tokens.tim3s == 0) ExitTransition.None else fadeOut(
+                    tween(durationMillis = tokens.tim3s, easing = tokens.easing)
+                ) + slideOutHorizontally(
+                    tween(durationMillis = tokens.tim3s, easing = tokens.easing)
+                ) { -hintSlidePx },
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(tokens.vw * 1f))
+                        .background(colors.primary2)
+                        .padding(horizontal = tokens.vw * 0.5f, vertical = tokens.vw * 0.1f)
                 ) {
-                    if (safePage > 0) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(tokens.vw * 1f))
-                                .background(Color(0x59A0A5A7))
-                                .navigationClickable { onEpisodePageChange(safePage - 1) }
-                                .padding(horizontal = tokens.vw * 0.5f, vertical = tokens.vw * 0.1f)
-                        ) {
-                            Text("Prev", color = Color.White, fontSize = fsSp(tokens.fs8), fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(tokens.vw * 1f))
-                            .background(colors.primary2)
-                            .padding(horizontal = tokens.vw * 0.5f, vertical = tokens.vw * 0.1f)
-                    ) {
-                        Text(
-                            text = "USE PROG+ / PROG- FOR PAGING",
-                            color = Color.White,
-                            fontSize = fsSp(tokens.fs8),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    if (safePage < totalPages - 1) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(tokens.vw * 1f))
-                                .background(Color(0x59A0A5A7))
-                                .navigationClickable { onEpisodePageChange(safePage + 1) }
-                                .padding(horizontal = tokens.vw * 0.5f, vertical = tokens.vw * 0.1f)
-                        ) {
-                            Text("Next", color = Color.White, fontSize = fsSp(tokens.fs8), fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    Text(
+                        text = "USE PROG+ / PROG- FOR PAGING",
+                        color = Color.White,
+                        fontSize = fsSp(tokens.fs8),
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }
@@ -2455,9 +2923,14 @@ private fun PlaybackEpisodesSection(
         LazyRow(
             state = listState,
             horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.5f),
+            contentPadding = PaddingValues(horizontal = tokens.vw * 5f),
             modifier = Modifier
                 .fillMaxWidth()
-                .then(if (!maskDisabled) Modifier.horizontalEdgeFadeMask() else Modifier)
+                .then(
+                    if (!maskDisabled) {
+                        Modifier.horizontalEdgeFadeMask(fadeLeft = fadeLeft, fadeRight = true)
+                    } else Modifier
+                )
                 .onPreviewKeyEvent { ev ->
                     if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (ev.key) {
@@ -2504,11 +2977,11 @@ private fun PlaybackEpisodesSection(
                                 if (ev.type != KeyEventType.KeyDown || !hasPaging) return@onPreviewKeyEvent false
                                 when {
                                     ev.key == Key.DirectionLeft && idx == 0 && safePage > 0 -> {
-                                        onEpisodePageChange(safePage - 1)
+                                        onEpisodePageChange(safePage - 1, true)
                                         true
                                     }
                                     ev.key == Key.DirectionRight && idx == pageEpisodes.lastIndex && safePage < totalPages - 1 -> {
-                                        onEpisodePageChange(safePage + 1)
+                                        onEpisodePageChange(safePage + 1, false)
                                         true
                                     }
                                     else -> false
@@ -2608,7 +3081,7 @@ private fun PlaybackEpisodesSection(
                             style = LocalTextStyle.current.copy(shadow = shadow),
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
-                                .offset(y = tokens.vw * 1.5f)
+                                .offset(y = tokens.vw * 0.5f)
                                 .width(tokens.vw * 10f)
                         )
                     }
@@ -2621,9 +3094,13 @@ private fun PlaybackEpisodesSection(
 @Composable
 private fun PlaybackPosterShelf(
     title: String,
+    zone: PlaybackMenuZone,
     active: Boolean,
     focusEnabled: Boolean,
     animes: List<Anime>,
+    playingAnimeId: String? = null,
+    shelfJumpTarget: Pair<PlaybackMenuZone, Boolean>?,
+    onShelfJumpHandled: () -> Unit,
     focusRequester: FocusRequester,
     onActivate: () -> Unit,
     onMoveZone: (Int) -> Boolean,
@@ -2640,11 +3117,36 @@ private fun PlaybackPosterShelf(
         largeUi = tokens.largeUi
     )
     val shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(0f, tokens.vw.value * 0.1f), 4f) else null
+    val listState = rememberLazyListState()
+    val playingIdx = remember(animes, playingAnimeId) {
+        if (!playingAnimeId.isNullOrBlank()) {
+            animes.indexOfFirst { it.id == playingAnimeId }.takeIf { it >= 0 } ?: 0
+        } else 0
+    }
+    var selectedIdx by remember(animes, playingIdx) { mutableIntStateOf(playingIdx) }
+    val safeSelectedIdx = selectedIdx.coerceIn(0, animes.lastIndex.coerceAtLeast(0))
+
+    LaunchedEffect(shelfJumpTarget, animes.size, active, focusEnabled) {
+        if (active && focusEnabled && shelfJumpTarget?.first == zone && animes.isNotEmpty()) {
+            val target = if (shelfJumpTarget.second) animes.lastIndex else 0
+            selectedIdx = target
+            listState.scrollToItem(target)
+            yield()
+            runCatching { focusRequester.requestFocus() }
+            onShelfJumpHandled()
+        }
+    }
+
+    val fadeLeft by remember(listState) {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0
+        }
+    }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = tokens.vw * 5f, end = tokens.vw * 5f, bottom = tokens.vw * 1f)
+            .padding(bottom = tokens.vw * 1f)
     ) {
         Text(
             text = title,
@@ -2652,14 +3154,21 @@ private fun PlaybackPosterShelf(
             fontSize = fsSp(tokens.fs13),
             fontWeight = FontWeight.Bold,
             style = LocalTextStyle.current.copy(shadow = shadow),
-            modifier = Modifier.padding(bottom = tokens.vw * 0.5f)
+            modifier = Modifier
+                .padding(horizontal = tokens.vw * 5f)
+                .padding(bottom = tokens.vw * 0.5f)
         )
         LazyRow(
+            state = listState,
             horizontalArrangement = Arrangement.spacedBy(dims.cardGap),
-            contentPadding = PaddingValues(vertical = tokens.vw * 0.3f),
+            contentPadding = PaddingValues(horizontal = tokens.vw * 5f, vertical = tokens.vw * 0.3f),
             modifier = Modifier
                 .fillMaxWidth()
-                .then(if (!maskDisabled) Modifier.horizontalEdgeFadeMask() else Modifier)
+                .then(
+                    if (!maskDisabled) {
+                        Modifier.horizontalEdgeFadeMask(fadeLeft = fadeLeft, fadeRight = true)
+                    } else Modifier
+                )
                 .onPreviewKeyEvent { ev ->
                     if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (ev.key) {
@@ -2672,8 +3181,13 @@ private fun PlaybackPosterShelf(
             itemsIndexed(animes, key = { idx, anime -> "${anime.id}_$idx" }) { idx, anime ->
                 Box(
                     modifier = Modifier
-                        .then(if (idx == 0) Modifier.focusRequester(focusRequester) else Modifier)
-                        .onFocusChanged { if (it.isFocused) onActivate() }
+                        .then(if (idx == safeSelectedIdx) Modifier.focusRequester(focusRequester) else Modifier)
+                        .onFocusChanged {
+                            if (it.isFocused) {
+                                selectedIdx = idx
+                                onActivate()
+                            }
+                        }
                 ) {
                     FocusCard(
                         anime = anime,
@@ -2683,7 +3197,13 @@ private fun PlaybackPosterShelf(
                         posterHeight = dims.posterHeight,
                         cardTitleSize = dims.titleSize,
                         cardTitleLineHeight = dims.titleLineHeight,
-                        onClick = { if (focusEnabled) onAnimeSelected(anime) }
+                        showPlayingRibbon = !playingAnimeId.isNullOrBlank() && anime.id == playingAnimeId,
+                        onClick = {
+                            if (focusEnabled) {
+                                selectedIdx = idx
+                                onAnimeSelected(anime)
+                            }
+                        }
                     )
                 }
             }
@@ -2700,6 +3220,7 @@ private fun PlaybackTouchCircleButton(
     modifier: Modifier = Modifier
 ) {
     val colors = LocalAnimeTvColors.current
+    val playClickSound = LocalNavigationSound.current
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     val pressed by interactionSource.collectIsPressedAsState()
@@ -2716,7 +3237,10 @@ private fun PlaybackTouchCircleButton(
             .clip(CircleShape)
             .background(bgColor)
             .hoverable(interactionSource)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
+            .clickable(interactionSource = interactionSource, indication = null) {
+                playClickSound()
+                onClick()
+            },
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -2742,12 +3266,11 @@ private fun StreamTypeTopBadge(
     textShadowDisabled: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val isTranslated = subtitleLanguage.isNotBlank() &&
-        subtitleLanguage !in setOf("hard", "nosub", "dub", "en") &&
-        subtitlesCount > 0 &&
-        selectedSubtitleLabel != null
     val isDub = currentStreamType == PlaybackStreamType.DUB
-    val isSoftsub = !isDub && subtitlesCount > 0 && selectedSubtitleLabel != null
+    val isSoftsub = currentStreamType == PlaybackStreamType.SOFTSUB
+    val isTranslated = isSoftsub &&
+        subtitleLanguage.isNotBlank() &&
+        subtitleLanguage !in setOf("hard", "nosub", "dub", "en")
 
     val icon = when {
         isTranslated -> IconGlyphs.GTranslate
@@ -2760,9 +3283,11 @@ private fun StreamTypeTopBadge(
         isSoftsub -> "SOFTSUB"
         else -> subStreamLabel.uppercase()
     }
-    val langTag = if (isSoftsub || isTranslated) {
+    val langTag = if (isSoftsub) {
         subtitleLanguage.takeIf { it.isNotBlank() && it != "hard" && it != "nosub" }?.uppercase()
-            ?: selectedSubtitleLabel.take(3).uppercase().ifBlank { "EN" }
+            ?: if (subtitlesCount > 0 && !selectedSubtitleLabel.isNullOrBlank()) {
+                selectedSubtitleLabel.take(3).uppercase()
+            } else ""
     } else ""
 
     val shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
@@ -2796,14 +3321,20 @@ private fun StreamTypeTopBadge(
             )
         }
         if (langTag.isNotEmpty()) {
+            val leftBorderWidth = (tokens.vw * 0.15f).coerceAtLeast(1.dp)
             Box(
                 modifier = Modifier
+                    .padding(start = tokens.vw * 0.2f)
                     .background(colors.primaryBg)
-                    .border(
-                        width = (tokens.vw * 0.15f).coerceAtLeast(1.dp),
-                        color = colors.primary3,
-                        shape = RoundedCornerShape(topEnd = tokens.vw * 0.3f, bottomEnd = tokens.vw * 0.3f)
-                    )
+                    .drawBehind {
+                        val strokePx = leftBorderWidth.toPx()
+                        drawLine(
+                            color = colors.primary3,
+                            start = Offset(strokePx * 0.5f, 0f),
+                            end = Offset(strokePx * 0.5f, size.height),
+                            strokeWidth = strokePx
+                        )
+                    }
                     .padding(horizontal = tokens.vw * 1f, vertical = tokens.vw * 0.2f)
             ) {
                 Text(
@@ -2831,6 +3362,8 @@ private fun PlaybackSkipEventPill(
 ) {
     var pillAlpha by remember(skipRange) { mutableFloatStateOf(1f) }
     var rippleProgress by remember(skipRange, autoSkip) { mutableFloatStateOf(0f) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
 
     LaunchedEffect(skipRange, tokens.isTouch) {
         pillAlpha = 1f
@@ -2857,19 +3390,23 @@ private fun PlaybackSkipEventPill(
         }
     }
 
+    val interactive = hovered || pillAlpha > 0.02f || tokens.isTouch
+    val displayAlpha = if (hovered) 1f else pillAlpha
+    val pillBg = if (hovered) Color(200, 200, 200).copy(alpha = 0.7f) else Color.White.copy(alpha = 0.4f)
     val shape = RoundedCornerShape(tokens.vw * 0.3f)
     val shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
     val label = if (skipRange.kind == SkipRange.Kind.INTRO) "SKIP INTRO" else "SKIP OUTRO"
 
     Box(
         modifier = modifier
-            .graphicsLayer { alpha = pillAlpha }
+            .graphicsLayer { alpha = displayAlpha }
             .then(if (!shadowsDisabled) Modifier.shadow(tokens.vw * 0.3f, shape, clip = false) else Modifier)
             .clip(shape)
-            .background(Color.White.copy(alpha = 0.4f))
+            .background(pillBg)
             .border((tokens.vw * 0.05f).coerceAtLeast(0.5.dp), Color.White, shape)
-            .navigationClickable(onClick = onSkip)
-            .navigationFocusable()
+            .hoverable(interactionSource)
+            .navigationClickable(enabled = interactive, onClick = onSkip)
+            .navigationFocusable(enabled = interactive)
     ) {
         if (autoSkip && rippleProgress > 0f) {
             val circleScale = 3f * rippleProgress
@@ -2910,37 +3447,96 @@ private fun PlaybackSkipEventPill(
     }
 }
 
-private fun Modifier.horizontalEdgeFadeMask(): Modifier = this
-    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
-    .drawWithContent {
-        drawContent()
-        drawRect(
-            brush = Brush.horizontalGradient(
-                0f to Color.Black,
-                0.95f to Color.Black,
-                1f to Color.Transparent
-            ),
-            blendMode = BlendMode.DstIn
-        )
-    }
+private fun Modifier.horizontalEdgeFadeMask(
+    fadeLeft: Boolean = false,
+    fadeRight: Boolean = true
+): Modifier {
+    if (!fadeLeft && !fadeRight) return this
+    return this
+        .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+        .drawWithContent {
+            drawContent()
+            val stops = buildList {
+                if (fadeLeft) {
+                    add(0f to Color.Transparent)
+                    add(0.05f to Color.Black)
+                } else {
+                    add(0f to Color.Black)
+                }
+                if (fadeRight) {
+                    add(0.95f to Color.Black)
+                    add(1f to Color.Transparent)
+                } else {
+                    add(1f to Color.Black)
+                }
+            }
+            drawRect(
+                brush = Brush.horizontalGradient(*stops.toTypedArray()),
+                blendMode = BlendMode.DstIn
+            )
+        }
+}
 
 @Composable
 internal fun PlaybackErrorScreen(
     title: String,
     episodeLabel: String,
     message: String,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    description: String = message,
+    genres: List<String> = emptyList(),
+    artworkUrl: String? = null,
+    canPrevious: Boolean = false,
+    canNext: Boolean = false,
+    hasSubStream: Boolean = false,
+    hasDubStream: Boolean = false,
+    subStreamLabel: String = "Sub",
+    currentStreamType: PlaybackStreamType = PlaybackStreamType.SUB,
+    streamServerNames: List<String> = emptyList(),
+    selectedStreamServerIndex: Int = 0,
+    onStreamServerChange: (Int) -> Unit = {},
+    onStreamTypeChange: (PlaybackStreamType) -> Unit = {},
+    playbackSpeed: Float = 1f,
+    onPlaybackSpeedChange: (Float) -> Unit = {},
+    playbackQuality: Int = 0,
+    onPlaybackQualityChange: (Int) -> Unit = {},
+    audioLanguage: String = "",
+    onAudioLanguageChange: (String) -> Unit = {},
+    episodes: List<Episode> = emptyList(),
+    selectedEpisodeId: String = "",
+    currentAnimeId: String = "",
+    metadataFormat: String? = null,
+    metadataQuality: String? = null,
+    metadataRating: String? = null,
+    seasons: List<Anime> = emptyList(),
+    related: List<Anime> = emptyList(),
+    recommendations: List<Anime> = emptyList(),
+    inWatchlist: Boolean = false,
+    isTracked: Boolean = false,
+    settingsOverlayOpen: Boolean = false,
+    onPrevious: () -> Unit = {},
+    onNext: () -> Unit = {},
+    onEpisodeSelected: ((Episode) -> Unit)? = null,
+    onAnimeSelected: ((Anime) -> Unit)? = null,
+    onOpenSettings: (() -> Unit)? = null,
+    onToggleWatchlist: (() -> Unit)? = null,
+    onTrackingClick: (() -> Unit)? = null,
+    onSearchGenre: ((String) -> Unit)? = null
 ) {
+    var activeDialog by remember { mutableStateOf<PlaybackQuickDialog?>(null) }
+    val effectiveServers = if (streamServerNames.isNotEmpty()) streamServerNames else listOf("Main", "Mirror")
+    val serverLabel = effectiveServers.getOrNull(selectedStreamServerIndex) ?: effectiveServers.firstOrNull()
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         PlaybackOsdContent(
             metadataTitle = title,
             episodeLabel = episodeLabel,
-            metadataDescription = message,
-            metadataGenres = emptyList(),
-            artworkUrl = null,
+            metadataDescription = description.ifBlank { message },
+            metadataGenres = genres,
+            artworkUrl = artworkUrl,
             firstFrameRendered = false,
-            hasNext = false,
-            hasPrevious = false,
+            hasNext = canNext,
+            hasPrevious = canPrevious,
             positionMs = 0L,
             durationMs = 0L,
             bufferedPositionMs = 0L,
@@ -2952,54 +3548,76 @@ internal fun PlaybackErrorScreen(
             skipRanges = emptyList(),
             autoSkipIntro = false,
             seekSeconds = 10,
-            playbackSpeed = 1f,
-            currentStreamType = PlaybackStreamType.SUB,
-            hasSubStream = false,
-            hasDubStream = false,
-            subStreamLabel = "Sub",
-            streamServerLabel = null,
+            playbackSpeed = playbackSpeed,
+            currentStreamType = currentStreamType,
+            hasSubStream = hasSubStream,
+            hasDubStream = hasDubStream,
+            subStreamLabel = subStreamLabel,
+            streamServerLabel = serverLabel,
             subtitleLanguage = "",
             selectedSubtitleLabel = null,
             subtitlesCount = 0,
-            audioLanguageLabel = "Original",
-            playbackQuality = 0,
+            audioLanguageLabel = AudioLanguageCatalog.all.first().label,
+            playbackQuality = playbackQuality,
             detectedVideoHeight = 0,
             disableTouchGestures = false,
-            episodes = emptyList(),
-            selectedEpisodeId = "",
-            seasons = emptyList(),
-            related = emptyList(),
-            recommendations = emptyList(),
-            inWatchlist = false,
-            isTracked = false,
-            osdHudState = PlayerOsdHudState(
-                icon = IconGlyphs.Warning,
-                text = message,
-                progressPercent = 0f
-            ),
+            episodes = episodes,
+            selectedEpisodeId = selectedEpisodeId,
+            seasons = seasons,
+            related = related,
+            recommendations = recommendations,
+            inWatchlist = inWatchlist,
+            isTracked = isTracked,
+            osdHudState = null,
             seekIndicatorSide = null,
             onShowOsdHud = {},
             onShowSeekIndicator = {},
             onDebouncedSeek = {},
             onImmediateSeek = {},
             onTogglePlay = {},
-            onNextEpisode = {},
-            onPreviousEpisode = {},
-            onEpisodeSelected = null,
-            onAnimeSelected = null,
-            onOpenSettings = null,
-            onPlaybackSpeedDialogRequest = {},
-            onStreamServerDialogRequest = {},
-            onPlaybackQualityDialogRequest = null,
-            onStreamTypeDialogRequest = {},
+            onNextEpisode = onNext,
+            onPreviousEpisode = onPrevious,
+            onEpisodeSelected = onEpisodeSelected,
+            onAnimeSelected = onAnimeSelected,
+            onOpenSettings = onOpenSettings,
+            onPlaybackSpeedDialogRequest = { activeDialog = PlaybackQuickDialog.SPEED },
+            onStreamServerDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_SERVER },
+            onPlaybackQualityDialogRequest = { activeDialog = PlaybackQuickDialog.QUALITY },
+            onStreamTypeDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_TYPE },
             onSubtitlesDialogRequest = null,
-            onAudioLanguageDialogRequest = {},
-            onToggleWatchlist = null,
-            onTrackingClick = null,
-            onSearchGenre = null,
+            onAudioLanguageDialogRequest = { activeDialog = PlaybackQuickDialog.AUDIO_LANGUAGE },
+            onToggleWatchlist = onToggleWatchlist,
+            onTrackingClick = onTrackingClick,
+            onSearchGenre = onSearchGenre,
             onAdjustBrightness = {},
             onAdjustVolume = {},
-            onBack = onBack
+            onBack = onBack,
+            currentAnimeId = currentAnimeId,
+            metadataFormat = metadataFormat,
+            metadataQuality = metadataQuality,
+            metadataRating = metadataRating,
+            settingsOverlayOpen = settingsOverlayOpen
+        )
+
+        PlaybackQuickOptionDialogs(
+            activeDialog = activeDialog,
+            onDismiss = { activeDialog = null },
+            playbackSpeed = playbackSpeed,
+            onPlaybackSpeedChange = onPlaybackSpeedChange,
+            currentStreamType = currentStreamType,
+            hasSubStream = hasSubStream,
+            hasDubStream = hasDubStream,
+            subStreamLabel = subStreamLabel,
+            onStreamTypeChange = onStreamTypeChange,
+            streamServerNames = effectiveServers,
+            selectedStreamServerIndex = selectedStreamServerIndex,
+            onStreamServerChange = onStreamServerChange,
+            audioLanguage = audioLanguage,
+            availableAudioLanguages = emptySet(),
+            onAudioLanguageChange = onAudioLanguageChange,
+            playbackQuality = playbackQuality,
+            detectedVideoHeights = emptyList(),
+            onPlaybackQualityChange = onPlaybackQualityChange
         )
     }
 }
@@ -3009,6 +3627,9 @@ internal fun PlaybackLoadingScreen() {
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
     val textShadowDisabled = LocalPerformanceEffects.current.getOrElse(4) { false }
+    val density = LocalDensity.current
+    val blurOuter = with(density) { (tokens.vw * 0.2f).toPx().coerceAtLeast(1f) }
+    val blurInner = with(density) { (tokens.vw * 0.1f).toPx().coerceAtLeast(1f) }
 
     Box(Modifier.fillMaxSize()) {
         Column(
@@ -3030,7 +3651,7 @@ internal fun PlaybackLoadingScreen() {
                         fontSize = fsSp(tokens.fs10),
                         fontWeight = FontWeight.Bold,
                         style = LocalTextStyle.current.copy(
-                            shadow = Shadow(Color.Black, Offset.Zero, blurRadius = 8f)
+                            shadow = Shadow(Color.Black, Offset.Zero, blurRadius = blurOuter)
                         )
                     )
                 }
@@ -3040,7 +3661,7 @@ internal fun PlaybackLoadingScreen() {
                     fontSize = fsSp(tokens.fs10),
                     fontWeight = FontWeight.Bold,
                     style = LocalTextStyle.current.copy(
-                        shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset.Zero, blurRadius = 4f) else null
+                        shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset.Zero, blurRadius = blurInner) else null
                     )
                 )
             }
@@ -3108,8 +3729,44 @@ internal fun SubtitleStylePickerDialog(
     }
 }
 
+internal fun subtitleBoldSpanWeight(style: Int): FontWeight {
+    return when (SubtitleStyleCatalog.selectedIndex(style, 2)) {
+        3 -> FontWeight.Medium
+        0 -> FontWeight.Bold
+        else -> FontWeight.Black
+    }
+}
+
 @Composable
 internal fun VttSubtitlePreviewOverlay(style: Int) {
+    val boldSpanWeight = subtitleBoldSpanWeight(style)
+    val previewText = remember(boldSpanWeight) {
+        buildAnnotatedString {
+            append("Your subtitles will look like this.\nSubtitle ")
+            withStyle(SpanStyle(fontWeight = boldSpanWeight)) {
+                append("support bold")
+            }
+            append(", ")
+            withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                append("italic")
+            }
+            append(" and ")
+            withStyle(SpanStyle(textDecoration = TextDecoration.Underline)) {
+                append("underline.")
+            }
+        }
+    }
+    VttSubtitleCueOverlay(cueLines = listOf(previewText), style = style)
+}
+
+@Composable
+internal fun VttSubtitleCueOverlay(
+    cueLines: List<AnnotatedString>,
+    style: Int,
+    modifier: Modifier = Modifier
+) {
+    if (cueLines.isEmpty()) return
+
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
 
@@ -3135,10 +3792,10 @@ internal fun VttSubtitlePreviewOverlay(style: Int) {
         3 -> FontWeight.Light
         else -> FontWeight.Normal
     }
-    val boldSpanWeight = when (weightIndex) {
-        3 -> FontWeight.Medium
-        0 -> FontWeight.Bold
-        else -> FontWeight.Black
+    val lineHeightMultiplier = when (fontIndex) {
+        3, 4, 6, 7, 8 -> 1.1f
+        9 -> 1.2f
+        else -> 1.15f
     }
 
     val textColor = SubtitleStyleCatalog.resolveColor(colorIndex, colors.primary1, colors.accent1)
@@ -3158,66 +3815,54 @@ internal fun VttSubtitlePreviewOverlay(style: Int) {
         blurRadius = with(density) { (tokens.vw * 0.1f).toPx() }.coerceAtLeast(1f)
     )
 
-    val previewText = remember(boldSpanWeight) {
-        buildAnnotatedString {
-            append("Your subtitles will look like this.\nSubtitle ")
-            withStyle(SpanStyle(fontWeight = boldSpanWeight)) {
-                append("support bold")
-            }
-            append(", ")
-            withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                append("italic")
-            }
-            append(" and ")
-            withStyle(SpanStyle(textDecoration = TextDecoration.Underline)) {
-                append("underline.")
-            }
-        }
-    }
-
     val baseStyle = TextStyle(
         fontFamily = fontFamily,
         fontSize = fontSize,
         fontWeight = fontWeight,
         textAlign = TextAlign.Center,
-        lineHeight = fontSize * 1.15f
+        lineHeight = fontSize * lineHeightMultiplier
     )
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .padding(start = tokens.vw * 3f, end = tokens.vw * 3f, bottom = tokens.vw * 3f),
         contentAlignment = Alignment.BottomCenter
     ) {
-        Box(
+        Column(
             modifier = Modifier.graphicsLayer { alpha = textOpacity },
-            contentAlignment = Alignment.Center
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(tokens.vw * 0.2f)
         ) {
-            Text(
-                text = previewText,
-                style = baseStyle.copy(
-                    color = outlineColor,
-                    background = Color.Black.copy(alpha = bgAlpha),
-                    shadow = dropShadow,
-                    drawStyle = if (outlineStrokePx > 0f) {
-                        Stroke(width = outlineStrokePx, join = StrokeJoin.Round)
-                    } else null
-                )
-            )
-            if (outlineStrokePx > 0f) {
-                Text(
-                    text = previewText,
-                    style = baseStyle.copy(color = textColor)
-                )
-            } else {
-                Text(
-                    text = previewText,
-                    style = baseStyle.copy(
-                        color = textColor,
-                        background = Color.Black.copy(alpha = bgAlpha),
-                        shadow = dropShadow
+            cueLines.forEach { line ->
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = line,
+                        style = baseStyle.copy(
+                            color = outlineColor,
+                            background = Color.Black.copy(alpha = bgAlpha),
+                            shadow = dropShadow,
+                            drawStyle = if (outlineStrokePx > 0f) {
+                                Stroke(width = outlineStrokePx, join = StrokeJoin.Round)
+                            } else null
+                        )
                     )
-                )
+                    if (outlineStrokePx > 0f) {
+                        Text(
+                            text = line,
+                            style = baseStyle.copy(color = textColor)
+                        )
+                    } else {
+                        Text(
+                            text = line,
+                            style = baseStyle.copy(
+                                color = textColor,
+                                background = Color.Black.copy(alpha = bgAlpha),
+                                shadow = dropShadow
+                            )
+                        )
+                    }
+                }
             }
         }
     }

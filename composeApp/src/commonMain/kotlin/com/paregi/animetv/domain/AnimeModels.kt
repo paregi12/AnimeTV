@@ -81,7 +81,7 @@ data class SkipRange(
     enum class Kind { INTRO, OUTRO, FILLER }
 }
 
-enum class PlaybackStreamType { SUB, DUB }
+enum class PlaybackStreamType { SUB, SOFTSUB, DUB }
 
 data class PlaybackChoice(
     val url: String,

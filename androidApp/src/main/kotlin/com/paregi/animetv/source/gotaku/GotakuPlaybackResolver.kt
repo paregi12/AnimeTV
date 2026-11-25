@@ -22,7 +22,9 @@ internal class GotakuPlaybackResolver(
         preferDub: Boolean,
         hasSub: Boolean,
         source: CatalogSource,
-        mirrorIndex: Int = 0
+        mirrorIndex: Int = 0,
+        subtitleLanguage: String = "",
+        requestedStreamType: PlaybackStreamType? = null
     ): PlaybackChoice {
         val flagsRoot = try {
             catalogApi.json("${source.root}/api/v1/episodes/$episodeId?k=10", source)
@@ -34,7 +36,7 @@ internal class GotakuPlaybackResolver(
         val flags = flagsRoot?.optJSONObject("data") ?: flagsRoot?.takeIf {
             it.has("soft_sub") || it.has("hard_sub") || it.has("dub")
         }
-        val modes = resolveModes(flags, preferDub, hasSub)
+        val modes = resolveModes(flags, preferDub, hasSub, subtitleLanguage, requestedStreamType)
         val selectedIndex = mirrorIndex.coerceIn(0, modes.lastIndex.coerceAtLeast(0))
         val candidateIndices = listOf(selectedIndex) + modes.indices.filter { it != selectedIndex }
 
@@ -112,25 +114,54 @@ internal class GotakuPlaybackResolver(
         )
     }
 
-    private fun resolveModes(flags: JSONObject?, preferDub: Boolean, hasSub: Boolean): List<AudioMode> {
+    private fun resolveModes(
+        flags: JSONObject?,
+        preferDub: Boolean,
+        hasSub: Boolean,
+        subtitleLanguage: String,
+        requestedStreamType: PlaybackStreamType?
+    ): List<AudioMode> {
+        val effectiveType = requestedStreamType ?: when {
+            preferDub -> PlaybackStreamType.DUB
+            subtitleLanguage.equals("hard", ignoreCase = true) && hasSub -> PlaybackStreamType.SUB
+            else -> null
+        }
         if (flags != null) {
+            val hasDub = flags.optBoolean("dub", false)
+            val hasSoft = flags.optBoolean("soft_sub", false)
+            val hasHard = flags.optBoolean("hard_sub", false)
             val available = buildList {
-                if (preferDub) {
-                    if (flags.optBoolean("dub", false)) add(DUB_MODE)
-                    if (flags.optBoolean("soft_sub", false)) add(SOFT_SUB_MODE)
-                    if (flags.optBoolean("hard_sub", false)) add(HARD_SUB_MODE)
-                } else {
-                    if (flags.optBoolean("soft_sub", false)) add(SOFT_SUB_MODE)
-                    if (flags.optBoolean("hard_sub", false)) add(HARD_SUB_MODE)
-                    if (flags.optBoolean("dub", false)) add(DUB_MODE)
+                when (effectiveType) {
+                    PlaybackStreamType.SUB -> {
+                        if (hasHard) add(HARD_SUB_MODE)
+                        if (hasSoft) add(SOFT_SUB_MODE)
+                        if (hasDub) add(DUB_MODE)
+                    }
+                    PlaybackStreamType.SOFTSUB -> {
+                        if (hasSoft) add(SOFT_SUB_MODE)
+                        if (hasHard) add(HARD_SUB_MODE)
+                        if (hasDub) add(DUB_MODE)
+                    }
+                    PlaybackStreamType.DUB -> {
+                        if (hasDub) add(DUB_MODE)
+                        if (hasSoft) add(SOFT_SUB_MODE)
+                        if (hasHard) add(HARD_SUB_MODE)
+                    }
+                    null -> {
+                        if (hasSoft) add(SOFT_SUB_MODE)
+                        if (hasHard) add(HARD_SUB_MODE)
+                        if (hasDub) add(DUB_MODE)
+                    }
                 }
             }
             if (available.isNotEmpty()) return available
         }
-        return when {
-            preferDub -> listOf(DUB_MODE, HARD_SUB_MODE, SOFT_SUB_MODE)
-            hasSub -> listOf(SOFT_SUB_MODE, HARD_SUB_MODE)
-            else -> listOf(DUB_MODE, SOFT_SUB_MODE, HARD_SUB_MODE)
+        return when (effectiveType) {
+            PlaybackStreamType.DUB -> listOf(DUB_MODE, HARD_SUB_MODE, SOFT_SUB_MODE)
+            PlaybackStreamType.SUB -> listOf(HARD_SUB_MODE, SOFT_SUB_MODE, DUB_MODE)
+            PlaybackStreamType.SOFTSUB -> listOf(SOFT_SUB_MODE, HARD_SUB_MODE, DUB_MODE)
+            null -> if (hasSub) listOf(SOFT_SUB_MODE, HARD_SUB_MODE)
+            else listOf(DUB_MODE, SOFT_SUB_MODE, HARD_SUB_MODE)
         }
     }
 
@@ -186,7 +217,7 @@ internal class GotakuPlaybackResolver(
     )
 
     private companion object {
-        val SOFT_SUB_MODE = AudioMode("soft_sub", "Soft Sub", PlaybackStreamType.SUB)
+        val SOFT_SUB_MODE = AudioMode("soft_sub", "Soft Sub", PlaybackStreamType.SOFTSUB)
         val HARD_SUB_MODE = AudioMode("hard_sub", "Hard Sub", PlaybackStreamType.SUB)
         val DUB_MODE = AudioMode("dub", "Dub", PlaybackStreamType.DUB)
 

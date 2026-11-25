@@ -2,6 +2,7 @@ package com.paregi.animetv.source
 
 import com.paregi.animetv.AndroidStreamProxy
 import com.paregi.animetv.domain.PlaybackChoice
+import com.paregi.animetv.domain.PlaybackStreamType
 import com.paregi.animetv.domain.SubtitleTrack
 import com.paregi.animetv.domain.TranslationRepository
 import com.paregi.animetv.source.gotaku.GotakuPlaybackResolver
@@ -13,7 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
-/** Selects a provider playback resolver and applies shared subtitle translation fallback. */
+/** Selects a provider playback resolver and translates subtitles on demand. */
 internal class AndroidPlaybackResolver(
     streamProxy: AndroidStreamProxy,
     catalogApi: AndroidCatalogApi,
@@ -30,41 +31,54 @@ internal class AndroidPlaybackResolver(
         mirrorIndex: Int,
         subtitleLanguage: String,
         hasSub: Boolean,
+        requestedStreamType: PlaybackStreamType?,
         source: CatalogSource
     ): PlaybackChoice = withContext(Dispatchers.IO) {
-        val choice = if (source.isReAnime) {
-            reAnimeResolver.resolvePlayback(episodeId, preferDub, mirrorIndex, source)
+        if (source.isReAnime) {
+            reAnimeResolver.resolvePlayback(
+                episodeId = episodeId,
+                preferDub = preferDub,
+                mirrorIndex = mirrorIndex,
+                requestedStreamType = requestedStreamType,
+                source = source
+            )
         } else {
-            gotakuResolver.resolvePlayback(episodeId, preferDub, hasSub, source, mirrorIndex = mirrorIndex)
+            gotakuResolver.resolvePlayback(
+                episodeId = episodeId,
+                preferDub = preferDub,
+                hasSub = hasSub,
+                source = source,
+                mirrorIndex = mirrorIndex,
+                subtitleLanguage = subtitleLanguage,
+                requestedStreamType = requestedStreamType
+            )
         }
-        translateSubtitleIfNeeded(choice, subtitleLanguage)
     }
 
-    private suspend fun translateSubtitleIfNeeded(
+    suspend fun translateChoiceSubtitle(
         choice: PlaybackChoice,
         targetLanguage: String
-    ): PlaybackChoice {
-        if (targetLanguage.isBlank() || targetLanguage in setOf("hard", "nosub", "dub", "en")) return choice
+    ): SubtitleTrack? = withContext(Dispatchers.IO) {
+        if (targetLanguage.isBlank() || targetLanguage in setOf("hard", "nosub", "dub", "en")) return@withContext null
         fun matchesTarget(track: SubtitleTrack): Boolean {
             val trackLanguage = track.language.lowercase(Locale.ROOT)
             val target = targetLanguage.lowercase(Locale.ROOT)
             return trackLanguage == target || trackLanguage.substringBefore('-') == target.substringBefore('-')
         }
-        if (choice.subtitles.any(::matchesTarget)) return choice
+        if (choice.subtitles.any(::matchesTarget)) return@withContext null
         val candidates = choice.subtitles.filter {
             it.language.equals("en", ignoreCase = true) || it.language.startsWith("en-", ignoreCase = true)
         } + choice.subtitles.filter { it.defaultSelected } + choice.subtitles
         val sourceTrack = candidates.distinctBy { it.id }.firstOrNull { track ->
             track.url.substringBefore('?').substringAfterLast('.', "").lowercase() in
                 setOf("vtt", "srt", "ass", "ssa")
-        } ?: return choice
-        val translated = try {
+        } ?: return@withContext null
+        try {
             translationRepository.translateSubtitle(sourceTrack, choice.headers, targetLanguage)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             null
-        } ?: return choice
-        return choice.copy(subtitles = choice.subtitles + translated)
+        }
     }
 }

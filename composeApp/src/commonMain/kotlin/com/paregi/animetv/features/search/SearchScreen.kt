@@ -102,6 +102,7 @@ import com.paregi.animetv.navigationFocusable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlin.math.roundToInt
 
 @Composable
@@ -117,7 +118,9 @@ internal fun SearchScreen(
     profileRating: Int,
     profileActivation: Int,
     onAnimeSelected: (Anime) -> Unit,
-    largeUi: Boolean = false
+    largeUi: Boolean = false,
+    pendingFilterRequest: Pair<Int, String>? = null,
+    onPendingFilterConsumed: () -> Unit = {}
 ) {
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
@@ -168,8 +171,31 @@ internal fun SearchScreen(
     }
 
     LaunchedEffect(isTouch, tvLayout) {
-        if (!isTouch && query.isBlank()) {
+        if (!isTouch && query.isBlank() && pendingFilterRequest == null && selectedFilterKeys.isEmpty()) {
             runCatching { remoteKeyboardRequester.requestFocus() }
+        }
+    }
+
+    val filterOptions = remember(selectedSource, aniListSearch) {
+        searchFilterOptions(selectedSource, aniListSearch)
+    }
+
+    LaunchedEffect(pendingFilterRequest, filterOptions) {
+        val (_, rawFilter) = pendingFilterRequest ?: return@LaunchedEffect
+        val matchedKey = resolveSearchFilterKey(rawFilter, filterOptions)
+        if (matchedKey != null) {
+            selectedFilterKeys = setOf(matchedKey)
+            if (query.isNotBlank()) onQueryChange("")
+        } else if (rawFilter.isNotBlank()) {
+            selectedFilterKeys = emptySet()
+            onQueryChange(rawFilter.trim())
+        }
+        page = 1
+        searchSubmitNonce += 1
+        onPendingFilterConsumed()
+        if (!isTouch) {
+            yield()
+            runCatching { resultsRowRequester.requestFocus() }
         }
     }
 
@@ -278,10 +304,6 @@ internal fun SearchScreen(
                 .take(5)
                 .map { it.first }
         }
-    }
-
-    val filterOptions = remember(selectedSource, aniListSearch) {
-        searchFilterOptions(selectedSource, aniListSearch)
     }
 
     val rootBackgroundModifier = if (portrait) {
@@ -1264,6 +1286,20 @@ private fun TouchHistoryStrip(
             }
         }
     }
+}
+
+private fun resolveSearchFilterKey(raw: String, options: List<SearchFilterOption>): String? {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return null
+    val normalized = trimmed.lowercase().replace('-', '_').replace(' ', '_')
+    fun matches(option: SearchFilterOption, isFormat: Boolean): Boolean {
+        val keyBody = if (isFormat) option.key.removePrefix("_") else option.key
+        return option.label.equals(trimmed, ignoreCase = true) ||
+            keyBody.equals(normalized, ignoreCase = true) ||
+            keyBody.equals(trimmed, ignoreCase = true)
+    }
+    return options.firstOrNull { !it.key.startsWith("_") && matches(it, isFormat = false) }?.key
+        ?: options.firstOrNull { it.key.startsWith("_") && matches(it, isFormat = true) }?.key
 }
 
 private fun sanitizeRemoteQuery(raw: String): String = raw

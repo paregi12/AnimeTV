@@ -87,6 +87,7 @@ import com.paregi.animetv.core.ui.ListOrderItem
 import com.paregi.animetv.core.ui.ListOrderMode
 import com.paregi.animetv.core.ui.LocalCardStyle
 import com.paregi.animetv.core.ui.displayAnimeTitle
+import com.paregi.animetv.core.ui.imageCdnUrl
 import com.paregi.animetv.domain.AccountProvider
 import com.paregi.animetv.domain.AccountRepository
 import com.paregi.animetv.domain.AccountState
@@ -111,6 +112,7 @@ import com.paregi.animetv.domain.ProfileRepository
 import com.paregi.animetv.domain.SearchHistoryRepository
 import com.paregi.animetv.domain.SettingsRepository
 import com.paregi.animetv.domain.SourceCatalog
+import com.paregi.animetv.domain.SubtitleTrack
 import com.paregi.animetv.domain.TranslationRepository
 import com.paregi.animetv.domain.TvIntegrationRepository
 import com.paregi.animetv.domain.TvLaunchRequest
@@ -128,6 +130,7 @@ import com.paregi.animetv.features.profile.ProfileChooserScreen
 import com.paregi.animetv.features.profile.ProfileLoadingScreen
 import com.paregi.animetv.features.profile.ProfileOptionsFlowDialog
 import com.paregi.animetv.features.profile.curatedWallpapers
+import com.paregi.animetv.features.search.SearchScreen
 import com.paregi.animetv.features.settings.SettingsScreen
 import com.paregi.animetv.features.settings.SourceMirrorBenchmarkDialog
 import kotlinx.coroutines.CancellationException
@@ -166,6 +169,8 @@ fun AnimeTvApp(
     val scrollOffsets = remember { mutableStateMapOf<Section, Dp>() }
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var pendingSearchFilter by remember { mutableStateOf<Pair<Int, String>?>(null) }
+    var pendingSearchFilterNonce by remember { mutableIntStateOf(0) }
     var selectedAnime by rememberSaveable(stateSaver = animeStateSaver) { mutableStateOf<Anime?>(null) }
     var retainedDetailAnime by remember { mutableStateOf<Anime?>(null) }
     var retainedAnimeDetails by remember { mutableStateOf<AnimeDetails?>(null) }
@@ -180,6 +185,22 @@ fun AnimeTvApp(
     var aniListInfoLoaded by remember { mutableStateOf(false) }
     var aniListInfoError by remember { mutableStateOf<String?>(null) }
     var translatedSynopsis by remember { mutableStateOf<String?>(null) }
+    val synopsisTranslationCache = remember { mutableStateMapOf<Pair<String, String>, String>() }
+    val translatedSubtitleCache = remember { mutableStateMapOf<Pair<String, String>, SubtitleTrack>() }
+
+    var playerPreviewAnime by remember { mutableStateOf<Anime?>(null) }
+    var playerPreviewDetails by remember { mutableStateOf<AnimeDetails?>(null) }
+    var playerPreviewLoading by remember { mutableStateOf(false) }
+    var playerPreviewSynopsis by remember { mutableStateOf<String?>(null) }
+    var playerPreviewTracking by remember { mutableStateOf(AnimeTrackingState()) }
+    var playerPreviewTrackingLoading by remember { mutableStateOf(false) }
+    var playerPreviewTrackingBusy by remember { mutableStateOf(false) }
+    var playerPreviewTrackingMessage by remember { mutableStateOf<String?>(null) }
+    var playerPreviewAniListInfoAnimeId by remember { mutableStateOf<String?>(null) }
+    var playerPreviewAniListInfo by remember { mutableStateOf<AniListAnimeInfo?>(null) }
+    var playerPreviewAniListInfoLoading by remember { mutableStateOf(false) }
+    var playerPreviewAniListInfoLoaded by remember { mutableStateOf(false) }
+    var playerPreviewAniListInfoError by remember { mutableStateOf<String?>(null) }
 
     var appSettings by remember { mutableStateOf(AppSettings()) }
     var myListLayout by remember { mutableStateOf(MyListLayout.default()) }
@@ -208,10 +229,10 @@ fun AnimeTvApp(
     var playbackChoice by remember { mutableStateOf<PlaybackChoice?>(null) }
     var playbackSpeed by remember { mutableStateOf(1f) }
     var playbackStreamOverride by remember { mutableStateOf<PlaybackStreamType?>(null) }
+    var playbackMirrorOverride by remember { mutableStateOf<Int?>(null) }
     var playbackPositionMs by rememberSaveable(selectedEpisode?.id) { mutableStateOf<Long?>(null) }
     var playbackDurationMs by rememberSaveable(selectedEpisode?.id) { mutableStateOf<Long?>(null) }
     var playbackError by remember { mutableStateOf<String?>(null) }
-    var playbackLoading by remember { mutableStateOf(false) }
     var tvResumePosition by rememberSaveable(stateSaver = episodePositionSaver) {
         mutableStateOf<Pair<String, Long>?>(null)
     }
@@ -225,6 +246,7 @@ fun AnimeTvApp(
         mutableStateOf<Pair<String, Long>?>(null)
     }
     var preloadedPlaybackChoice by remember { mutableStateOf<Pair<String, PlaybackChoice>?>(null) }
+    var preloadedAppliedEpisodeId by remember { mutableStateOf<String?>(null) }
 
     var appToastMessage by remember { mutableStateOf<String?>(null) }
     var appToastVersion by remember { mutableIntStateOf(0) }
@@ -299,14 +321,14 @@ fun AnimeTvApp(
 
     fun startPlayback(episode: Episode) {
         if (preloadedPlaybackChoice?.first == episode.id) {
+            preloadedAppliedEpisodeId = episode.id
             playbackChoice = preloadedPlaybackChoice?.second
             preloadedPlaybackChoice = null
-            playbackLoading = false
             playbackError = null
             selectedEpisode = episode
             return
         }
-        playbackLoading = true
+        preloadedAppliedEpisodeId = null
         playbackChoice = null
         playbackError = null
         selectedEpisode = episode
@@ -347,8 +369,10 @@ fun AnimeTvApp(
         scheduleCacheKey = null
         playbackChoice = null
         playbackStreamOverride = null
+        playbackMirrorOverride = null
         playbackError = null
-        playbackLoading = false
+        preloadedPlaybackChoice = null
+        preloadedAppliedEpisodeId = null
         tvResumePosition = null
         playbackStartOverride = null
         closePlaybackConfirmation = false
@@ -358,6 +382,22 @@ fun AnimeTvApp(
         settingsReady = false
         settingsOpen = false
         settingsReloadPending = false
+        pendingSearchFilter = null
+        translatedSubtitleCache.clear()
+        synopsisTranslationCache.clear()
+        playerPreviewAnime = null
+        playerPreviewDetails = null
+        playerPreviewLoading = false
+        playerPreviewSynopsis = null
+        playerPreviewTracking = AnimeTrackingState()
+        playerPreviewTrackingLoading = false
+        playerPreviewTrackingBusy = false
+        playerPreviewTrackingMessage = null
+        playerPreviewAniListInfoAnimeId = null
+        playerPreviewAniListInfo = null
+        playerPreviewAniListInfoLoading = false
+        playerPreviewAniListInfoLoaded = false
+        playerPreviewAniListInfoError = null
         watchlist = emptyList()
         watchHistory = emptyList()
         accountState = AccountState()
@@ -384,6 +424,66 @@ fun AnimeTvApp(
     fun saveHomeLayout(layout: HomeLayout) {
         homeLayout = layout
         coroutineScope.launch { settingsRepository.saveHomeLayout(layout) }
+    }
+
+    fun closePlayerPreview() {
+        playerPreviewAnime = null
+        playerPreviewDetails = null
+        playerPreviewLoading = false
+        playerPreviewSynopsis = null
+        playerPreviewTracking = AnimeTrackingState()
+        playerPreviewTrackingLoading = false
+        playerPreviewTrackingBusy = false
+        playerPreviewTrackingMessage = null
+        playerPreviewAniListInfoAnimeId = null
+        playerPreviewAniListInfo = null
+        playerPreviewAniListInfoLoading = false
+        playerPreviewAniListInfoLoaded = false
+        playerPreviewAniListInfoError = null
+    }
+
+    fun isAnimeRestricted(anime: Anime): Boolean =
+        activeProfile?.parentalRating?.let { it < 4 } == true &&
+            (anime.adult || anime.title.contains("censor", ignoreCase = true) ||
+                anime.originalTitle?.contains("censor", ignoreCase = true) == true)
+
+    suspend fun translateSynopsisCached(synopsis: String?, language: String): String? {
+        if (synopsis.isNullOrBlank() || language.isBlank() ||
+            language in setOf("hard", "nosub", "dub", "en")
+        ) return null
+        val key = synopsis to language
+        synopsisTranslationCache[key]?.let { return it }
+        val translated = try {
+            translationRepository.translateText(synopsis, language)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+        if (!translated.isNullOrBlank()) {
+            synopsisTranslationCache[key] = translated
+        }
+        return translated
+    }
+
+    fun requestPreviewAniListInfo(anime: Anime, queryAnime: Anime = anime, retry: Boolean = false) {
+        if (!retry && playerPreviewAniListInfoAnimeId == anime.id &&
+            (playerPreviewAniListInfoLoading || playerPreviewAniListInfoLoaded)
+        ) return
+        playerPreviewAniListInfoAnimeId = anime.id
+        playerPreviewAniListInfo = null
+        playerPreviewAniListInfoError = null
+        playerPreviewAniListInfoLoading = true
+        playerPreviewAniListInfoLoaded = false
+        coroutineScope.launch {
+            val result = runCatching { animeRepository.loadAniListInfo(queryAnime) }
+            if (playerPreviewAnime?.id == anime.id) {
+                playerPreviewAniListInfo = result.getOrNull()
+                playerPreviewAniListInfoError = result.exceptionOrNull()?.message
+                playerPreviewAniListInfoLoading = false
+                playerPreviewAniListInfoLoaded = true
+            }
+        }
     }
 
     fun requestAniListInfo(anime: Anime, queryAnime: Anime = anime, retry: Boolean = false) {
@@ -507,7 +607,7 @@ fun AnimeTvApp(
 
     LaunchedEffect(showPlaybackBackHint) {
         if (showPlaybackBackHint) {
-            delay(2_000)
+            delay(1_000)
             showPlaybackBackHint = false
         }
     }
@@ -624,19 +724,7 @@ fun AnimeTvApp(
         val animeId = selectedAnime?.id
         val synopsis = animeDetails?.anime?.synopsis ?: selectedAnime?.synopsis
         val language = appSettings.subtitleLanguage
-        val translated = if (synopsis.isNullOrBlank() || language.isBlank() ||
-            language in setOf("hard", "nosub", "dub", "en")
-        ) {
-            null
-        } else {
-            try {
-                translationRepository.translateText(synopsis, language)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                null
-            }
-        }
+        val translated = translateSynopsisCached(synopsis, language)
         translatedSynopsis = translated
         if (animeId != null && selectedAnime?.id == animeId) {
             retainedSynopsis = translated ?: synopsis ?: retainedDetailAnime?.synopsis
@@ -644,33 +732,145 @@ fun AnimeTvApp(
     }
 
     LaunchedEffect(
+        playerPreviewAnime?.id,
+        animeRepository,
+        appSettings.selectedSource,
+        settingsReady,
+        activeProfile?.prefix
+    ) {
+        if (!settingsReady || activeProfile == null) return@LaunchedEffect
+        val preview = playerPreviewAnime
+        if (preview == null) {
+            playerPreviewDetails = null
+            playerPreviewLoading = false
+        } else {
+            playerPreviewDetails = null
+            playerPreviewLoading = true
+            animeRepository.selectSource(appSettings.selectedSource)
+            val result = runCatching { animeRepository.loadDetails(preview.id) }
+            val loaded = result.getOrNull()
+            if (playerPreviewAnime?.id != preview.id) return@LaunchedEffect
+            playerPreviewLoading = false
+            if (loaded != null && !loaded.anime.allowedForRating(activeProfile?.parentalRating ?: 6)) {
+                closePlayerPreview()
+                showToast("PARENTAL: Opening anime is not allowed...")
+                return@LaunchedEffect
+            }
+            if (loaded == null &&
+                result.exceptionOrNull()?.message == "This title is not available from the selected source"
+            ) {
+                showToast("This title is not available from the selected source")
+            }
+            playerPreviewDetails = loaded
+            playerPreviewSynopsis = loaded?.anime?.synopsis ?: preview.synopsis
+        }
+    }
+
+    LaunchedEffect(
+        playerPreviewAnime?.id,
+        playerPreviewDetails?.anime?.synopsis,
+        appSettings.subtitleLanguage,
+        translationRepository
+    ) {
+        val preview = playerPreviewAnime ?: return@LaunchedEffect
+        val synopsis = playerPreviewDetails?.anime?.synopsis ?: preview.synopsis
+        val translated = translateSynopsisCached(synopsis, appSettings.subtitleLanguage)
+        if (playerPreviewAnime?.id == preview.id) {
+            playerPreviewSynopsis = translated ?: synopsis
+        }
+    }
+
+    LaunchedEffect(
+        playerPreviewAnime?.id,
+        playerPreviewAnime?.aniListId,
+        playerPreviewAnime?.malId,
+        playerPreviewDetails?.anime?.aniListId,
+        playerPreviewDetails?.anime?.malId,
+        accountState.aniListUsername,
+        accountState.malUsername,
+        accountRepository,
+        settingsReady,
+        activeProfile?.prefix
+    ) {
+        if (!settingsReady || activeProfile == null) return@LaunchedEffect
+        val target = playerPreviewDetails?.anime ?: playerPreviewAnime
+        playerPreviewTrackingMessage = null
+        if (target == null) {
+            playerPreviewTracking = AnimeTrackingState()
+            playerPreviewTrackingLoading = false
+        } else {
+            playerPreviewTrackingLoading = true
+            val loaded = runCatching { accountRepository.loadTracking(target) }
+                .getOrDefault(AnimeTrackingState())
+            if ((playerPreviewDetails?.anime ?: playerPreviewAnime)?.id == target.id) {
+                playerPreviewTracking = loaded
+                playerPreviewTrackingLoading = false
+            }
+        }
+    }
+
+    val hardSubOnlyPreference = !appSettings.preferDub &&
+        playbackStreamOverride == null &&
+        selectedAnime?.sourceIndex != SourceCatalog.REANIME_INDEX &&
+        appSettings.subtitleLanguage == "hard"
+
+    LaunchedEffect(
+        appSettings.preferDub,
+        playbackStreamOverride,
+        playbackMirrorOverride,
+        appSettings.mirrorServer,
+        appSettings.selectedSource,
+        hardSubOnlyPreference
+    ) {
+        preloadedPlaybackChoice = null
+        preloadedAppliedEpisodeId = null
+    }
+
+    LaunchedEffect(
         selectedEpisode?.id,
         appSettings.preferDub,
         playbackStreamOverride,
+        playbackMirrorOverride,
         appSettings.mirrorServer,
         appSettings.selectedSource,
-        appSettings.subtitleLanguage,
+        hardSubOnlyPreference,
         settingsReady,
         activeProfile?.prefix
     ) {
         if (!settingsReady || activeProfile == null) return@LaunchedEffect
         val episode = selectedEpisode ?: return@LaunchedEffect
+        if (preloadedAppliedEpisodeId == episode.id && playbackChoice != null) {
+            preloadedAppliedEpisodeId = null
+            return@LaunchedEffect
+        }
+        preloadedAppliedEpisodeId = null
         val requestedSource = appSettings.selectedSource
-        val requestedMirror = appSettings.mirrorServer
+        val requestedMirror = playbackMirrorOverride ?: appSettings.mirrorServer
         val requestedSubtitleLanguage = appSettings.subtitleLanguage
         val requestedPreferDub = appSettings.preferDub
         val requestedStreamOverride = playbackStreamOverride
-        val requestedStreamType = playbackStreamOverride
-            ?: if (appSettings.preferDub) PlaybackStreamType.DUB else PlaybackStreamType.SUB
+        val requestedHardSub = hardSubOnlyPreference
+        val requestedStreamType = playbackStreamOverride ?: when {
+            appSettings.preferDub && episode.hasDub -> PlaybackStreamType.DUB
+            requestedHardSub && episode.hasSub -> PlaybackStreamType.SUB
+            else -> null
+        }
         val preferDub = episode.hasDub &&
-            (requestedStreamType == PlaybackStreamType.DUB || !episode.hasSub)
-        fun requestIsCurrent(): Boolean = selectedEpisode?.id == episode.id &&
-            appSettings.selectedSource == requestedSource &&
-            appSettings.mirrorServer == requestedMirror &&
-            appSettings.subtitleLanguage == requestedSubtitleLanguage &&
-            appSettings.preferDub == requestedPreferDub &&
-            playbackStreamOverride == requestedStreamOverride
-        playbackLoading = true
+            (requestedStreamType == PlaybackStreamType.DUB ||
+                (!episode.hasSub && requestedStreamType == null))
+        fun requestIsCurrent(): Boolean {
+            val currentHardSub = !appSettings.preferDub &&
+                playbackStreamOverride == null &&
+                selectedAnime?.sourceIndex != SourceCatalog.REANIME_INDEX &&
+                appSettings.subtitleLanguage == "hard"
+            val currentMirror = playbackMirrorOverride ?: appSettings.mirrorServer
+            return selectedEpisode?.id == episode.id &&
+                appSettings.selectedSource == requestedSource &&
+                currentMirror == requestedMirror &&
+                appSettings.preferDub == requestedPreferDub &&
+                playbackStreamOverride == requestedStreamOverride &&
+                currentHardSub == requestedHardSub
+        }
         playbackChoice = null
         playbackError = null
         try {
@@ -680,7 +880,8 @@ fun AnimeTvApp(
                 preferDub = preferDub,
                 mirrorIndex = requestedMirror,
                 subtitleLanguage = requestedSubtitleLanguage,
-                hasSub = episode.hasSub
+                hasSub = episode.hasSub,
+                requestedStreamType = requestedStreamType
             )
             if (!requestIsCurrent()) return@LaunchedEffect
             playbackChoice = resolvedChoice
@@ -691,8 +892,50 @@ fun AnimeTvApp(
             val errMsg = error.message ?: "Could not resolve this episode"
             playbackError = errMsg
             showToast(errMsg)
-        } finally {
-            if (requestIsCurrent()) playbackLoading = false
+        }
+    }
+
+    LaunchedEffect(
+        playbackChoice?.url,
+        appSettings.subtitleLanguage,
+        settingsReady,
+        activeProfile?.prefix
+    ) {
+        if (!settingsReady || activeProfile == null) return@LaunchedEffect
+        val choice = playbackChoice ?: return@LaunchedEffect
+        val targetLanguage = appSettings.subtitleLanguage
+        if (targetLanguage.isBlank() || targetLanguage in setOf("hard", "nosub", "dub", "en")) {
+            return@LaunchedEffect
+        }
+        fun matchesTarget(track: SubtitleTrack): Boolean {
+            val trackLang = track.language.lowercase()
+            val target = targetLanguage.lowercase()
+            return trackLang == target || trackLang.substringBefore('-') == target.substringBefore('-')
+        }
+        if (choice.subtitles.any(::matchesTarget)) return@LaunchedEffect
+        val sourceUrlKey = (choice.subtitles.firstOrNull {
+            it.language.equals("en", ignoreCase = true) || it.language.startsWith("en-", ignoreCase = true)
+        } ?: choice.subtitles.firstOrNull { it.defaultSelected } ?: choice.subtitles.firstOrNull())?.url
+            ?: return@LaunchedEffect
+        val cacheKey = sourceUrlKey to targetLanguage
+        val cached = translatedSubtitleCache[cacheKey]
+        val translated = if (cached != null) {
+            cached
+        } else {
+            try {
+                animeRepository.translatePlaybackSubtitle(choice, targetLanguage)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }?.also { translatedSubtitleCache[cacheKey] = it }
+        } ?: return@LaunchedEffect
+        playbackChoice = playbackChoice?.let { current ->
+            if (current.url == choice.url && current.subtitles.none { it.id == translated.id }) {
+                current.copy(subtitles = current.subtitles + translated)
+            } else {
+                current
+            }
         }
     }
 
@@ -716,15 +959,16 @@ fun AnimeTvApp(
     }
 
     val openAnime: (Anime, String?) -> Unit = { anime, resumeId ->
-        val restricted = activeProfile?.parentalRating?.let { it < 4 } == true &&
-            (anime.adult || anime.title.contains("censor", ignoreCase = true) ||
-                anime.originalTitle?.contains("censor", ignoreCase = true) == true)
-        if (restricted) {
+        if (isAnimeRestricted(anime)) {
             showToast("PARENTAL: Opening anime is not allowed...")
         } else {
+            closePlayerPreview()
             selectedEpisode = null
-            playbackLoading = false
             playbackChoice = null
+            playbackStreamOverride = null
+            playbackMirrorOverride = null
+            preloadedPlaybackChoice = null
+            preloadedAppliedEpisodeId = null
             playbackError = null
             tvResumePosition = null
             playbackStartOverride = null
@@ -749,7 +993,18 @@ fun AnimeTvApp(
         }
     }
 
-    fun leavePlayback() {
+    fun openPlayerPreview(anime: Anime) {
+        if (isAnimeRestricted(anime)) {
+            showToast("PARENTAL: Opening anime is not allowed...")
+            return
+        }
+        closePlayerPreview()
+        playerPreviewSynopsis = anime.synopsis
+        playerPreviewLoading = true
+        playerPreviewAnime = anime
+    }
+
+    fun saveActiveContinueWatching() {
         val anime = selectedAnime
         val episode = selectedEpisode
         val position = playbackPositionMs
@@ -765,10 +1020,17 @@ fun AnimeTvApp(
                 )
             }
         }
+    }
+
+    fun leavePlayback() {
+        saveActiveContinueWatching()
+        closePlayerPreview()
         selectedEpisode = null
-        playbackLoading = false
         playbackChoice = null
+        playbackStreamOverride = null
+        playbackMirrorOverride = null
         preloadedPlaybackChoice = null
+        preloadedAppliedEpisodeId = null
         playbackError = null
         tvResumePosition = null
         playbackStartOverride = null
@@ -806,7 +1068,6 @@ fun AnimeTvApp(
         mainSection = Section.Home
         selectedAnime = null
         selectedEpisode = null
-        playbackLoading = false
         playbackChoice = null
         playbackError = null
         sidebarOpen = false
@@ -822,6 +1083,8 @@ fun AnimeTvApp(
             navActionMenuSection != null -> navActionMenuSection = null
             exitConfirmation -> exitConfirmation = false
             settingsOpen -> closeSettings()
+            playerPreviewAnime != null -> closePlayerPreview()
+            selectedEpisode != null && playbackChoice == null && playbackError == null -> leavePlayback()
             selectedEpisode != null -> requestPlaybackClose(fromSystemBack = true)
             selectedAnime != null -> selectedAnime = null
             profileChooserOpen -> profileChooserOpen = false
@@ -920,10 +1183,11 @@ fun AnimeTvApp(
     }
 
     PlatformBackHandler(
-        enabled = selectedEpisode != null || selectedAnime != null || profileChooserOpen ||
-            sidebarOpen || sidebarExitArmed || settingsOpen || section != Section.Home ||
-            navActionMenuSection != null || homeLayoutDialogOpen || myListLayoutDialogOpen ||
-            clearHistoryStage > 0 || (activeProfile != null && appSettings.exitMode != 0),
+        enabled = selectedEpisode != null || selectedAnime != null || playerPreviewAnime != null ||
+            profileChooserOpen || sidebarOpen || sidebarExitArmed || settingsOpen ||
+            section != Section.Home || navActionMenuSection != null || homeLayoutDialogOpen ||
+            myListLayoutDialogOpen || clearHistoryStage > 0 ||
+            (activeProfile != null && appSettings.exitMode != 0),
         onBack = ::handleApplicationBack
     )
     PlatformPlaybackOrientation(landscape = selectedEpisode != null && activeProfile != null)
@@ -1083,35 +1347,97 @@ fun AnimeTvApp(
                                     Box(Modifier.weight(1f).fillMaxWidth()) {
                                         if (activeEpisode != null) {
                                             val choice = playbackChoice
+                                            val episodes = visibleAnimeDetails?.episodes ?: animeDetails?.episodes.orEmpty()
+                                            val currentIndex = episodes.indexOfFirst { it.id == activeEpisode.id }
+                                            val previousEpisode = if (currentIndex > 0) {
+                                                episodes.take(currentIndex).lastOrNull {
+                                                    !appSettings.skipFiller || !it.filler
+                                                }
+                                            } else null
+                                            val nextEpisode = if (currentIndex >= 0) {
+                                                episodes.drop(currentIndex + 1).firstOrNull {
+                                                    !appSettings.skipFiller || !it.filler
+                                                }
+                                            } else null
+                                            val playerDetailsAnime = visibleAnimeDetails?.anime ?: activeAnime
+                                            val playerBackdropUrl = playerDetailsAnime?.bannerUrl?.takeIf { it.isNotBlank() }
+                                                ?: activeAnime?.bannerUrl?.takeIf { it.isNotBlank() }
+                                                ?: playerDetailsAnime?.posterUrl?.takeIf { it.isNotBlank() }
+                                                ?: activeAnime?.posterUrl
+                                            val formattedEpisodeLabel = formatPlaybackEpisodeLabel(activeEpisode)
+                                            val playerDescription = translatedSynopsis
+                                                ?: playerDetailsAnime?.synopsis.orEmpty()
+                                            val playerGenres = playerDetailsAnime?.genres?.ifEmpty {
+                                                activeAnime?.genres.orEmpty()
+                                            } ?: activeAnime?.genres.orEmpty()
+                                            val playerFormat = playerDetailsAnime?.format ?: activeAnime?.format
+                                            val playerQuality = playerDetailsAnime?.status ?: activeAnime?.status
+                                            val playerRating = playerDetailsAnime?.rating ?: activeAnime?.rating
+                                            val inWatchlistNow = activeAnime != null &&
+                                                watchlist.any { it.id == activeAnime.id }
+                                            val isTrackedNow =
+                                                animeTracking.aniList.isTracked || animeTracking.mal.isTracked
+                                            val playerSubLabel = if (activeAnime?.sourceIndex == SourceCatalog.REANIME_INDEX) {
+                                                "Sub"
+                                            } else "Hardsub"
+                                            val onPlayerToggleWatchlist: () -> Unit = {
+                                                activeAnime?.let { anime ->
+                                                    val currentlySaved = watchlist.any { it.id == anime.id }
+                                                    coroutineScope.launch {
+                                                        if (currentlySaved) {
+                                                            libraryRepository.removeFromWatchlist(anime.id)
+                                                        } else {
+                                                            libraryRepository.addToWatchlist(anime)
+                                                        }
+                                                        watchlist = libraryRepository.loadWatchlist()
+                                                    }
+                                                }
+                                            }
+                                            val onPlayerTrackingClick: () -> Unit = {
+                                                val anime = activeAnime
+                                                if (anime != null) {
+                                                    val connected =
+                                                        accountState.aniListUsername != null ||
+                                                            accountState.malUsername != null
+                                                    val canAnyTrack =
+                                                        animeTracking.aniList.canTrack ||
+                                                            animeTracking.mal.canTrack
+                                                    when {
+                                                        !connected -> showToast(
+                                                            "Please login to AniList or MAL first..."
+                                                        )
+                                                        !canAnyTrack -> showToast("Anime Untrackable...")
+                                                        else -> playerTrackingDialogOpen = true
+                                                    }
+                                                }
+                                            }
+                                            val onPlayerSearchGenre: (String) -> Unit = { genre ->
+                                                closePlayerPreview()
+                                                leavePlayback()
+                                                selectedAnime = null
+                                                searchQuery = ""
+                                                pendingSearchFilterNonce += 1
+                                                pendingSearchFilter = pendingSearchFilterNonce to genre
+                                                section = Section.Search
+                                            }
+                                            val onPlayerOpenSettings: () -> Unit = {
+                                                settingsReloadPending = false
+                                                settingsOpen = true
+                                            }
+
                                             if (choice != null) {
-                                                val episodes = animeDetails?.episodes.orEmpty()
-                                                val currentIndex = episodes.indexOfFirst { it.id == activeEpisode.id }
-                                                val previousEpisode = if (currentIndex > 0) {
-                                                    episodes.take(currentIndex).lastOrNull {
-                                                        !appSettings.skipFiller || !it.filler
-                                                    }
-                                                } else null
-                                                val nextEpisode = if (currentIndex >= 0) {
-                                                    episodes.drop(currentIndex + 1).firstOrNull {
-                                                        !appSettings.skipFiller || !it.filler
-                                                    }
-                                                } else null
                                                 val subtitleVariantLanguage = appSettings.subtitleLanguage
                                                     .takeIf { it.isNotBlank() && it != "hard" } ?: "en"
                                                 val selectedSubtitleVariant =
                                                     appSettings.subtitleVariants[subtitleVariantLanguage]
                                                         ?: appSettings.subtitleVariant
-                                                val inWatchlistNow = activeAnime != null &&
-                                                    watchlist.any { it.id == activeAnime.id }
-                                                val isTrackedNow =
-                                                    animeTracking.aniList.isTracked || animeTracking.mal.isTracked
 
                                                 PlaybackScreen(
                                                     title = activeAnime?.let {
                                                         displayAnimeTitle(it, appSettings.japaneseTitles)
                                                     } ?: "AnimeTV",
-                                                    description = translatedSynopsis ?: activeAnime?.synopsis.orEmpty(),
-                                                    genres = activeAnime?.genres.orEmpty(),
+                                                    description = playerDescription,
+                                                    genres = playerGenres,
                                                     episodes = episodes,
                                                     selectedEpisodeId = activeEpisode.id,
                                                     related = visibleAnimeDetails?.related.orEmpty(),
@@ -1120,41 +1446,23 @@ fun AnimeTvApp(
                                                         playbackStartOverride = null
                                                         activeAnime?.let { beginEpisode(it, episode) }
                                                     },
-                                                    onAnimeSelected = { anime ->
-                                                        val currentAnime = activeAnime
-                                                        val currentEpisode = activeEpisode
-                                                        val currentPosition = playbackPositionMs
-                                                        val currentDuration = playbackDurationMs
-                                                        if (currentAnime != null && currentPosition != null &&
-                                                            currentDuration != null
-                                                        ) {
-                                                            coroutineScope.launch {
-                                                                tvIntegrationRepository.updateContinueWatching(
-                                                                    currentAnime,
-                                                                    currentEpisode,
-                                                                    currentPosition,
-                                                                    currentDuration,
-                                                                    force = true
-                                                                )
-                                                            }
-                                                        }
-                                                        openAnime(anime, null)
-                                                    },
-                                                    episodeLabel = activeEpisode.title?.takeIf { it.isNotBlank() }
-                                                        ?: "Episode " + activeEpisode.number,
-                                                    posterUrl = activeAnime?.posterUrl ?: activeAnime?.bannerUrl,
+                                                    onAnimeSelected = ::openPlayerPreview,
+                                                    episodeLabel = formattedEpisodeLabel,
+                                                    posterUrl = playerBackdropUrl,
                                                     canPrevious = previousEpisode != null,
                                                     canNext = nextEpisode != null,
                                                     choice = choice,
                                                     hasSubStream = activeEpisode.hasSub,
                                                     hasDubStream = activeEpisode.hasDub,
-                                                    subStreamLabel = if (activeAnime?.sourceIndex == SourceCatalog.REANIME_INDEX) {
-                                                        "Sub"
-                                                    } else "Hardsub",
-                                                    onStreamTypeChange = { playbackStreamOverride = it },
+                                                    subStreamLabel = playerSubLabel,
+                                                    onStreamTypeChange = { type ->
+                                                        playbackStreamOverride = type
+                                                        playbackMirrorOverride = 0
+                                                    },
                                                     streamServerNames = choice.streamServerNames,
                                                     selectedStreamServerIndex = choice.selectedStreamServerIndex,
                                                     onStreamServerChange = { index ->
+                                                        playbackMirrorOverride = null
                                                         onSettingsChange(appSettings.copy(mirrorServer = index))
                                                     },
                                                     playbackSpeed = playbackSpeed,
@@ -1236,9 +1544,10 @@ fun AnimeTvApp(
                                                                             val preloaded = animeRepository.resolvePlayback(
                                                                                 episodeId = nextEpisode.id,
                                                                                 preferDub = prefDub,
-                                                                                mirrorIndex = appSettings.mirrorServer,
+                                                                                mirrorIndex = playbackMirrorOverride ?: appSettings.mirrorServer,
                                                                                 subtitleLanguage = appSettings.subtitleLanguage,
-                                                                                hasSub = nextEpisode.hasSub
+                                                                                hasSub = nextEpisode.hasSub,
+                                                                                requestedStreamType = playbackStreamOverride
                                                                             )
                                                                             preloadedPlaybackChoice =
                                                                                 nextEpisode.id to preloaded
@@ -1291,66 +1600,121 @@ fun AnimeTvApp(
                                                     },
                                                     showBackHint = false,
                                                     seasons = visibleAnimeDetails?.seasons.orEmpty(),
-                                                    onOpenSettings = {
-                                                        settingsReloadPending = false
-                                                        settingsOpen = true
-                                                    },
+                                                    onOpenSettings = onPlayerOpenSettings,
                                                     inWatchlist = inWatchlistNow,
-                                                    onToggleWatchlist = {
-                                                        activeAnime?.let { anime ->
-                                                            val currentlySaved = watchlist.any { it.id == anime.id }
-                                                            coroutineScope.launch {
-                                                                if (currentlySaved) {
-                                                                    libraryRepository.removeFromWatchlist(anime.id)
-                                                                } else {
-                                                                    libraryRepository.addToWatchlist(anime)
-                                                                }
-                                                                watchlist = libraryRepository.loadWatchlist()
-                                                            }
-                                                        }
-                                                    },
+                                                    onToggleWatchlist = onPlayerToggleWatchlist,
                                                     isTracked = isTrackedNow,
-                                                    onTrackingClick = {
-                                                        val anime = activeAnime
-                                                        if (anime != null) {
-                                                            val connected =
-                                                                accountState.aniListUsername != null ||
-                                                                    accountState.malUsername != null
-                                                            val canAnyTrack =
-                                                                animeTracking.aniList.canTrack ||
-                                                                    animeTracking.mal.canTrack
-                                                            when {
-                                                                !connected -> showToast(
-                                                                    "Please login to AniList or MAL first..."
-                                                                )
-                                                                !canAnyTrack -> showToast("Anime Untrackable...")
-                                                                else -> playerTrackingDialogOpen = true
-                                                            }
-                                                        }
-                                                    },
-                                                    onSearchGenre = { genre ->
-                                                        leavePlayback()
-                                                        selectedAnime = null
-                                                        searchQuery = genre
-                                                        section = Section.Search
-                                                    }
+                                                    onTrackingClick = onPlayerTrackingClick,
+                                                    onSearchGenre = onPlayerSearchGenre,
+                                                    currentAnimeId = activeAnime?.id.orEmpty(),
+                                                    animeFormat = playerFormat,
+                                                    animeQuality = playerQuality,
+                                                    animeRating = playerRating,
+                                                    settingsOverlayOpen = settingsOpen || playerPreviewAnime != null
                                                 )
                                             } else if (playbackError == null) {
-                                                Box(Modifier.fillMaxSize().background(Color.Black))
+                                                Box(
+                                                    modifier = Modifier.fillMaxSize().background(Color.Black),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    val backdropModel = imageCdnUrl(playerBackdropUrl, LocalImageCdn.current)
+                                                    if (!backdropModel.isNullOrBlank()) {
+                                                        AsyncImage(
+                                                            model = backdropModel,
+                                                            contentDescription = activeAnime?.let {
+                                                                displayAnimeTitle(it, appSettings.japaneseTitles)
+                                                            },
+                                                            contentScale = ContentScale.Fit,
+                                                            modifier = Modifier.fillMaxSize()
+                                                        )
+                                                    }
+                                                }
                                             } else {
+                                                val errorStreamServers = if (activeAnime?.sourceIndex == SourceCatalog.GOTAKU_INDEX) {
+                                                    buildList {
+                                                        if (activeEpisode.hasSub) {
+                                                            add("Soft Sub")
+                                                            add("Hard Sub")
+                                                        }
+                                                        if (activeEpisode.hasDub) add("Dub")
+                                                    }.ifEmpty { listOf("Main", "Mirror") }
+                                                } else {
+                                                    listOf("Main", "Mirror")
+                                                }
+                                                val errorStreamType = playbackStreamOverride
+                                                    ?: if (appSettings.preferDub && activeEpisode.hasDub) PlaybackStreamType.DUB
+                                                    else PlaybackStreamType.SUB
                                                 PlaybackErrorScreen(
                                                     title = activeAnime?.let {
                                                         displayAnimeTitle(it, appSettings.japaneseTitles)
                                                     } ?: "AnimeTV",
-                                                    episodeLabel = activeEpisode.title?.takeIf { it.isNotBlank() }
-                                                        ?: "Episode ${activeEpisode.number}",
+                                                    episodeLabel = formattedEpisodeLabel,
                                                     message = playbackError ?: "This episode stream could not be opened",
-                                                    onBack = { requestPlaybackClose(fromSystemBack = false) }
+                                                    onBack = { requestPlaybackClose(fromSystemBack = false) },
+                                                    description = playerDescription,
+                                                    genres = playerGenres,
+                                                    artworkUrl = playerBackdropUrl,
+                                                    canPrevious = previousEpisode != null,
+                                                    canNext = nextEpisode != null,
+                                                    hasSubStream = activeEpisode.hasSub,
+                                                    hasDubStream = activeEpisode.hasDub,
+                                                    subStreamLabel = playerSubLabel,
+                                                    currentStreamType = errorStreamType,
+                                                    streamServerNames = errorStreamServers,
+                                                    selectedStreamServerIndex = (playbackMirrorOverride ?: appSettings.mirrorServer)
+                                                        .coerceIn(0, errorStreamServers.lastIndex),
+                                                    onStreamServerChange = { index ->
+                                                        playbackMirrorOverride = null
+                                                        onSettingsChange(appSettings.copy(mirrorServer = index))
+                                                    },
+                                                    onStreamTypeChange = { type ->
+                                                        playbackStreamOverride = type
+                                                        playbackMirrorOverride = 0
+                                                    },
+                                                    playbackSpeed = playbackSpeed,
+                                                    onPlaybackSpeedChange = { playbackSpeed = it },
+                                                    playbackQuality = appSettings.playbackQuality,
+                                                    onPlaybackQualityChange = { quality ->
+                                                        onSettingsChange(appSettings.copy(playbackQuality = quality))
+                                                    },
+                                                    audioLanguage = appSettings.audioLanguage,
+                                                    onAudioLanguageChange = { language ->
+                                                        onSettingsChange(appSettings.copy(audioLanguage = language))
+                                                    },
+                                                    episodes = episodes,
+                                                    selectedEpisodeId = activeEpisode.id,
+                                                    currentAnimeId = activeAnime?.id.orEmpty(),
+                                                    metadataFormat = playerFormat,
+                                                    metadataQuality = playerQuality,
+                                                    metadataRating = playerRating,
+                                                    seasons = visibleAnimeDetails?.seasons.orEmpty(),
+                                                    related = visibleAnimeDetails?.related.orEmpty(),
+                                                    recommendations = visibleAnimeDetails?.recommendations.orEmpty(),
+                                                    inWatchlist = inWatchlistNow,
+                                                    isTracked = isTrackedNow,
+                                                    settingsOverlayOpen = settingsOpen || playerPreviewAnime != null,
+                                                    onPrevious = {
+                                                        playbackStartOverride = null
+                                                        previousEpisode?.let(::startPlayback)
+                                                    },
+                                                    onNext = {
+                                                        playbackStartOverride = null
+                                                        nextEpisode?.let(::startPlayback)
+                                                    },
+                                                    onEpisodeSelected = { episode ->
+                                                        playbackStartOverride = null
+                                                        activeAnime?.let { beginEpisode(it, episode) }
+                                                    },
+                                                    onAnimeSelected = ::openPlayerPreview,
+                                                    onOpenSettings = onPlayerOpenSettings,
+                                                    onToggleWatchlist = onPlayerToggleWatchlist,
+                                                    onTrackingClick = onPlayerTrackingClick,
+                                                    onSearchGenre = onPlayerSearchGenre
                                                 )
                                             }
 
                                             androidx.compose.animation.AnimatedVisibility(
-                                                visible = playbackLoading || (choice == null && playbackError == null),
+                                                visible = choice == null && playbackError == null,
                                                 enter = if (tokens.tim5s == 0) EnterTransition.None else fadeIn(
                                                     tween(durationMillis = tokens.tim5s, easing = tokens.easing)
                                                 ),
@@ -1487,39 +1851,21 @@ fun AnimeTvApp(
                                                 ),
                                                 label = "search-overlay"
                                             ) {
-                                                SectionScreen(
-                                                    section = Section.Search,
+                                                SearchScreen(
+                                                    repository = animeRepository,
                                                     tvLayout = tvLayout,
-                                                    settings = appSettings,
+                                                    selectedSource = appSettings.selectedSource,
+                                                    searchHistoryRepository = searchHistoryRepository,
+                                                    query = searchQuery,
+                                                    onQueryChange = { searchQuery = it },
+                                                    onBack = { section = mainSection },
+                                                    onVoiceSearchResult = { openVoiceSearchResult(it) },
                                                     profileRating = profileRating,
                                                     profileActivation = profileActivation,
-                                                    myListLayout = myListLayout,
-                                                    onMyListLayoutChange = ::saveMyListLayout,
-                                                    homeLayout = homeLayout,
-                                                    searchQuery = searchQuery,
-                                                    onSearchQueryChange = { searchQuery = it },
-                                                    onBackToHome = { section = mainSection },
-                                                    onVoiceSearchResult = { openVoiceSearchResult(it) },
-                                                    onSettingsChange = onSettingsChange,
-                                                    homeFeed = homeWithHistory,
-                                                    homeLoading = homeLoading,
-                                                    watchlist = visibleWatchlist,
-                                                    watchHistory = visibleHistory,
-                                                    schedule = visibleSchedule,
-                                                    scheduleLoading = scheduleLoading,
-                                                    onRemoveFromWatchlist = {},
-                                                    onClearWatchHistory = { clearHistoryStage = 1 },
-                                                    accountRepository = accountRepository,
-                                                    settingsRepository = settingsRepository,
-                                                    settingsReady = settingsReady,
-                                                    debugLogRepository = debugLogRepository,
-                                                    searchHistoryRepository = searchHistoryRepository,
-                                                    accountState = accountState,
-                                                    onAccountStateChange = { accountState = it },
-                                                    repository = animeRepository,
                                                     onAnimeSelected = { openAnime(it, null) },
-                                                    onHistorySelected = {},
-                                                    onContinueWatching = {}
+                                                    largeUi = appSettings.largeUi,
+                                                    pendingFilterRequest = pendingSearchFilter,
+                                                    onPendingFilterConsumed = { pendingSearchFilter = null }
                                                 )
                                             }
                                         }
@@ -1641,6 +1987,147 @@ fun AnimeTvApp(
                                                     loading = activeAnime?.id == detailAnime.id && detailsLoading,
                                                     openedFromCard = true
                                                 )
+                                            }
+                                        }
+
+                                        androidx.compose.animation.AnimatedVisibility(
+                                            visible = playerPreviewAnime != null && activeEpisode != null,
+                                            enter = if (tokens.tim3s == 0) EnterTransition.None else
+                                                fadeIn(tween(durationMillis = tokens.tim3s, easing = tokens.easing)) +
+                                                    scaleIn(
+                                                        initialScale = 0.5f,
+                                                        animationSpec = tween(
+                                                            durationMillis = tokens.tim3s,
+                                                            easing = tokens.easing
+                                                        )
+                                                    ),
+                                            exit = if (tokens.tim3s == 0) ExitTransition.None else
+                                                fadeOut(tween(durationMillis = tokens.tim3s, easing = tokens.easing)) +
+                                                    scaleOut(
+                                                        targetScale = 0.5f,
+                                                        animationSpec = tween(
+                                                            durationMillis = tokens.tim3s,
+                                                            easing = tokens.easing
+                                                        )
+                                                    ),
+                                            label = "player-preview-details"
+                                        ) {
+                                            val previewAnime = playerPreviewAnime
+                                            if (previewAnime != null) {
+                                                val resolvedDetails = playerPreviewDetails?.copy(
+                                                    related = playerPreviewDetails?.related.orEmpty().filter {
+                                                        it.allowedForRating(profileRating)
+                                                    },
+                                                    recommendations = playerPreviewDetails?.recommendations.orEmpty().filter {
+                                                        it.allowedForRating(profileRating)
+                                                    }
+                                                )
+                                                val detailTarget = resolvedDetails?.anime ?: previewAnime
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(Color.Black.copy(alpha = 0.45f))
+                                                ) {
+                                                    DetailsScreen(
+                                                        anime = previewAnime,
+                                                        tvLayout = tvLayout,
+                                                        details = resolvedDetails,
+                                                        synopsis = playerPreviewSynopsis ?: previewAnime.synopsis,
+                                                        aniListInfo = playerPreviewAniListInfo.takeIf {
+                                                            playerPreviewAniListInfoAnimeId == previewAnime.id
+                                                        },
+                                                        aniListInfoLoading = playerPreviewAniListInfoAnimeId == previewAnime.id &&
+                                                            playerPreviewAniListInfoLoading,
+                                                        aniListInfoLoaded = playerPreviewAniListInfoAnimeId == previewAnime.id &&
+                                                            playerPreviewAniListInfoLoaded,
+                                                        aniListInfoError = playerPreviewAniListInfoError.takeIf {
+                                                            playerPreviewAniListInfoAnimeId == previewAnime.id
+                                                        },
+                                                        onRequestAniListInfo = { retry ->
+                                                            requestPreviewAniListInfo(
+                                                                previewAnime,
+                                                                resolvedDetails?.anime ?: previewAnime,
+                                                                retry
+                                                            )
+                                                        },
+                                                        watchProgress = watchHistory.filter {
+                                                            it.animeId == detailTarget.id || it.animeId == previewAnime.id
+                                                        }.maxByOrNull { it.updatedAtEpochMs },
+                                                        inHistory = watchHistory.any {
+                                                            it.animeId == detailTarget.id || it.animeId == previewAnime.id
+                                                        },
+                                                        skipFiller = appSettings.skipFiller,
+                                                        inWatchlist = watchlist.any {
+                                                            it.id == detailTarget.id || it.id == previewAnime.id
+                                                        },
+                                                        tracking = playerPreviewTracking,
+                                                        trackingLoading = playerPreviewTrackingLoading,
+                                                        trackingBusy = playerPreviewTrackingBusy,
+                                                        trackingMessage = playerPreviewTrackingMessage,
+                                                        onTrackingStatusChange = { provider, status ->
+                                                            coroutineScope.launch {
+                                                                playerPreviewTrackingBusy = true
+                                                                playerPreviewTrackingMessage = null
+                                                                runCatching {
+                                                                    accountRepository.setTrackingStatus(
+                                                                        detailTarget,
+                                                                        provider,
+                                                                        status
+                                                                    )
+                                                                    playerPreviewTracking =
+                                                                        accountRepository.loadTracking(detailTarget)
+                                                                    if (selectedAnime?.id == detailTarget.id) {
+                                                                        animeTracking = playerPreviewTracking
+                                                                    }
+                                                                }.onFailure { error ->
+                                                                    val msg = error.message ?: "Could not update tracking"
+                                                                    playerPreviewTrackingMessage = msg
+                                                                    showToast(msg)
+                                                                }
+                                                                playerPreviewTrackingBusy = false
+                                                            }
+                                                        },
+                                                        onConnectAccounts = {
+                                                            closePlayerPreview()
+                                                            settingsReloadPending = false
+                                                            settingsOpen = true
+                                                        },
+                                                        onWatchlistChange = { shouldSave ->
+                                                            coroutineScope.launch {
+                                                                if (shouldSave) {
+                                                                    libraryRepository.addToWatchlist(detailTarget)
+                                                                } else {
+                                                                    libraryRepository.removeFromWatchlist(detailTarget.id)
+                                                                }
+                                                                watchlist = libraryRepository.loadWatchlist()
+                                                            }
+                                                        },
+                                                        onHistoryChange = { shouldKeep ->
+                                                            if (!shouldKeep) coroutineScope.launch {
+                                                                libraryRepository.removeAnimeHistory(detailTarget.id)
+                                                                watchHistory = libraryRepository.loadHistory()
+                                                                homeFeed = homeFeed.copy(
+                                                                    continueWatching = homeFeed.continueWatching.filterNot {
+                                                                        it.id == detailTarget.id
+                                                                    }
+                                                                )
+                                                            }
+                                                        },
+                                                        onEpisodeSelected = { episode, startPositionMs ->
+                                                            saveActiveContinueWatching()
+                                                            closePlayerPreview()
+                                                            if (selectedAnime?.id == detailTarget.id) {
+                                                                beginEpisode(detailTarget, episode, startPositionMs)
+                                                            } else {
+                                                                openAnime(detailTarget, episode.id)
+                                                                playbackStartOverride = startPositionMs?.let { episode.id to it }
+                                                            }
+                                                        },
+                                                        onDismiss = ::closePlayerPreview,
+                                                        loading = playerPreviewLoading,
+                                                        openedFromCard = true
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -2110,6 +2597,16 @@ fun AnimeTvApp(
             }
         }
     }
+}
+
+private fun formatPlaybackEpisodeLabel(episode: Episode): String {
+    val defaultTitle = "Episode ${episode.number}"
+    val titleSuffix = episode.title
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() && !it.equals(defaultTitle, ignoreCase = true) }
+        ?.let { ". ${it.uppercase()}" }
+        .orEmpty()
+    return "EPISODE ${episode.number}$titleSuffix"
 }
 
 internal fun accountProviderName(provider: AccountProvider): String = when (provider) {

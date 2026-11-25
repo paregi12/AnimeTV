@@ -1,5 +1,6 @@
 package com.paregi.animetv.core.ui
 
+import androidx.compose.animation.animateColor
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -348,19 +349,34 @@ internal fun FocusCard(
             }
 
             if (showPlayingRibbon) {
+                val playingTransition = rememberInfiniteTransition(label = "playing-blink")
+                val playingColor by playingTransition.animateColor(
+                    initialValue = Color.White,
+                    targetValue = Color(0xFF33FF33),
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(
+                            durationMillis = (tokens.tim10s / 2).coerceAtLeast(300),
+                            easing = LinearEasing
+                        ),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "playing-color"
+                )
+                val ribbonShape = RoundedCornerShape(u * 0.4f)
                 Box(
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(horizontal = u * 1f, vertical = u * 1.2f)
+                        .align(Alignment.TopStart)
+                        .offset(y = u * 13f)
+                        .padding(horizontal = u * 1f)
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(u * 0.4f))
-                        .background(Color.Black.copy(alpha = 0.65f))
-                        .padding(vertical = u * 0.35f),
+                        .height(u * 3f)
+                        .clip(ribbonShape)
+                        .background(Color.Black.copy(alpha = 0.5f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = "PLAYING",
-                        color = Color.White,
+                        color = if (tokens.tim10s == 0) Color.White else playingColor,
                         fontSize = fsSp(tokens.fs10),
                         fontWeight = FontWeight.Bold,
                         maxLines = 1

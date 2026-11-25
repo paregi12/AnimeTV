@@ -11,9 +11,11 @@ import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.HomeFeed
 import com.paregi.animetv.domain.AnimeSection
 import com.paregi.animetv.domain.PlaybackChoice
+import com.paregi.animetv.domain.PlaybackStreamType
 import com.paregi.animetv.domain.SearchFilters
 import com.paregi.animetv.domain.SearchPage
 import com.paregi.animetv.domain.SourceCatalog
+import com.paregi.animetv.domain.SubtitleTrack
 import com.paregi.animetv.domain.TranslationRepository
 import com.paregi.animetv.source.anilist.AndroidAniListApi
 import com.paregi.animetv.source.AndroidCatalogApi
@@ -301,13 +303,20 @@ class AndroidAnimeRepository(
         preferDub: Boolean,
         mirrorIndex: Int,
         subtitleLanguage: String,
-        hasSub: Boolean
+        hasSub: Boolean,
+        requestedStreamType: PlaybackStreamType?
     ): PlaybackChoice = playbackResolver.resolvePlayback(
         episodeId = episodeId,
         preferDub = preferDub,
         mirrorIndex = mirrorIndex,
         subtitleLanguage = subtitleLanguage,
         hasSub = hasSub,
+        requestedStreamType = requestedStreamType,
         source = sourceSnapshot()
     )
+
+    override suspend fun translatePlaybackSubtitle(
+        choice: PlaybackChoice,
+        targetLanguage: String
+    ): SubtitleTrack? = playbackResolver.translateChoiceSubtitle(choice, targetLanguage)
 }
