@@ -70,7 +70,6 @@ import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.theme.LocalAnimeTvColors
 import com.paregi.animetv.core.theme.LocalAppToast
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
-import com.paregi.animetv.core.theme.LocalBadgeColors
 import com.paregi.animetv.core.theme.LocalIconFont
 import com.paregi.animetv.core.theme.LocalImageCdn
 import com.paregi.animetv.core.theme.LocalJapaneseTitles
@@ -872,7 +871,7 @@ fun AnimeTvApp(
                 .getOrDefault(animeTracking)
             trackingBusy = false
             trackingMessage = failure
-            if (failure != null) showToast(failure!!)
+            if (failure != null) showToast(failure)
             startPlayback(episode)
         }
     }
@@ -957,8 +956,7 @@ fun AnimeTvApp(
                 cardRadius = 0,
                 badgeStyle = 0,
                 badgeColors = badgeThemeColorsFor(visibleTheme)
-            ),
-            LocalBadgeColors provides badgeThemeColorsFor(visibleTheme)
+            )
         ) {
             Surface(Modifier.fillMaxSize(), color = Color.Black) {
                 BoxWithConstraints(Modifier.fillMaxSize()) {

@@ -43,16 +43,5 @@ internal class CatalogSourceSelector(
         return selected.index
     }
 
-    fun setDomain(index: Int, domain: String?) {
-        if (domain.isNullOrBlank()) {
-            customDomains.remove(index)
-        } else {
-            customDomains[index] = domain.trim()
-        }
-        if (selected.index == index) {
-            selected = CatalogSource.fromIndex(index, customDomains[index])
-        }
-    }
-
     fun snapshot(): CatalogSource = selected
 }

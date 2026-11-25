@@ -51,7 +51,6 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
@@ -88,7 +87,6 @@ private object PlaybackCache {
     private var appContext: Context? = null
 
     @Synchronized
-    @OptIn(UnstableApi::class)
     fun get(context: Context, sizeMb: Int): Cache {
         val desiredMaxBytes = sizeMb.coerceIn(5, 150).toLong() * 1024 * 1024
         cache?.takeIf { maxBytes == desiredMaxBytes }?.let { return it }
@@ -109,7 +107,6 @@ private object PlaybackCache {
     }
 
     @Synchronized
-    @OptIn(UnstableApi::class)
     fun clear() {
         runCatching { cache?.release() }
         cache = null
@@ -118,7 +115,6 @@ private object PlaybackCache {
     }
 }
 
-@OptIn(UnstableApi::class)
 actual fun clearPlatformPlaybackCache() {
     PlaybackCache.clear()
 }
@@ -196,7 +192,6 @@ actual fun PlatformSubtitlePreviewOverlay(
     }
 }
 
-@OptIn(UnstableApi::class)
 @Composable
 actual fun PlatformPlayer(
     url: String,
@@ -342,8 +337,11 @@ actual fun PlatformPlayer(
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             settings.allowFileAccess = true
-            settings.allowFileAccessFromFileURLs = true
-            settings.allowUniversalAccessFromFileURLs = true
+            @Suppress("DEPRECATION")
+            settings.apply {
+                allowFileAccessFromFileURLs = true
+                allowUniversalAccessFromFileURLs = true
+            }
             addJavascriptInterface(html5Bridge, "AnimeTV")
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -568,9 +566,12 @@ actual fun PlatformPlayer(
     val latestOnNext = rememberUpdatedState(onNextEpisode)
     val latestOnPrevious = rememberUpdatedState(onPreviousEpisode)
     DisposableEffect(mediaSession) {
-        mediaSession.setFlags(
-            MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS
-        )
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            @Suppress("DEPRECATION")
+            mediaSession.setFlags(
+                MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS
+            )
+        }
         mediaSession.setCallback(object : MediaSession.Callback() {
             override fun onPlay() = latestSetPlaying.value(true)
             override fun onPause() = latestSetPlaying.value(false)
@@ -986,7 +987,6 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
-@OptIn(UnstableApi::class)
 private fun applySubtitleStyle(
     playerView: PlayerView,
     style: Int,

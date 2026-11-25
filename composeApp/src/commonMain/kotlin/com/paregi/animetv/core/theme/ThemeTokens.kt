@@ -1,7 +1,6 @@
 package com.paregi.animetv.core.theme
 
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -114,14 +113,10 @@ fun animeTvThemeColorsFor(theme: String): AnimeTvThemeColors = when (theme) {
 val LocalAnimeTvColors: ProvidableCompositionLocal<AnimeTvThemeColors> =
     compositionLocalOf { AnimeTvThemeColors.Default }
 
-internal val Background: Color @Composable get() = MaterialTheme.colorScheme.background
-internal val Panel: Color @Composable get() = MaterialTheme.colorScheme.surfaceVariant
 internal val Purple: Color @Composable get() = LocalAnimeTvColors.current.primary1
 internal val PurpleLight: Color @Composable get() = LocalAnimeTvColors.current.accent1
 internal val TextPrimary: Color @Composable get() = Color.White
 internal val TextSecondary: Color @Composable get() = Color(0xFFAAAAAA)
-internal val SubBadgeNavy = Color(0xFF004466)
-internal val DubBadgeTeal = Color(0xFF006688)
 internal val LocalPerformanceEffects = compositionLocalOf { listOf(true, false, true, true, false) }
 internal val LocalJapaneseTitles = compositionLocalOf { false }
 internal val LocalImageCdn = compositionLocalOf { true }
@@ -152,11 +147,6 @@ fun badgeThemeColorsFor(theme: String): BadgeThemeColors {
         primary2 = colors.primary2
     )
 }
-
-val LocalBadgeColors = compositionLocalOf { BadgeThemeColors.Default }
-
-@Composable
-fun resolveBadgeColors(): BadgeThemeColors = LocalBadgeColors.current
 
 internal object IconGlyphs {
     const val Home = "\uE9B2"
@@ -276,20 +266,6 @@ internal object IconGlyphs {
     const val Close = "\uE5CD"
 }
 
-internal fun themeColorsPreview(theme: String): List<Color> {
-    val colors = animeTvThemeColorsFor(theme)
-    return listOf(colors.primary1, colors.primary2, colors.primary3, colors.accent1)
-}
-
-internal fun themeGradientPreview(theme: String): List<Color>? = when (theme) {
-    "theme_gold" -> listOf(Color(0xFF8A5700), Color(0xFFE8A91C), Color(0xFFFFF1A8), Color(0xFFFFD45C))
-    "theme_jade" -> listOf(Color(0xFF7BF08D), Color(0xFF22D37C), Color(0xFF0BBF9A))
-    "theme_rose_gold" -> listOf(Color(0xFFB75AFF), Color(0xFFEC70A9), Color(0xFFFFB37A))
-    "theme_arctic_blue" -> listOf(Color(0xFF4DE3FF), Color(0xFF3185F5), Color(0xFF4D55E8))
-    "theme_graphite" -> listOf(Color(0xFFF3F5F7), Color(0xFFAAB2BE), Color(0xFF687381))
-    else -> null
-}
-
 internal fun colorSchemeForTheme(theme: String, loginScreen: Boolean = false): ColorScheme {
     val colors = animeTvThemeColorsFor(theme)
     val panel = blendColors(colors.primary1, colors.primaryBg, 0.42f)
@@ -309,8 +285,6 @@ internal fun colorSchemeForTheme(theme: String, loginScreen: Boolean = false): C
         outline = blendColors(colors.accent1, colors.primaryBg, 0.55f)
     )
 }
-
-internal fun loginBackdropForTheme(theme: String): Color = animeTvThemeColorsFor(theme).loginBg
 
 internal fun blendColors(foreground: Color, background: Color, foregroundWeight: Float): Color {
     val weight = foregroundWeight.coerceIn(0f, 1f)

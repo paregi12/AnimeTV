@@ -14,7 +14,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,7 +22,6 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -133,7 +131,6 @@ import com.paregi.animetv.domain.PlaybackChoice
 import com.paregi.animetv.domain.PlaybackStreamType
 import com.paregi.animetv.domain.SkipRange
 import com.paregi.animetv.domain.SubtitleStyleCatalog
-import com.paregi.animetv.domain.SubtitleTrack
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformSubtitleFontFamily
@@ -2765,8 +2762,7 @@ private fun StreamTypeTopBadge(
     }
     val langTag = if (isSoftsub || isTranslated) {
         subtitleLanguage.takeIf { it.isNotBlank() && it != "hard" && it != "nosub" }?.uppercase()
-            ?: selectedSubtitleLabel?.take(3)?.uppercase()
-            ?: "EN"
+            ?: selectedSubtitleLabel.take(3).uppercase().ifBlank { "EN" }
     } else ""
 
     val shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null

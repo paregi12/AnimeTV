@@ -56,7 +56,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.paregi.animetv.LocalNavigationSound
 import com.paregi.animetv.PlatformBackHandler
@@ -238,7 +237,7 @@ internal fun DetailsScreen(
             .clip(cardShape)
             .background(surfaceColor)
             .focusGroup()
-            .focusProperties { exit = { FocusRequester.Cancel } }
+            .focusProperties { onExit = { cancelFocusChange() } }
             .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}
 
         if (showAniListInfo) {
@@ -732,7 +731,8 @@ private fun DetailEpisodeStepper(
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
     val playClickSound = LocalNavigationSound.current
-    val enabled = episode != null && episodes.isNotEmpty()
+    val activeEpisode = episode?.takeIf { episodes.isNotEmpty() }
+    val enabled = activeEpisode != null
     var focused by remember { mutableStateOf(false) }
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -791,7 +791,7 @@ private fun DetailEpisodeStepper(
                 }
             }
             .onFocusChanged { focused = it.isFocused }
-            .navigationClickable(enabled = enabled) { episode?.let(onPlay) }
+            .navigationClickable(enabled = enabled) { activeEpisode?.let(onPlay) }
             .navigationFocusable(enabled = enabled)
             .padding(horizontal = tokens.u * 0.5f),
         verticalAlignment = Alignment.CenterVertically,
@@ -823,8 +823,8 @@ private fun DetailEpisodeStepper(
         )
 
         Text(
-            text = if (enabled && episode != null) {
-                "Episode ${episode.number} / ${episodeTotal.takeIf { it > 0 }?.toString() ?: "?"}"
+            text = if (activeEpisode != null) {
+                "Episode ${activeEpisode.number} / ${episodeTotal.takeIf { it > 0 }?.toString() ?: "?"}"
             } else "-",
             color = if (enabled) Color.White else Color(0xFF666666),
             fontSize = fsSp(tokens.fs12),
@@ -976,8 +976,8 @@ private fun DetailInformation(
     val titleFontSize = fsSp(if (isPortrait) tokens.fs17 else tokens.fs14)
     val bodyFontSize = fsSp(tokens.fs11)
     val rightLabel = when {
-        !anime.duration.isNullOrBlank() -> "Duration:" to anime.duration!!
-        !anime.format.isNullOrBlank() -> "Type:" to anime.format!!
+        !anime.duration.isNullOrBlank() -> "Duration:" to anime.duration
+        !anime.format.isNullOrBlank() -> "Type:" to anime.format
         else -> null
     }
     val statusText = anime.status?.takeIf { it.isNotBlank() } ?: "-"

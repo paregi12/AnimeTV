@@ -2,7 +2,7 @@ package com.paregi.animetv
 
 import android.content.Context
 import android.net.Uri
-import android.text.Html
+import androidx.core.text.HtmlCompat
 import com.paregi.animetv.domain.SubtitleLanguageCatalog
 import com.paregi.animetv.domain.SubtitleTrack
 import com.paregi.animetv.domain.TranslationRepository
@@ -10,7 +10,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.security.MessageDigest
 
 /** Uses the same Google Translate service as the original app for summaries and soft subtitles. */
@@ -205,7 +204,9 @@ class AndroidTranslationRepository(
                     "<div[^>]*class=[\"'][^\"']*result-container[^\"']*[\"'][^>]*>(.*?)</div>",
                     setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
                 ).find(page)?.groupValues?.get(1) ?: error("Translation result was missing")
-                val translated = Html.fromHtml(resultHtml).toString().trim()
+                val translated = HtmlCompat.fromHtml(resultHtml, HtmlCompat.FROM_HTML_MODE_LEGACY)
+                    .toString()
+                    .trim()
                 if (translated.isNotBlank()) return translated
                 error("Translation response did not contain translated text")
             } catch (error: Exception) {

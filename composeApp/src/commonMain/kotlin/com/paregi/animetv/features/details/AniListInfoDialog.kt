@@ -126,7 +126,7 @@ internal fun AniListInfoDialog(
     Column(
         modifier = modifier
             .focusGroup()
-            .focusProperties { exit = { FocusRequester.Cancel } }
+            .focusProperties { onExit = { cancelFocusChange() } }
     ) {
         Box(
             modifier = Modifier

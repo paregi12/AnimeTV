@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    @Suppress("DEPRECATION")
     private fun applySystemUi(orientation: Int) {
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         if (orientation == Configuration.ORIENTATION_PORTRAIT) {
@@ -98,7 +99,6 @@ class MainActivity : ComponentActivity() {
             controller.show(WindowInsetsCompat.Type.systemBars())
             controller.isAppearanceLightStatusBars = false
             controller.isAppearanceLightNavigationBars = false
-            @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility =
                 window.decorView.systemUiVisibility or
                     View.SYSTEM_UI_FLAG_LOW_PROFILE or

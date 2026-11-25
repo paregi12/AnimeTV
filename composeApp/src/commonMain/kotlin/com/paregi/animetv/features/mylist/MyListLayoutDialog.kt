@@ -5,7 +5,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.ui.ListOrderDialog
 import com.paregi.animetv.core.ui.ListOrderItem
 import com.paregi.animetv.core.ui.ListOrderMode
@@ -14,14 +13,6 @@ import com.paregi.animetv.domain.DEFAULT_MY_LIST_SECTIONS
 import com.paregi.animetv.domain.MY_LIST_SECTION_IDS
 import com.paregi.animetv.domain.MyListLayout
 import com.paregi.animetv.domain.MyListSectionPreference
-
-fun myListSectionIcon(id: String): String = when (id) {
-    "maltab", "mal", "malplan" -> IconGlyphs.ListAlt
-    "anilisttab", "anilist", "anilistplan" -> IconGlyphs.Hub
-    "fav", "watchlist" -> IconGlyphs.Bookmark
-    "history" -> IconGlyphs.Clock
-    else -> IconGlyphs.Movie
-}
 
 private fun myListDisablingIds(id: String): List<String> = when (id) {
     "maltab" -> listOf("mal")

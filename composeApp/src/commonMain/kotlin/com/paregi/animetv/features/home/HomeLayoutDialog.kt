@@ -5,7 +5,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.ui.ListOrderDialog
 import com.paregi.animetv.core.ui.ListOrderItem
 import com.paregi.animetv.core.ui.ListOrderMode
@@ -28,22 +27,6 @@ fun homeSectionTitle(id: String, sourceName: String): String = when (id) {
     "alupcoming" -> "Upcoming - AniList"
     else -> id.replaceFirstChar { it.uppercase() }
 }
-
-fun homeSectionIcon(id: String): String = when (id) {
-    "continue_watching" -> IconGlyphs.AvgPace
-    "recent" -> IconGlyphs.Refresh
-    "trending" -> IconGlyphs.Star
-    "popular" -> IconGlyphs.ReadinessScore
-    "alrecent" -> IconGlyphs.Refresh
-    "altab" -> IconGlyphs.Hub
-    "altop" -> IconGlyphs.Star
-    "alpopular" -> IconGlyphs.ReadinessScore
-    "alyear" -> IconGlyphs.Clock
-    "alupcoming" -> IconGlyphs.EventUpcoming
-    else -> IconGlyphs.Movie
-}
-
-fun isAniListSection(id: String): Boolean = id.startsWith("al")
 
 @Composable
 internal fun HomeLayoutDialog(
