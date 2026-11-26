@@ -90,7 +90,6 @@ data class AppSettings(
     val autoSkipIntro: Boolean = false,
     val skipFiller: Boolean = false,
     val disableTouchGestures: Boolean = false,
-    val html5Player: Boolean = false,
     val preferDub: Boolean = false,
     val preloadNextEpisode: Boolean = true,
     val hlsProxy: Boolean = false,

@@ -455,7 +455,7 @@ internal fun HomeScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "AnimeTV 6.6.7 © 2023-2024 amarullz.com",
+                        text = "AnimeTV",
                         color = Color.White.copy(alpha = 0.65f),
                         fontSize = fsSp(tokens.fs12),
                         fontWeight = FontWeight.Normal,
@@ -463,7 +463,7 @@ internal fun HomeScreen(
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "Build 666 - Source $resolvedSource",
+                        text = "Source $resolvedSource",
                         color = Color.White.copy(alpha = 0.4f),
                         fontSize = fsSp(tokens.fs10),
                         style = LocalTextStyle.current.copy(shadow = aboutShadow),

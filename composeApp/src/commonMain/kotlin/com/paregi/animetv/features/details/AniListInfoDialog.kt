@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,6 +26,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -54,10 +56,15 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.paregi.animetv.PlatformTrailer
@@ -673,11 +680,19 @@ private fun AniListInfoboxRow(info: AniListAnimeInfo, textShadow: Shadow?) {
         info.score?.let { score ->
             add {
                 Box {
-                    Text("★★★★★", color = Color(0xFF666666), fontSize = fsSp(tokens.fs13))
+                    Text(
+                        text = "★★★★★",
+                        color = Color(0xFF666666),
+                        fontSize = fsSp(tokens.fs13),
+                        maxLines = 1,
+                        softWrap = false
+                    )
                     Text(
                         text = "★★★★★",
                         color = Color(0xFFFFD76A),
                         fontSize = fsSp(tokens.fs13),
+                        maxLines = 1,
+                        softWrap = false,
                         modifier = Modifier.drawWithContent {
                             clipRect(right = size.width * (score.coerceIn(0, 100) / 100f)) {
                                 this@drawWithContent.drawContent()
@@ -791,7 +806,7 @@ private fun AniListMetricsAndDetails(
             AniListKeyValCell(
                 icon = IconGlyphs.Star,
                 label = "Score",
-                value = "${info.score ?: "-"} / 100",
+                value = "${info.score ?: "-"}\u00A0/\u00A0100",
                 modifier = Modifier.weight(1f)
             )
             AniListKeyValCell(
@@ -875,11 +890,16 @@ private fun AniListKeyValCell(
                 color = colors.accent1,
                 fontSize = fsSp(tokens.fs13),
                 lineHeight = fsSp(tokens.fs13) * 1.25f,
-                modifier = Modifier.padding(horizontal = tokens.u * 1f, vertical = tokens.u * 0.15f)
+                modifier = Modifier.padding(
+                    horizontal = if (tokens.portrait) tokens.u * 0.5f else tokens.u * 1f,
+                    vertical = tokens.u * 0.15f
+                )
             )
         }
     }
 }
+
+private val ReviewWhitespaceRegex = Regex("\\s+")
 
 @Composable
 private fun AniListReviewsBlock(reviews: List<AniListReview>) {
@@ -898,6 +918,40 @@ private fun AniListReviewsBlock(reviews: List<AniListReview>) {
             )
         }
     } else {
+        val density = LocalDensity.current
+        val textStyle = LocalTextStyle.current
+        val textMeasurer = rememberTextMeasurer()
+        val scoreFontSize = fsSp(tokens.fs13)
+        val suffixFontSize = fsSp(tokens.fs7)
+        val badgeHorizontalPadding = tokens.u * 0.5f
+        val badgeVerticalPadding = tokens.u * 0.15f
+        fun buildScoreLabel(value: String) = buildAnnotatedString {
+            withStyle(SpanStyle(fontSize = scoreFontSize, fontWeight = FontWeight.Bold)) {
+                append(value)
+            }
+            withStyle(SpanStyle(fontSize = suffixFontSize, fontWeight = FontWeight.Bold)) {
+                append("/100")
+            }
+        }
+        val badgeMinWidth = remember(
+            scoreFontSize,
+            suffixFontSize,
+            badgeHorizontalPadding,
+            textStyle,
+            density,
+            textMeasurer
+        ) {
+            val maxScoreWidthPx = textMeasurer.measure(
+                text = buildScoreLabel("100"),
+                style = textStyle.copy(fontSize = scoreFontSize, lineHeight = scoreFontSize * 1.2f),
+                maxLines = 1,
+                softWrap = false
+            ).size.width
+            val horizontalPaddingPx = with(density) { badgeHorizontalPadding.roundToPx() }
+            val measuredBadgeDp = with(density) { (maxScoreWidthPx + horizontalPaddingPx * 2).toDp() }
+            maxOf(tokens.u * 4.8f, measuredBadgeDp)
+        }
+
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(tokens.u * 0.3f)
@@ -910,6 +964,7 @@ private fun AniListReviewsBlock(reviews: List<AniListReview>) {
                 modifier = Modifier.padding(bottom = tokens.u * 0.2f)
             )
             reviews.forEach { review ->
+                val summaryText = review.summary.replace(ReviewWhitespaceRegex, " ").trim()
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -919,38 +974,39 @@ private fun AniListReviewsBlock(reviews: List<AniListReview>) {
                     Text(
                         text = "•",
                         color = Color.White,
-                        fontSize = fsSp(tokens.fs13),
-                        modifier = Modifier.padding(end = tokens.u * 0.6f)
+                        fontSize = scoreFontSize,
+                        lineHeight = scoreFontSize * 1.4f,
+                        modifier = Modifier
+                            .padding(end = tokens.u * 0.6f)
+                            .alignByBaseline()
                     )
                     Text(
-                        text = review.summary,
+                        text = summaryText,
                         color = Color.White,
-                        fontSize = fsSp(tokens.fs13),
-                        lineHeight = fsSp(tokens.fs13) * 1.4f,
-                        modifier = Modifier.weight(1f)
+                        fontSize = scoreFontSize,
+                        lineHeight = scoreFontSize * 1.4f,
+                        modifier = Modifier
+                            .weight(1f)
+                            .alignByBaseline()
                     )
                     review.score?.let { score ->
                         Spacer(Modifier.width(tokens.u * 1f))
-                        Row(
+                        Box(
                             modifier = Modifier
-                                .width(tokens.u * 4.4f)
+                                .defaultMinSize(minWidth = badgeMinWidth)
                                 .clip(RoundedCornerShape(tokens.u * 0.4f))
                                 .background(Color(0xFF008800))
-                                .padding(horizontal = tokens.u * 0.3f, vertical = tokens.u * 0.1f),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(horizontal = badgeHorizontalPadding, vertical = badgeVerticalPadding),
+                            contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = score.toString(),
+                                text = buildScoreLabel(score.toString()),
                                 color = Color.White,
-                                fontSize = fsSp(tokens.fs13),
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "/100",
-                                color = Color.White,
-                                fontSize = fsSp(tokens.fs7),
-                                fontWeight = FontWeight.Bold
+                                fontSize = scoreFontSize,
+                                lineHeight = scoreFontSize * 1.2f,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }

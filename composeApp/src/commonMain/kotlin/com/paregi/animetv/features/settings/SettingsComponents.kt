@@ -76,7 +76,6 @@ internal fun settingIcon(label: String): String? = when (label) {
     "Close Confirmation" -> IconGlyphs.CancelPresentation
     "Disable Touch Gesture" -> IconGlyphs.DoNotTouch
     "Preload Next Episode" -> IconGlyphs.CloudDownload
-    "Use HTML5 Video Player" -> IconGlyphs.LiveTv
     "Font Size" -> IconGlyphs.FormatSize
     "Interface Color" -> IconGlyphs.Palette
     "Wallpaper" -> IconGlyphs.Wallpaper
@@ -109,7 +108,6 @@ internal fun settingIcon(label: String): String? = when (label) {
     "Auto Tracking" -> IconGlyphs.DataExploration
     "Donation" -> IconGlyphs.VolunteerActivism
     "Discord Server" -> IconGlyphs.SportsEsports
-    "Check for Nightly Build" -> IconGlyphs.PartlyCloudyNight
     "Check for Update" -> IconGlyphs.Update
     else -> null
 }
@@ -122,7 +120,6 @@ internal fun settingDescription(label: String): String? = when (label) {
     "Video Buffer" -> "Set video buffer duration in memory. Lower values reduce RAM usage on low-end devices."
     "Close Confirmation" -> "Action to close the playback"
     "Preload Next Episode" -> "Prepare episode data before video finished for faster next episode load"
-    "Use HTML5 Video Player" -> "Enable if you have a problem with stuttering playback, some features may disabled"
     "Large UI" -> "Use bigger UI on anime list"
     "Login Style" -> "Change Who's Watching screen style"
     "Performance UI" -> "Enable/disable some effects for better performance gain"

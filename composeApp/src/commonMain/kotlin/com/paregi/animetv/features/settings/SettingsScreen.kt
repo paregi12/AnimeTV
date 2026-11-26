@@ -371,9 +371,6 @@ internal fun SettingsScreen(
     val preloadNextToggle = SettingToggle("Preload Next Episode", settings.preloadNextEpisode) {
         onChange(settings.copy(preloadNextEpisode = it))
     }
-    val html5PlayerToggle = SettingToggle("Use HTML5 Video Player", settings.html5Player) {
-        onChange(settings.copy(html5Player = it))
-    }
 
     val uiToggles = listOf(
         SettingToggle("MyList Main Page", settings.homeWatchlist) { onChange(settings.copy(homeWatchlist = it)) },
@@ -479,7 +476,6 @@ internal fun SettingsScreen(
                 item { SettingToggleRow(disableTouchToggle) }
             }
             item { SettingToggleRow(preloadNextToggle) }
-            item { SettingToggleRow(html5PlayerToggle) }
             item { Spacer(Modifier.height(tokens.u * 0.5f)) }
 
             item { SettingsGroupTitle("Styling") }
@@ -696,13 +692,6 @@ internal fun SettingsScreen(
                 )
             }
             if (isAdminProfile) {
-                item {
-                    SettingValueRow(
-                        SettingValue("Check for Nightly Build", "") {
-                            showToast("KMP builds use manual APK updates")
-                        }
-                    )
-                }
                 item {
                     SettingValueRow(
                         SettingValue("Check for Update", "") {

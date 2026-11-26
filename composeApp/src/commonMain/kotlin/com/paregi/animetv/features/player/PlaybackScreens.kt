@@ -29,7 +29,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -231,7 +230,6 @@ internal fun PlaybackScreen(
     progressiveCache: Boolean,
     cacheSizeMb: Int,
     disableTouchGestures: Boolean,
-    html5Player: Boolean,
     onProgress: (Long, Long) -> Unit,
     onEnded: () -> Unit,
     onPrevious: () -> Unit,
@@ -325,7 +323,6 @@ internal fun PlaybackScreen(
             progressiveCache = progressiveCache,
             cacheSizeMb = cacheSizeMb,
             disableTouchGestures = disableTouchGestures,
-            html5Player = html5Player,
             onProgress = onProgress,
             onEnded = onEnded,
             onBack = onBack,
@@ -881,7 +878,7 @@ internal fun PlaybackOsdContent(
     fun moveZone(delta: Int, preventCloseOnTop: Boolean = false): Boolean {
         if (!osdVisible) return false
         val zones = currentMenuZones
-        val currentIdx = zones.indexOf(currentActiveZone).coerceAtLeast(0)
+        val currentIdx = zones.indexOf(activeZone).coerceAtLeast(0)
         val targetIdx = currentIdx + delta
         if (targetIdx < 0) {
             if (!preventCloseOnTop && !hasError) {
@@ -1177,9 +1174,7 @@ internal fun PlaybackOsdContent(
             .pointerInput(disableTouchGestures, seekSeconds, hasError) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    val downFinalEvent = awaitPointerEvent(PointerEventPass.Final)
-                    val downFinalChange = downFinalEvent.changes.firstOrNull { it.id == down.id }
-                    if (down.isConsumed || downFinalChange?.isConsumed == true || currentSettingsOverlayOpen) {
+                    if (down.isConsumed || currentSettingsOverlayOpen) {
                         return@awaitEachGesture
                     }
 
@@ -1228,6 +1223,7 @@ internal fun PlaybackOsdContent(
                             break
                         }
 
+                        val prevPos = currentPos
                         if (!change.isConsumed && !childClaimed && !multiTouch && !currentSettingsOverlayOpen) {
                             val dragAmount = change.position - currentPos
                             currentPos = change.position
@@ -1240,11 +1236,14 @@ internal fun PlaybackOsdContent(
                                     movedPastSlop = true
                                 }
                                 val osdOpen = currentReadOsdVisible()
-                                val axisMargin = if (osdOpen) 1.5f else 1.35f
-                                val horizLock = totalDx >= lockSlopPx && totalDx > totalDy * axisMargin
-                                val vertLock = totalDy >= lockSlopPx && totalDy > totalDx * axisMargin
+                                // Match child LazyRow/SeekBar touchSlop when OSD is open so vertical swipes lock before horizontal children claim them.
+                                val activeLockSlop = if (osdOpen) touchSlop else lockSlopPx
+                                val activeFallbackSlop = if (osdOpen) touchSlop * 2f else fallbackSlopPx
+                                val axisMargin = if (osdOpen) 1.2f else 1.35f
+                                val horizLock = totalDx >= activeLockSlop && totalDx > totalDy * axisMargin
+                                val vertLock = totalDy >= activeLockSlop && totalDy > totalDx * axisMargin
                                 val diagDist = hypot(totalDx, totalDy)
-                                val diagVertFallback = diagDist >= fallbackSlopPx &&
+                                val diagVertFallback = diagDist >= activeFallbackSlop &&
                                     totalDy > totalDx * if (osdOpen) 1.15f else 1f
                                 val diagHorizFallback = !osdOpen && diagDist >= fallbackSlopPx && totalDx > totalDy
 
@@ -1322,7 +1321,12 @@ internal fun PlaybackOsdContent(
 
                         val finalEvent = awaitPointerEvent(PointerEventPass.Final)
                         val finalChange = finalEvent.changes.firstOrNull { it.id == down.id }
-                        if (!isDrag && finalChange?.isConsumed == true) {
+                        if (!isDrag &&
+                            finalChange != null &&
+                            finalChange.isConsumed &&
+                            finalChange.previousPressed &&
+                            finalChange.position != prevPos
+                        ) {
                             childClaimed = true
                         }
                     }
@@ -1392,7 +1396,7 @@ internal fun PlaybackOsdContent(
             }
         }
 
-        // Prevent native AndroidView (WebView/PlayerView) from claiming raw pointer events.
+        // Prevent native PlayerView from claiming raw pointer events.
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -2438,8 +2442,32 @@ private fun PlaybackActionsLayer(
                 .onSizeChanged { totalIactionsHeightPx = it.height }
                 .pointerInput(osdVisible) {
                     if (!osdVisible) return@pointerInput
-                    detectTapGestures {
-                        currentOnActivateZone(currentActiveZone)
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val slop = viewConfiguration.touchSlop
+                        var cancelled = false
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (event.changes.count { it.pressed } > 1) {
+                                cancelled = true
+                                break
+                            }
+                            if (!change.pressed) {
+                                if (!cancelled && !change.isConsumed) {
+                                    change.consume()
+                                    currentOnActivateZone(currentActiveZone)
+                                }
+                                break
+                            }
+                            if (change.isConsumed ||
+                                abs(change.position.x - down.position.x) > slop ||
+                                abs(change.position.y - down.position.y) > slop
+                            ) {
+                                cancelled = true
+                                break
+                            }
+                        }
                     }
                 }
                 .background(

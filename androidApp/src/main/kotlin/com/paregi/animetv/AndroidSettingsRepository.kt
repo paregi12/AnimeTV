@@ -73,7 +73,6 @@ class AndroidSettingsRepository(
             autoSkipIntro = config.optBoolean("autoskip", false),
             skipFiller = config.optBoolean("skipfiller", false),
             disableTouchGestures = config.optBoolean("disablegesture", false),
-            html5Player = config.optBoolean("html5player", false),
             preferDub = config.optBoolean("dubaudio", false),
             preloadNextEpisode = config.optBoolean("preloadep", true),
             hlsProxy = config.optBoolean("hlsproxy", false),
@@ -135,7 +134,6 @@ class AndroidSettingsRepository(
             .put("autoskip", settings.autoSkipIntro)
             .put("skipfiller", settings.skipFiller)
             .put("disablegesture", settings.disableTouchGestures)
-            .put("html5player", settings.html5Player)
             .put("dubaudio", settings.preferDub)
             .put("preloadep", settings.preloadNextEpisode)
             .put("hlsproxy", settings.hlsProxy)

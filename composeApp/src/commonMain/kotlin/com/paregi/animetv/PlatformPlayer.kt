@@ -56,7 +56,6 @@ expect fun PlatformPlayer(
     progressiveCache: Boolean,
     cacheSizeMb: Int,
     disableTouchGestures: Boolean,
-    html5Player: Boolean,
     onProgress: (Long, Long) -> Unit,
     onEnded: () -> Unit,
     onBack: () -> Unit,

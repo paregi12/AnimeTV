@@ -1630,7 +1630,6 @@ fun AnimeTvApp(
                                                     progressiveCache = appSettings.progressiveCache,
                                                     cacheSizeMb = appSettings.cacheSizeMb,
                                                     disableTouchGestures = appSettings.disableTouchGestures,
-                                                    html5Player = appSettings.html5Player,
                                                     onProgress = { position, duration ->
                                                         playbackPositionMs = position
                                                         playbackDurationMs = duration
