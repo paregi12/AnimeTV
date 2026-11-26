@@ -156,6 +156,7 @@ internal fun FocusCard(
     useScheduleBadges: Boolean = false,
     isAniListCard: Boolean = false,
     badgeMode: CardBadgeMode? = null,
+    showBottomBadges: Boolean = false,
     showPlayingRibbon: Boolean = false,
     onFocused: (() -> Unit)? = null
 ) {
@@ -188,6 +189,8 @@ internal fun FocusCard(
         isAniListCard -> CardBadgeMode.AniListMyList
         else -> CardBadgeMode.Catalog
     }
+    val effectiveShowBottomBadges =
+        effectiveBadgeMode == CardBadgeMode.Catalog && showBottomBadges && anime.id.startsWith("anilist:")
 
     val badges = remember(
         anime,
@@ -195,7 +198,8 @@ internal fun FocusCard(
         progressEpisode,
         posterBottomAired,
         posterBottomLabel,
-        effectiveBadgeMode
+        effectiveBadgeMode,
+        effectiveShowBottomBadges
     ) {
         resolveCardBadges(
             anime = anime,
@@ -203,14 +207,15 @@ internal fun FocusCard(
             progressEpisode = progressEpisode,
             airingAired = posterBottomAired,
             airingTime = posterBottomLabel,
-            mode = effectiveBadgeMode
+            mode = effectiveBadgeMode,
+            showBottomBadges = effectiveShowBottomBadges
         )
     }
 
     val posterShape = RoundedCornerShape((u * 0.3f).coerceAtLeast(1.dp))
     val backplateShape = RoundedCornerShape((u * 0.5f).coerceAtLeast(1.dp))
     val badgeFontSize = fsSp(tokens.fs8)
-    val badgeLineHeight = badgeFontSize * 1.35f
+    val badgeLineHeight = badgeFontSize * 1.4f
     val badgeCornerRadius = (u * 0.3f).coerceAtLeast(1.dp)
     val badgeDividerWidth = (u * 0.1f).coerceAtLeast(0.5.dp)
     val badgeHorizontalPadding = u * 0.3f
@@ -345,6 +350,7 @@ internal fun FocusCard(
                 posterBottomIcon = posterBottomIcon,
                 posterBottomAired = posterBottomAired,
                 badgeMode = effectiveBadgeMode,
+                showBottomBadges = effectiveShowBottomBadges,
                 glassMode = cardStyle.badgeStyle != 0,
                 primaryBg = colors.primaryBg,
                 primary2 = colors.primary2
@@ -480,7 +486,7 @@ private fun buildTopBadgeSegments(
             }
         }
         badges.format?.takeIf { it.isNotBlank() }?.let { fmt ->
-            add(BadgeSegment(text = fmt, background = primaryBg))
+            add(BadgeSegment(text = fmt, background = primaryBg, bold = false))
         }
         when (badgeMode) {
             CardBadgeMode.Schedule -> {
@@ -548,6 +554,7 @@ private fun buildBottomBadgeSegments(
     posterBottomIcon: String?,
     posterBottomAired: Boolean,
     badgeMode: CardBadgeMode,
+    showBottomBadges: Boolean,
     glassMode: Boolean,
     primaryBg: Color,
     primary2: Color
@@ -563,7 +570,7 @@ private fun buildBottomBadgeSegments(
             )
         )
     }
-    if (badgeMode != CardBadgeMode.Catalog) return emptyList()
+    if (badgeMode != CardBadgeMode.Catalog || !showBottomBadges) return emptyList()
 
     return buildList {
         val scoreDisplay = if (glassMode) {
@@ -639,10 +646,16 @@ private fun SegmentedBadgePill(
                             .background(Color.White.copy(alpha = 0.2f))
                     )
                 }
+                val startPadding = if (index > 0 && segment.icon != null) 0.dp else horizontalPadding
                 Row(
                     modifier = Modifier
                         .background(segment.background)
-                        .padding(horizontal = horizontalPadding, vertical = verticalPadding),
+                        .padding(
+                            start = startPadding,
+                            end = horizontalPadding,
+                            top = verticalPadding,
+                            bottom = verticalPadding
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(iconGap)
                 ) {

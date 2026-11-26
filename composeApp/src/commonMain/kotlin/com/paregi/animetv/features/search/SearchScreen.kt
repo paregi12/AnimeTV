@@ -720,6 +720,7 @@ internal fun SearchScreen(
                                     posterHeight = cardDims.posterHeight,
                                     cardTitleSize = cardDims.titleSize,
                                     cardTitleLineHeight = cardDims.titleLineHeight,
+                                    showBottomBadges = aniListSearch && anime.id.startsWith("anilist:"),
                                     onClick = { onAnimeSelected(anime) }
                                 )
                             }

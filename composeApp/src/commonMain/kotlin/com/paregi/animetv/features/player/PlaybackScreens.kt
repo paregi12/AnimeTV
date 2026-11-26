@@ -3332,6 +3332,7 @@ private fun PlaybackPosterShelf(
                         posterHeight = dims.posterHeight,
                         cardTitleSize = dims.titleSize,
                         cardTitleLineHeight = dims.titleLineHeight,
+                        showBottomBadges = false,
                         showPlayingRibbon = !playingAnimeId.isNullOrBlank() && anime.id == playingAnimeId,
                         onClick = {
                             if (focusEnabled) {

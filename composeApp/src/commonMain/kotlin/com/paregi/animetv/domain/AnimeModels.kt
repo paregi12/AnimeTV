@@ -98,7 +98,8 @@ data class WatchProgress(
     val positionMs: Long,
     val durationMs: Long,
     val updatedAtEpochMs: Long,
-    val anime: Anime? = null
+    val anime: Anime? = null,
+    val episodeNumber: String? = null
 )
 
 data class AiringEntry(

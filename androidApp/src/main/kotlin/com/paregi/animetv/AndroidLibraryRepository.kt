@@ -53,17 +53,29 @@ class AndroidLibraryRepository(context: Context, private val namespace: ProfileN
         lock.withLock {
             val now = System.currentTimeMillis()
             val targetSource = progress.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX
+            val preserveTimestamp = progress.updatedAtEpochMs > 0L
+            val existing = loadHistoryRecords()
+            val previous = existing.firstOrNull {
+                it.progress.animeId == progress.animeId &&
+                    it.progress.episodeId == progress.episodeId &&
+                    it.sourceIndex == targetSource
+            }
             val updated = progress.copy(
-                updatedAtEpochMs = progress.updatedAtEpochMs.takeIf { it > 0L } ?: now
+                updatedAtEpochMs = if (preserveTimestamp) progress.updatedAtEpochMs else now,
+                episodeNumber = progress.episodeNumber?.takeIf { it.isNotBlank() }
+                    ?: previous?.progress?.episodeNumber?.takeIf { it.isNotBlank() }
             )
-            val records = loadHistoryRecords()
-                .filterNot {
-                    it.progress.animeId == updated.animeId &&
-                        it.progress.episodeId == updated.episodeId &&
-                        it.sourceIndex == targetSource
-                }
-                .toMutableList()
-            records.add(0, StoredHistoryRecord(updated, targetSource))
+            val remaining = existing.filterNot {
+                it.progress.animeId == updated.animeId &&
+                    it.progress.episodeId == updated.episodeId &&
+                    it.sourceIndex == targetSource
+            }
+            val records = if (preserveTimestamp) {
+                (remaining + StoredHistoryRecord(updated, targetSource))
+                    .sortedByDescending { it.progress.updatedAtEpochMs }
+            } else {
+                listOf(StoredHistoryRecord(updated, targetSource)) + remaining
+            }
             saveHistoryRecords(records.take(500))
         }
     }
@@ -117,7 +129,9 @@ class AndroidLibraryRepository(context: Context, private val namespace: ProfileN
                     positionMs = item.optLong("positionMs"),
                     durationMs = item.optLong("durationMs"),
                     updatedAtEpochMs = item.optLong("updatedAtEpochMs"),
-                    anime = anime
+                    anime = anime,
+                    episodeNumber = if (item.isNull("episodeNumber")) null
+                    else item.optString("episodeNumber").takeIf { it.isNotBlank() }
                 ),
                 sourceIndex = recordSource
             )
@@ -131,6 +145,7 @@ class AndroidLibraryRepository(context: Context, private val namespace: ProfileN
                 put(JSONObject()
                     .put("animeId", item.animeId)
                     .put("episodeId", item.episodeId)
+                    .put("episodeNumber", item.episodeNumber?.takeIf { it.isNotBlank() })
                     .put("positionMs", item.positionMs)
                     .put("durationMs", item.durationMs)
                     .put("updatedAtEpochMs", item.updatedAtEpochMs)

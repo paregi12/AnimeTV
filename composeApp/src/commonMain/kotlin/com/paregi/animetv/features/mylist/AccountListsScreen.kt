@@ -724,19 +724,24 @@ private fun LocalListShelf(
     ) {
         itemsIndexed(animes, key = { idx, it -> "fav:${idx}:${it.sourceIndex}:${it.id}" }) { _, anime ->
             val progress = historyByAnimeKey[anime.id to anime.sourceIndex]
+            val progressFormat = progress?.anime?.format?.takeIf { it.isNotBlank() }
+            val cardAnime = if (anime.format.isNullOrBlank() && progressFormat != null) {
+                anime.copy(format = progressFormat)
+            } else anime
             val pct = progress?.takeIf { it.durationMs > 0 }?.let {
                 (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f)
             }
-            val epLabel = progress?.episodeId?.let(::extractEpisodeNumber)
+            val epLabel = progress?.episodeNumber?.takeIf { it.isNotBlank() }
+                ?: progress?.episodeId?.let(::extractEpisodeNumber)
             FocusCard(
-                anime = anime,
+                anime = cardAnime,
                 cardWidth = cardDims.cardWidth,
                 cardHeight = cardDims.cardHeight,
                 posterWidth = cardDims.posterWidth,
                 posterHeight = cardDims.posterHeight,
                 cardTitleSize = cardDims.titleSize,
                 cardTitleLineHeight = cardDims.titleLineHeight,
-                onClick = { onOpenAnime(anime) },
+                onClick = { onOpenAnime(cardAnime) },
                 progressPercent = pct,
                 progressEpisode = epLabel,
                 largeUi = largeUi,
@@ -802,10 +807,11 @@ private fun HistoryListShelf(
     ) {
         itemsIndexed(history, key = { idx, it -> "history:${idx}:${it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX}:${it.animeId}:${it.episodeId}" }) { _, progress ->
             val anime = progress.anime ?: return@itemsIndexed
-            val pct = if (progress.durationMs > 0) {
-                (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
-            } else null
-            val epLabel = extractEpisodeNumber(progress.episodeId)
+            val pct = progress.durationMs.takeIf { it > 0 }?.let {
+                (progress.positionMs.toFloat() / it.toFloat()).coerceIn(0f, 1f)
+            }
+            val epLabel = progress.episodeNumber?.takeIf { it.isNotBlank() }
+                ?: extractEpisodeNumber(progress.episodeId)
             FocusCard(
                 anime = anime,
                 cardWidth = cardDims.cardWidth,

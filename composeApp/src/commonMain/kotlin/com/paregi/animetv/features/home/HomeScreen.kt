@@ -428,6 +428,7 @@ internal fun HomeScreen(
                                 cardDims = cardDims,
                                 largeUi = effectiveLargeUi,
                                 maskEnabled = maskEnabled,
+                                isAniListCatalogShelf = pref.id.startsWith("al"),
                                 onAnimeSelected = onAnimeSelected
                             )
                         }
@@ -919,6 +920,7 @@ private fun HomeStandardShelf(
     cardDims: CardDimensions,
     largeUi: Boolean,
     maskEnabled: Boolean,
+    isAniListCatalogShelf: Boolean = false,
     onAnimeSelected: (Anime) -> Unit
 ) {
     val rowState = rememberLazyListState()
@@ -943,7 +945,8 @@ private fun HomeStandardShelf(
                 cardTitleSize = cardDims.titleSize,
                 cardTitleLineHeight = cardDims.titleLineHeight,
                 onClick = { onAnimeSelected(anime) },
-                largeUi = largeUi
+                largeUi = largeUi,
+                showBottomBadges = isAniListCatalogShelf && anime.id.startsWith("anilist:")
             )
         }
     }
@@ -1019,7 +1022,8 @@ private fun HomeTabbedAniListShelf(
                             cardTitleSize = cardDims.titleSize,
                             cardTitleLineHeight = cardDims.titleLineHeight,
                             onClick = { onAnimeSelected(anime) },
-                            largeUi = largeUi
+                            largeUi = largeUi,
+                            showBottomBadges = true
                         )
                     }
                 }

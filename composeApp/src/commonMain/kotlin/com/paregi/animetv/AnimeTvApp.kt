@@ -323,6 +323,40 @@ fun AnimeTvApp(
     }
 
     fun startPlayback(episode: Episode) {
+        val currentSource = appSettings.selectedSource
+        val savedAnime = (animeDetails?.anime ?: retainedAnimeDetails?.anime ?: selectedAnime)
+            ?.copy(sourceIndex = currentSource)
+        if (savedAnime != null) {
+            coroutineScope.launch {
+                val existing = runCatching { libraryRepository.loadHistory(currentSource) }
+                    .getOrDefault(watchHistory)
+                    .filter {
+                        it.animeId == savedAnime.id &&
+                            (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) == currentSource &&
+                            it.episodeId == episode.id
+                    }
+                    .maxByOrNull { it.updatedAtEpochMs }
+                libraryRepository.saveProgress(
+                    WatchProgress(
+                        animeId = savedAnime.id,
+                        episodeId = episode.id,
+                        positionMs = existing?.positionMs ?: 0L,
+                        durationMs = existing?.durationMs ?: 0L,
+                        updatedAtEpochMs = 0L,
+                        anime = savedAnime,
+                        episodeNumber = episode.number
+                    )
+                )
+                watchHistory = libraryRepository.loadHistory()
+                val topContinue = homeFeed.continueWatching.firstOrNull()
+                if (topContinue?.id != savedAnime.id || topContinue.sourceIndex != savedAnime.sourceIndex) {
+                    homeFeed = homeFeed.copy(
+                        continueWatching = (listOf(savedAnime) +
+                            homeFeed.continueWatching).distinctBy { it.id to it.sourceIndex }
+                    )
+                }
+            }
+        }
         if (preloadedPlaybackChoice?.first == episode.id) {
             preloadedAppliedEpisodeId = episode.id
             playbackChoice = preloadedPlaybackChoice?.second
@@ -716,9 +750,54 @@ fun AnimeTvApp(
             )
             retainedSynopsis = loadedDetails?.anime?.synopsis ?: anime.synopsis
             val resumeId = resumeEpisodeId
-            if (resumeId != null) {
-                loadedDetails?.episodes?.firstOrNull { it.id == resumeId }?.let(::startPlayback)
-                resumeEpisodeId = null
+            val startedEpisodeId = if (resumeId != null) {
+                loadedDetails?.episodes?.firstOrNull { it.id == resumeId }
+                    ?.also(::startPlayback)
+                    ?.id
+                    .also { resumeEpisodeId = null }
+            } else null
+            if (loadedDetails != null) {
+                val currentSource = appSettings.selectedSource
+                val resolvedAnime = loadedDetails.anime.copy(sourceIndex = currentSource)
+                coroutineScope.launch {
+                    val currentHistory = runCatching { libraryRepository.loadHistory(currentSource) }
+                        .getOrDefault(watchHistory)
+                    val staleEntries = currentHistory.filter { entry ->
+                        entry.animeId == resolvedAnime.id &&
+                            entry.episodeId != startedEpisodeId &&
+                            selectedEpisode?.id != entry.episodeId &&
+                            (entry.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) == currentSource &&
+                            (entry.episodeNumber.isNullOrBlank() ||
+                                (entry.anime?.format.isNullOrBlank() && !resolvedAnime.format.isNullOrBlank()))
+                    }
+                    var updatedAny = false
+                    staleEntries.forEach { entry ->
+                        if (selectedEpisode?.id == entry.episodeId) return@forEach
+                        val epNum = loadedDetails.episodes
+                            .firstOrNull { it.id == entry.episodeId }
+                            ?.number
+                            ?: entry.episodeNumber
+                        val needsEpisodeNumber = entry.episodeNumber.isNullOrBlank() && !epNum.isNullOrBlank()
+                        val needsFormat = entry.anime?.format.isNullOrBlank() && !resolvedAnime.format.isNullOrBlank()
+                        if (needsEpisodeNumber || needsFormat) {
+                            val mergedAnime = if (needsFormat) {
+                                resolvedAnime
+                            } else {
+                                entry.anime?.copy(sourceIndex = currentSource) ?: resolvedAnime
+                            }
+                            libraryRepository.saveProgress(
+                                entry.copy(
+                                    anime = mergedAnime,
+                                    episodeNumber = epNum
+                                )
+                            )
+                            updatedAny = true
+                        }
+                    }
+                    if (updatedAny) {
+                        watchHistory = libraryRepository.loadHistory()
+                    }
+                }
             }
         }
     }
@@ -1537,7 +1616,9 @@ fun AnimeTvApp(
                                                         ?: sourceHistory.sortedByDescending { it.updatedAtEpochMs }
                                                             .firstOrNull {
                                                                 it.episodeId == activeEpisode.id &&
-                                                                    (activeAnime == null || it.animeId == activeAnime.id)
+                                                                    (activeAnime == null ||
+                                                                        it.animeId == activeAnime.id ||
+                                                                        it.animeId == visibleAnimeDetails?.anime?.id)
                                                             }?.positionMs
                                                         ?: 0L,
                                                     seekSeconds = appSettings.seekSeconds,
@@ -1554,7 +1635,8 @@ fun AnimeTvApp(
                                                         playbackPositionMs = position
                                                         playbackDurationMs = duration
                                                         activeAnime?.let { anime ->
-                                                            val savedAnime = anime.copy(sourceIndex = selectedSource)
+                                                            val savedAnime = (visibleAnimeDetails?.anime ?: anime)
+                                                                .copy(sourceIndex = selectedSource)
                                                             val episodeNumber = activeEpisode.number.toIntOrNull()
                                                                 ?: activeEpisode.number.toDoubleOrNull()?.toInt()
                                                             val progressPercent = if (duration > 0) {
@@ -1607,11 +1689,23 @@ fun AnimeTvApp(
                                                                         positionMs = position,
                                                                         durationMs = duration,
                                                                         updatedAtEpochMs = 0,
-                                                                        anime = savedAnime
+                                                                        anime = savedAnime,
+                                                                        episodeNumber = activeEpisode.number
                                                                     )
                                                                 )
                                                                 val topContinue = homeFeed.continueWatching.firstOrNull()
-                                                                if (topContinue?.id != savedAnime.id || topContinue.sourceIndex != savedAnime.sourceIndex) {
+                                                                val latestEntry = watchHistory
+                                                                    .filter {
+                                                                        it.animeId == savedAnime.id &&
+                                                                            (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) == selectedSource
+                                                                    }
+                                                                    .maxByOrNull { it.updatedAtEpochMs }
+                                                                if (topContinue?.id != savedAnime.id ||
+                                                                    topContinue.sourceIndex != savedAnime.sourceIndex ||
+                                                                    latestEntry?.episodeId != activeEpisode.id ||
+                                                                    latestEntry.episodeNumber != activeEpisode.number ||
+                                                                    latestEntry.anime?.format != savedAnime.format
+                                                                ) {
                                                                     watchHistory = libraryRepository.loadHistory()
                                                                     homeFeed = homeFeed.copy(
                                                                         continueWatching = (listOf(savedAnime) +
@@ -1936,14 +2030,16 @@ fun AnimeTvApp(
                                         ) {
                                             val detailAnime = activeAnime ?: retainedDetailAnime
                                             if (detailAnime != null) {
+                                                val activeDetails = if (activeAnime?.id == detailAnime.id) {
+                                                    visibleAnimeDetails
+                                                } else {
+                                                    retainedVisibleAnimeDetails
+                                                }
+                                                val detailTarget = activeDetails?.anime ?: detailAnime
                                                 DetailsScreen(
                                                     anime = detailAnime,
                                                     tvLayout = tvLayout,
-                                                    details = if (activeAnime?.id == detailAnime.id) {
-                                                        visibleAnimeDetails
-                                                    } else {
-                                                        retainedVisibleAnimeDetails
-                                                    },
+                                                    details = activeDetails,
                                                     synopsis = (if (activeAnime?.id == detailAnime.id) {
                                                         translatedSynopsis ?: animeDetails?.anime?.synopsis
                                                     } else {
@@ -1967,9 +2063,11 @@ fun AnimeTvApp(
                                                         )
                                                     },
                                                     watchProgress = sourceHistory.filter {
-                                                        it.animeId == detailAnime.id
+                                                        it.animeId == detailTarget.id || it.animeId == detailAnime.id
                                                     }.maxByOrNull { it.updatedAtEpochMs },
-                                                    inHistory = sourceHistory.any { it.animeId == detailAnime.id },
+                                                    inHistory = sourceHistory.any {
+                                                        it.animeId == detailTarget.id || it.animeId == detailAnime.id
+                                                    },
                                                     skipFiller = appSettings.skipFiller,
                                                     inWatchlist = sourceWatchlist.any { it.id == detailAnime.id },
                                                     tracking = animeTracking,
@@ -2014,11 +2112,15 @@ fun AnimeTvApp(
                                                     },
                                                     onHistoryChange = { shouldKeep ->
                                                         if (!shouldKeep) coroutineScope.launch {
-                                                            libraryRepository.removeAnimeHistory(detailAnime.id, selectedSource)
+                                                            libraryRepository.removeAnimeHistory(detailTarget.id, selectedSource)
+                                                            if (detailAnime.id != detailTarget.id) {
+                                                                libraryRepository.removeAnimeHistory(detailAnime.id, selectedSource)
+                                                            }
                                                             watchHistory = libraryRepository.loadHistory()
                                                             homeFeed = homeFeed.copy(
                                                                 continueWatching = homeFeed.continueWatching.filterNot {
-                                                                    it.id == detailAnime.id && it.sourceIndex == selectedSource
+                                                                    (it.id == detailTarget.id || it.id == detailAnime.id) &&
+                                                                        it.sourceIndex == selectedSource
                                                                 }
                                                             )
                                                         }
