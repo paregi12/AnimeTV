@@ -1063,7 +1063,15 @@ private fun buildPlaybackMediaItem(
             .setSelectionFlags(if (track.defaultSelected) C.SELECTION_FLAG_DEFAULT else 0)
             .build()
     }
-    return MediaItem.Builder().setUri(url).setSubtitleConfigurations(subtitleConfigs).build()
+    return MediaItem.Builder()
+        .setUri(url)
+        .apply {
+            if (url.contains(".m3u8", ignoreCase = true) || url.contains("m3u8=1", ignoreCase = true)) {
+                setMimeType(MimeTypes.APPLICATION_M3U8)
+            }
+        }
+        .setSubtitleConfigurations(subtitleConfigs)
+        .build()
 }
 
 private fun CharSequence.toSubtitleAnnotatedString(boldWeight: FontWeight): AnnotatedString {

@@ -303,7 +303,12 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         if (playlist) query.append("&m3u8=1")
         if (plain) query.append("&plain=1")
         if (referer != null) query.append("&ref=").append(URLEncoder.encode(referer, "UTF-8"))
-        return "http://127.0.0.1:" + port + "/proxy?" + query
+        val path = when {
+            playlist -> "/proxy/playlist.m3u8?"
+            plain -> "/proxy/passthrough?"
+            else -> "/proxy/segment.ts?"
+        }
+        return "http://127.0.0.1:" + port + path + query
     }
 
     private fun serveSegment(

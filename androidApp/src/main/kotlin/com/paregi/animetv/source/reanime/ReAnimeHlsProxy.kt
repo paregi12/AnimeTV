@@ -121,7 +121,8 @@ internal class ReAnimeHlsProxy(
         if (playlist) query.append("&m3u8=1")
         if (plain) query.append("&plain=1")
         if (wPayload.isNotBlank()) query.append("&wp=").append(URLEncoder.encode(wPayload, "UTF-8"))
-        return "http://127.0.0.1:" + port() + "/proxy?" + query
+        val path = if (playlist) "/proxy/playlist.m3u8?" else "/proxy?"
+        return "http://127.0.0.1:" + port() + path + query
     }
 
     private fun isMasterPlaylist(url: String): Boolean {
