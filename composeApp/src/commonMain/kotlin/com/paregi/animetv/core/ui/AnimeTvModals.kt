@@ -116,10 +116,12 @@ data class ListOrderItem(
     val id: String,
     val title: String,
     val value: String? = null,
+    val inlineValue: Boolean = false,
     val icon: String? = null,
     val selected: Boolean = false,
     val enabled: Boolean = true,
     val rightBadge: String? = null,
+    val rightBadgeIcon: String? = null,
     val swatches: List<Color> = emptyList(),
     val disabledByOther: Boolean = false,
     val avatarUrl: String? = null,
@@ -240,7 +242,8 @@ fun ListOrderDialog(
     headerAvatar: (@Composable () -> Unit)? = null,
     headerTrailingIcon: String? = null,
     footerTip: String? = null,
-    initialSelectedIndex: Int = 0
+    initialSelectedIndex: Int = 0,
+    bottomClearance: Dp = 0.dp
 ) {
     val playClickSound = LocalNavigationSound.current
     val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
@@ -318,9 +321,15 @@ fun ListOrderDialog(
     AnimeTvModalScrim(onDismiss = onDismiss) { animProgress, tokens, colors ->
         val dialogWidth = (tokens.u * 40f).coerceAtMost(tokens.screenWidth * 0.90f)
         val cornerRadius = tokens.u * 0.5f
+        val maxListHeight = if (bottomClearance > 0.dp) {
+            (tokens.vh * 75f).coerceAtMost((tokens.screenHeight - bottomClearance - tokens.u * 6f).coerceAtLeast(tokens.vh * 25f))
+        } else {
+            tokens.vh * 75f
+        }
 
         Column(
             modifier = Modifier
+                .padding(bottom = bottomClearance)
                 .modalWindowSurface(
                     width = dialogWidth,
                     cornerRadius = cornerRadius,
@@ -409,7 +418,7 @@ fun ListOrderDialog(
                 state = listState,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = tokens.vh * 75f)
+                    .heightIn(max = maxListHeight)
             ) {
                 itemsIndexed(
                     workingItems,
@@ -556,30 +565,67 @@ fun ListOrderDialog(
                             }
                         }
 
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = item.title,
-                                color = Color.White.copy(alpha = contentAlpha),
-                                fontSize = fsSp(tokens.fs15),
-                                lineHeight = fsSp(tokens.fs15) * 1.15f
-                            )
-                            if (!item.value.isNullOrBlank()) {
+                        if (item.inlineValue && !item.value.isNullOrBlank()) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = item.title,
+                                    color = Color.White.copy(alpha = contentAlpha),
+                                    fontSize = fsSp(tokens.fs15),
+                                    lineHeight = fsSp(tokens.fs15) * 1.15f,
+                                    modifier = Modifier
+                                        .width(minOf(tokens.u * 15f, dialogWidth * 0.40f))
+                                        .padding(end = tokens.u * 0.6f)
+                                )
                                 Text(
                                     text = item.value,
                                     color = colors.accent1.copy(alpha = contentAlpha),
-                                    fontSize = fsSp(tokens.fs12),
-                                    lineHeight = fsSp(tokens.fs12) * 1.2f
+                                    fontSize = fsSp(tokens.fs14),
+                                    lineHeight = fsSp(tokens.fs14) * 1.15f,
+                                    modifier = Modifier.weight(1f)
                                 )
+                            }
+                        } else {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = item.title,
+                                    color = Color.White.copy(alpha = contentAlpha),
+                                    fontSize = fsSp(tokens.fs15),
+                                    lineHeight = fsSp(tokens.fs15) * 1.15f
+                                )
+                                if (!item.value.isNullOrBlank()) {
+                                    Text(
+                                        text = item.value,
+                                        color = colors.accent1.copy(alpha = contentAlpha),
+                                        fontSize = fsSp(tokens.fs12),
+                                        lineHeight = fsSp(tokens.fs12) * 1.2f
+                                    )
+                                }
                             }
                         }
 
                         if (!item.rightBadge.isNullOrBlank()) {
                             Spacer(Modifier.width(tokens.u * 0.8f))
-                            Text(
-                                text = item.rightBadge,
-                                color = colors.accent1,
-                                fontSize = fsSp(tokens.fs10)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.3f)
+                            ) {
+                                if (!item.rightBadgeIcon.isNullOrBlank()) {
+                                    Text(
+                                        text = item.rightBadgeIcon,
+                                        fontFamily = LocalIconFont.current,
+                                        color = colors.accent1,
+                                        fontSize = fsSp(tokens.fs10)
+                                    )
+                                }
+                                Text(
+                                    text = item.rightBadge,
+                                    color = colors.accent1,
+                                    fontSize = fsSp(tokens.fs10)
+                                )
+                            }
                         }
 
                         if (mode == ListOrderMode.THEME && item.swatches.isNotEmpty()) {

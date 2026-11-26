@@ -31,7 +31,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,8 +65,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import com.paregi.animetv.PlatformTrailer
+import com.paregi.animetv.rememberPlatformTrailerController
 import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.theme.LocalAnimeTvColors
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
@@ -124,7 +125,7 @@ internal fun AniListInfoDialog(
     var statusProvider by remember { mutableStateOf<AccountProvider?>(null) }
     var pendingRemovalProvider by remember { mutableStateOf<AccountProvider?>(null) }
     var trailerState by remember(selectedTrailerId) { mutableStateOf<String?>(null) }
-    var trailerReplayKey by remember { mutableIntStateOf(0) }
+    val trailerController = rememberPlatformTrailerController()
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -218,13 +219,16 @@ internal fun AniListInfoDialog(
                         ) {
                             val activeTrailerId = selectedTrailerId
                             if (activeTrailerId != null) {
-                                key(activeTrailerId, trailerReplayKey) {
+                                key(activeTrailerId) {
                                     PlatformTrailer(
                                         youtubeId = activeTrailerId,
                                         muted = false,
+                                        controller = trailerController,
+                                        hideUntilPlaying = false,
                                         onPlaybackState = { state -> trailerState = state },
                                         modifier = Modifier
                                             .align(Alignment.TopCenter)
+                                            .zIndex(20f)
                                             .fillMaxWidth()
                                             .height(tokens.vh * 26.8f)
                                     )
@@ -247,6 +251,7 @@ internal fun AniListInfoDialog(
                                 color = Color.Black,
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
+                                    .zIndex(21f)
                                     .padding(top = tokens.vh * 26.8f)
                             )
 
@@ -416,10 +421,12 @@ internal fun AniListInfoDialog(
                                                 .clip(RoundedCornerShape(tokens.vw * 0.8f))
                                                 .background(Color.Black)
                                         ) {
-                                            key(activeTrailerId, trailerReplayKey) {
+                                            key(activeTrailerId) {
                                                 PlatformTrailer(
                                                     youtubeId = activeTrailerId,
                                                     muted = false,
+                                                    controller = trailerController,
+                                                    hideUntilPlaying = false,
                                                     onPlaybackState = { state -> trailerState = state },
                                                     modifier = Modifier.fillMaxSize()
                                                 )
@@ -547,13 +554,12 @@ internal fun AniListInfoDialog(
                                     trailerState = null
                                     onPlayTrailer(trailerId)
                                 }
-                                trailerState == "yt-pause" || trailerState == "yt-end" -> {
-                                    trailerState = null
-                                    trailerReplayKey += 1
-                                }
-                                else -> {
+                                trailerState == "yt-error" -> {
                                     trailerState = null
                                     onPlayTrailer(null)
+                                }
+                                else -> {
+                                    trailerController.toggle()
                                 }
                             }
                         }

@@ -163,13 +163,17 @@ internal fun formatThemeName(theme: String): String {
 }
 
 @Composable
-internal fun SettingToggleRow(item: SettingToggle) {
+internal fun SettingToggleRow(
+    item: SettingToggle,
+    modifier: Modifier = Modifier
+) {
     SettingsRowFrame(
         label = item.label,
         icon = settingIcon(item.label),
         description = item.description,
         enabled = item.enabled,
         onClick = { item.onChange(!item.checked) },
+        modifier = modifier,
         trailingContent = {
             AnimeTvSwitch(checked = item.checked, enabled = item.enabled)
         }
@@ -177,7 +181,10 @@ internal fun SettingToggleRow(item: SettingToggle) {
 }
 
 @Composable
-internal fun SettingValueRow(item: SettingValue) {
+internal fun SettingValueRow(
+    item: SettingValue,
+    modifier: Modifier = Modifier
+) {
     SettingsRowFrame(
         label = item.label,
         icon = item.icon ?: settingIcon(item.label),
@@ -186,7 +193,8 @@ internal fun SettingValueRow(item: SettingValue) {
         valueBadge = item.valueBadge,
         description = item.description,
         enabled = true,
-        onClick = item.onClick
+        onClick = item.onClick,
+        modifier = modifier
     )
 }
 
@@ -200,6 +208,7 @@ private fun SettingsRowFrame(
     description: String? = null,
     enabled: Boolean = true,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     trailingContent: (@Composable () -> Unit)? = null
 ) {
     val tokens = LocalAnimeTvTokens.current
@@ -219,7 +228,7 @@ private fun SettingsRowFrame(
     val resolvedDesc = description ?: settingDescription(label)
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = if (enabled) 1f else 0.3f }
             .background(rowBackground)

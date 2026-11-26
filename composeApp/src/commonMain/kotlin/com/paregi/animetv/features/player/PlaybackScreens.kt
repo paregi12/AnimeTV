@@ -161,6 +161,9 @@ import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.time.TimeSource
 
+private const val ICON_SUBTITLES = "\uE048"
+private const val ICON_BOOKMARK_ADD = "\uE598"
+
 internal enum class PlaybackMenuZone {
     GENRES,
     SETTINGS,
@@ -514,7 +517,8 @@ private fun PlaybackQuickOptionDialogs(
                         id = language.code.ifBlank { "original" },
                         title = language.label,
                         selected = language.code == audioLanguage,
-                        rightBadge = if (available) "✓ Available" else null
+                        rightBadge = if (available) "Available" else null,
+                        rightBadgeIcon = if (available) IconGlyphs.Check else null
                     )
                 },
                 mode = ListOrderMode.LIST,
@@ -537,6 +541,7 @@ private fun PlaybackQuickOptionDialogs(
                         id = "quality_$index",
                         title = name,
                         value = heightHint?.let { "${it}p" },
+                        inlineValue = heightHint != null,
                         selected = index == selectedIndex
                     )
                 },
@@ -1549,16 +1554,19 @@ internal fun PlaybackOsdContent(
                 if (showTouchActions) {
                     PlaybackTouchCircleButton(
                         icon = IconGlyphs.Back,
-                        buttonSize = tokens.fs25 + tokens.vw * 2f,
+                        buttonSize = tokens.fs25 + tokens.u * 2f,
                         iconSize = fsSp(tokens.fs25),
                         onClick = onBack,
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(start = tokens.vw * 3f, top = tokens.vw * 3f)
+                            .padding(
+                                start = tokens.u * 3f,
+                                top = tokens.u * 3f + (if (tokens.portrait) tokens.sysStatHeight else 0.dp)
+                            )
                     )
                     val showCenterTouchControls = !(isLoading && durationMs <= 0L) && !hasError
                     if (showCenterTouchControls) {
-                        val sideButtonSize = tokens.fs30 + tokens.vw * 3f
+                        val sideButtonSize = tokens.fs30 + tokens.u * 3f
                         Row(
                             modifier = Modifier.align(Alignment.Center),
                             horizontalArrangement = Arrangement.spacedBy(tokens.vw * 8f),
@@ -1583,7 +1591,7 @@ internal fun PlaybackOsdContent(
                                     isPlaying -> IconGlyphs.Pause
                                     else -> IconGlyphs.Play
                                 },
-                                buttonSize = tokens.fs60 + tokens.vw * 6f,
+                                buttonSize = tokens.fs60 + tokens.u * 6f,
                                 iconSize = fsSp(tokens.fs60),
                                 onClick = {
                                     onTogglePlay(true)
@@ -1629,7 +1637,10 @@ internal fun PlaybackOsdContent(
                 textShadowDisabled = textShadowDisabled,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = tokens.vw * 1f, end = tokens.vw * 1f)
+                    .padding(
+                        top = tokens.u * 1f + (if (tokens.portrait) tokens.sysStatHeight else 0.dp),
+                        end = tokens.u * 1f
+                    )
                     .graphicsLayer { alpha = streamTypeAlpha }
             )
         }
@@ -1649,7 +1660,10 @@ internal fun PlaybackOsdContent(
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = tokens.vw * 5f, bottom = tokens.vw * 5f)
+                .padding(
+                    end = tokens.vw * 5f,
+                    bottom = tokens.vw * 5f + (if (tokens.portrait) tokens.sysNavHeight else 0.dp)
+                )
         ) {
             val skipToRender = activeSkip ?: lastSkipForFade
             if (skipToRender != null) {
@@ -1896,7 +1910,15 @@ private fun PlaybackMetaLayer(
     var genresSelectedIdx by remember(genres) { mutableIntStateOf(0) }
     var settingsSelectedIdx by remember { mutableIntStateOf(0) }
 
-    Box(
+    val isPortrait = tokens.portrait
+    val horizontalPad = tokens.vw * 5f
+    val topPad = if (isPortrait) tokens.sysStatHeight + tokens.u * 3f else tokens.vw * 5f
+    val bottomPad = if (isPortrait) tokens.sysNavHeight + tokens.u * 4.5f else tokens.vw * 5f
+    val titleWidth = if (isPortrait) tokens.vw * 90f else tokens.vw * 40f
+    val descWidth = if (isPortrait) tokens.vw * 90f else tokens.vw * 50f
+    val settingsWidth = if (isPortrait) tokens.vw * 90f else tokens.vw * 80f
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .graphicsLayer { alpha = metaAlpha }
@@ -1907,21 +1929,23 @@ private fun PlaybackMetaLayer(
                     1f to Color.Transparent
                 )
             )
-            .padding(tokens.vw * 5f)
+            .padding(start = horizontalPad, end = horizontalPad, top = topPad, bottom = bottomPad)
     ) {
         Column(
-            modifier = Modifier.align(Alignment.TopStart)
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = true)
         ) {
-            // #pb_title: 40vw width, unrestricted lines like CSS.
+            // #pb_title: 40vw width in landscape, unrestricted lines like CSS.
             Text(
                 text = title,
                 color = Color.White,
-                fontSize = fsSp(tokens.vw * 3f),
+                fontSize = if (isPortrait) fsSp(tokens.fs25) else fsSp(tokens.vw * 3f),
                 fontWeight = FontWeight.Bold,
-                lineHeight = fsSp(tokens.vw * 3.4f),
+                lineHeight = if (isPortrait) fsSp(tokens.fs25) * 1.15f else fsSp(tokens.vw * 3.4f),
                 style = LocalTextStyle.current.copy(shadow = metaTextShadow),
                 modifier = Modifier
-                    .width(tokens.vw * 40f)
+                    .width(titleWidth)
                     .padding(bottom = tokens.fs15)
                     .graphicsLayer { translationX = (tokens.vw * 5f).toPx() * titleOffset }
             )
@@ -1932,7 +1956,7 @@ private fun PlaybackMetaLayer(
                     add(
                         PlaybackChipSpec(
                             id = "fav",
-                            icon = if (inWatchlist) IconGlyphs.Clear else IconGlyphs.Bookmark,
+                            icon = if (inWatchlist) IconGlyphs.Clear else ICON_BOOKMARK_ADD,
                             label = "Watchlist",
                             onClick = onToggleWatchlist
                         )
@@ -1990,10 +2014,11 @@ private fun PlaybackMetaLayer(
                 LazyRow(
                     state = genresState,
                     userScrollEnabled = visible,
-                    horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.5f),
+                    horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.5f),
+                    contentPadding = PaddingValues(top = tokens.u * 0.1f, bottom = tokens.u * 0.3f, end = tokens.u * 5f),
                     modifier = Modifier
-                        .width(tokens.vw * 50f)
-                        .padding(bottom = tokens.vw * 1f)
+                        .width(descWidth)
+                        .padding(bottom = tokens.u * 1f)
                         .graphicsLayer { translationX = (tokens.vw * 20f).toPx() * genresOffset }
                         .then(
                             if (!maskDisabled) {
@@ -2034,7 +2059,7 @@ private fun PlaybackMetaLayer(
                 }
             }
 
-            // #pb_desc: 50vw width with type/quality/rating/seasons/episodes pills and synopsis.
+            // #pb_desc: 50vw width in landscape with type/quality/rating/seasons/episodes pills and synopsis.
             val infoPills = buildList {
                 metadataFormat?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
                 metadataQuality?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
@@ -2046,32 +2071,33 @@ private fun PlaybackMetaLayer(
             }
             Column(
                 modifier = Modifier
-                    .width(tokens.vw * 50f)
-                    .padding(bottom = tokens.vw * 1.5f)
-                    .heightIn(max = (tokens.screenHeight - tokens.vw * 26f).coerceAtLeast(tokens.vw * 10f))
+                    .width(descWidth)
+                    .weight(1f, fill = false)
+                    .padding(bottom = tokens.u * 1.5f)
+                    .heightIn(max = (tokens.screenHeight - tokens.u * 26f).coerceAtLeast(tokens.u * 10f))
                     .graphicsLayer { translationX = (tokens.vw * 15f).toPx() * descOffset }
             ) {
                 if (infoPills.isNotEmpty()) {
                     FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.2f),
-                        verticalArrangement = Arrangement.spacedBy(tokens.vw * 0.2f),
-                        modifier = Modifier.padding(bottom = tokens.vw * 0.5f)
+                        horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.2f),
+                        verticalArrangement = Arrangement.spacedBy(tokens.u * 0.2f),
+                        modifier = Modifier.padding(bottom = tokens.u * 0.5f)
                     ) {
                         infoPills.forEach { pill ->
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(tokens.vw * 0.25f))
+                                    .clip(RoundedCornerShape(tokens.u * 0.25f))
                                     .background(Color(0xD90A0A0A))
                                     .border(
-                                        width = (tokens.vw * 0.1f).coerceAtLeast(1.dp),
+                                        width = (tokens.u * 0.1f).coerceAtLeast(1.dp),
                                         color = Color(0xFF060606),
-                                        shape = RoundedCornerShape(tokens.vw * 0.25f)
+                                        shape = RoundedCornerShape(tokens.u * 0.25f)
                                     )
                                     .padding(
-                                        start = tokens.vw * 0.4f,
-                                        end = tokens.vw * 0.4f,
-                                        top = tokens.vw * 0.4f,
-                                        bottom = tokens.vw * 0.1f
+                                        start = tokens.u * 0.4f,
+                                        end = tokens.u * 0.4f,
+                                        top = tokens.u * 0.4f,
+                                        bottom = tokens.u * 0.1f
                                     )
                             ) {
                                 Text(
@@ -2117,6 +2143,7 @@ private fun PlaybackMetaLayer(
         val subTrackChipLabel = selectedSubtitleLabel
             ?.takeIf { it.isNotBlank() }
             ?.let { formatVariantName(it, langNameForVariant) }
+            ?.takeIf { it.isNotBlank() }
             ?: "Subtitles"
         val settingsChips = buildList {
             if (onOpenSettings != null) {
@@ -2142,11 +2169,15 @@ private fun PlaybackMetaLayer(
                 add(PlaybackChipSpec("quality", qualityIcon, qualityLabel) { onPlaybackQualityDialogRequest() })
             }
             if (hasSubStream || hasDubStream) {
-                val isDub = currentStreamType == PlaybackStreamType.DUB
+                val streamTypeIcon = when (currentStreamType) {
+                    PlaybackStreamType.SUB -> ICON_SUBTITLES
+                    PlaybackStreamType.SOFTSUB -> IconGlyphs.ClosedCaption
+                    PlaybackStreamType.DUB -> IconGlyphs.Mic
+                }
                 add(
                     PlaybackChipSpec(
                         "streamtype",
-                        if (isDub) IconGlyphs.Mic else IconGlyphs.ClosedCaption,
+                        streamTypeIcon,
                         streamTypeDisplayLabel(currentStreamType, subStreamLabel)
                     ) { onStreamTypeDialogRequest() }
                 )
@@ -2188,11 +2219,11 @@ private fun PlaybackMetaLayer(
         LazyRow(
             state = settingsState,
             userScrollEnabled = visible,
-            horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.5f),
+            horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.5f),
+            contentPadding = PaddingValues(top = tokens.u * 0.2f, bottom = tokens.u * 0.4f, end = tokens.u * 5f),
             modifier = Modifier
-                .align(Alignment.BottomStart)
-                .width(tokens.vw * 80f)
-                .padding(bottom = tokens.vw * 1f)
+                .width(settingsWidth)
+                .padding(top = tokens.u * 0.5f, bottom = tokens.u * 1f)
                 .graphicsLayer { translationX = (tokens.vw * 25f).toPx() * settingsOffset }
                 .then(
                     if (!maskDisabled) {
@@ -2272,7 +2303,7 @@ private fun PbMenuChip(
         modifier = modifier
             .then(
                 if (!shadowsDisabled && (pressed || isFocusedActive)) {
-                    Modifier.shadow(tokens.vw * 0.4f, RoundedCornerShape(tokens.u * 0.2f), clip = false)
+                    Modifier.shadow(tokens.u * 0.4f, RoundedCornerShape(tokens.u * 0.2f), clip = false)
                 } else Modifier
             )
             .clip(RoundedCornerShape(tokens.u * 0.2f))
@@ -2368,7 +2399,9 @@ private fun PlaybackActionsLayer(
     var recsHeightPx by remember { mutableIntStateOf(0) }
     var totalIactionsHeightPx by remember { mutableIntStateOf(0) }
 
-    val peekHeightPx = with(density) { (tokens.vw * 4f).roundToPx() }
+    val peekHeightPx = with(density) {
+        (if (tokens.portrait) tokens.u * 4.2f else tokens.vw * 4f).roundToPx()
+    }
     val listsPeekPx = screenHeightPx / 13
 
     val targetOffsetY = remember(
@@ -2714,11 +2747,12 @@ private fun PlaybackTracksSection(
                     }
                 }
         ) {
-            // Header row (#pb_track_left, #pb_track_title, #pb_track_dur) pinned at top (2vw).
+            val headerHeight = if (tokens.portrait) tokens.u * 2.2f else tokens.vw * 2f
+            // Header row (#pb_track_left, #pb_track_title, #pb_track_dur) pinned at top.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(tokens.vw * 2f)
+                    .height(headerHeight)
                     .align(Alignment.TopCenter),
                 contentAlignment = Alignment.Center
             ) {
@@ -2744,9 +2778,10 @@ private fun PlaybackTracksSection(
                     }
                     val isSpinning = !hasError && isLoading && durationMs <= 0L
                     val density = LocalDensity.current
+                    val ctlSize = tokens.u * 2f
                     Box(
                         modifier = Modifier
-                            .size(tokens.vw * 2f)
+                            .size(ctlSize)
                             .graphicsLayer { if (isSpinning) rotationZ = spinAngle },
                         contentAlignment = Alignment.Center
                     ) {
@@ -2755,14 +2790,14 @@ private fun PlaybackTracksSection(
                                 text = ctlIcon,
                                 color = colors.primary2,
                                 fontFamily = LocalIconFont.current,
-                                fontSize = fsSp(tokens.vw * 2f),
-                                lineHeight = fsSp(tokens.vw * 2f),
+                                fontSize = fsSp(ctlSize),
+                                lineHeight = fsSp(ctlSize),
                                 textAlign = TextAlign.Center,
                                 style = LocalTextStyle.current.copy(
                                     shadow = Shadow(
                                         Color.White,
                                         Offset.Zero,
-                                        with(density) { (tokens.vw * 2f).toPx() }.coerceAtLeast(1f)
+                                        with(density) { ctlSize.toPx() }.coerceAtLeast(1f)
                                     )
                                 )
                             )
@@ -2770,14 +2805,14 @@ private fun PlaybackTracksSection(
                                 text = ctlIcon,
                                 color = colors.primary1,
                                 fontFamily = LocalIconFont.current,
-                                fontSize = fsSp(tokens.vw * 2f),
-                                lineHeight = fsSp(tokens.vw * 2f),
+                                fontSize = fsSp(ctlSize),
+                                lineHeight = fsSp(ctlSize),
                                 textAlign = TextAlign.Center,
                                 style = LocalTextStyle.current.copy(
                                     shadow = Shadow(
                                         colors.primary2,
                                         Offset.Zero,
-                                        with(density) { (tokens.vw * 1f).toPx() }.coerceAtLeast(1f)
+                                        with(density) { (tokens.u * 1f).toPx() }.coerceAtLeast(1f)
                                     )
                                 )
                             )
@@ -2786,15 +2821,15 @@ private fun PlaybackTracksSection(
                             text = ctlIcon,
                             color = Color.White,
                             fontFamily = LocalIconFont.current,
-                            fontSize = fsSp(tokens.vw * 2f),
-                            lineHeight = fsSp(tokens.vw * 2f),
+                            fontSize = fsSp(ctlSize),
+                            lineHeight = fsSp(ctlSize),
                             textAlign = TextAlign.Center,
                             style = LocalTextStyle.current.copy(
                                 shadow = when {
                                     active && !textShadowDisabled -> Shadow(
                                         colors.primary1,
                                         Offset.Zero,
-                                        with(density) { (tokens.vw * 0.4f).toPx() }.coerceAtLeast(1f)
+                                        with(density) { (tokens.u * 0.4f).toPx() }.coerceAtLeast(1f)
                                     )
                                     !textShadowDisabled -> Shadow(Color.Black, Offset.Zero, 4f)
                                     else -> null
@@ -2807,7 +2842,7 @@ private fun PlaybackTracksSection(
                         color = Color.White,
                         fontSize = fsSp(tokens.fs13),
                         fontWeight = FontWeight.Bold,
-                        lineHeight = fsSp(tokens.vw * 2f),
+                        lineHeight = fsSp(headerHeight),
                         style = LocalTextStyle.current.copy(shadow = trackTextShadow),
                         modifier = Modifier.padding(start = tokens.vw * 0.5f)
                     )
@@ -2818,7 +2853,7 @@ private fun PlaybackTracksSection(
                     color = Color.White,
                     fontSize = fsSp(tokens.fs10),
                     fontWeight = FontWeight.Bold,
-                    lineHeight = fsSp(tokens.vw * 2f),
+                    lineHeight = fsSp(headerHeight),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
@@ -2835,7 +2870,7 @@ private fun PlaybackTracksSection(
                         color = Color.White,
                         fontSize = fsSp(tokens.fs13),
                         fontWeight = FontWeight.Bold,
-                        lineHeight = fsSp(tokens.vw * 2f),
+                        lineHeight = fsSp(headerHeight),
                         style = LocalTextStyle.current.copy(shadow = trackTextShadow),
                         modifier = Modifier.align(Alignment.TopEnd)
                     )
@@ -2846,11 +2881,12 @@ private fun PlaybackTracksSection(
             val outlineWidth = (tokens.vw * if (active) 0.1f else 0.05f).coerceAtLeast(0.5.dp)
             val outlineShape = RoundedCornerShape(tokens.vw * 0.6f)
             val barShape = RoundedCornerShape(tokens.vw * 0.5f)
+            val trackTopBase = if (tokens.portrait) tokens.u * 2.7f else tokens.vw * 2.5f
             BoxWithConstraints(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .padding(top = (tokens.vw * 2.5f - outlineWidth).coerceAtLeast(0.dp))
+                    .padding(top = (trackTopBase - outlineWidth).coerceAtLeast(0.dp))
                     .focusRequester(tracksFocusRequester)
                     .onFocusChanged {
                         if (it.isFocused) onActivate()
@@ -3439,7 +3475,8 @@ private fun StreamTypeTopBadge(
     val icon = when {
         isTranslated -> IconGlyphs.GTranslate
         isDub -> IconGlyphs.Mic
-        else -> IconGlyphs.ClosedCaption
+        isSoftsub -> IconGlyphs.ClosedCaption
+        else -> ICON_SUBTITLES
     }
     val mainLabel = when {
         isTranslated -> "TRANSLATE"
@@ -3455,20 +3492,20 @@ private fun StreamTypeTopBadge(
     } else ""
 
     val shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
-    val shape = RoundedCornerShape(tokens.vw * 0.3f)
+    val shape = RoundedCornerShape(tokens.u * 0.3f)
 
     Row(
         modifier = modifier
-            .then(if (!shadowsDisabled) Modifier.shadow(tokens.vw * 0.1f, shape, clip = false) else Modifier)
+            .then(if (!shadowsDisabled) Modifier.shadow(tokens.u * 0.1f, shape, clip = false) else Modifier)
             .clip(shape)
             .background(colors.primary2)
-            .border((tokens.vw * 0.02f).coerceAtLeast(0.5.dp), colors.primary1, shape),
+            .border((tokens.u * 0.02f).coerceAtLeast(0.5.dp), colors.primary1, shape),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = tokens.vw * 1f, vertical = tokens.vw * 0.2f),
+            modifier = Modifier.padding(horizontal = tokens.u * 1f, vertical = tokens.u * 0.2f),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.4f)
+            horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.4f)
         ) {
             Text(
                 text = icon,
@@ -3485,10 +3522,10 @@ private fun StreamTypeTopBadge(
             )
         }
         if (langTag.isNotEmpty()) {
-            val leftBorderWidth = (tokens.vw * 0.15f).coerceAtLeast(1.dp)
+            val leftBorderWidth = (tokens.u * 0.15f).coerceAtLeast(1.dp)
             Box(
                 modifier = Modifier
-                    .padding(start = tokens.vw * 0.2f)
+                    .padding(start = tokens.u * 0.2f)
                     .background(colors.primaryBg)
                     .drawBehind {
                         val strokePx = leftBorderWidth.toPx()
@@ -3499,7 +3536,7 @@ private fun StreamTypeTopBadge(
                             strokeWidth = strokePx
                         )
                     }
-                    .padding(horizontal = tokens.vw * 1f, vertical = tokens.vw * 0.2f)
+                    .padding(horizontal = tokens.u * 1f, vertical = tokens.u * 0.2f)
             ) {
                 Text(
                     text = langTag,
@@ -3691,6 +3728,8 @@ internal fun PlaybackErrorScreen(
     val effectiveServers = if (streamServerNames.isNotEmpty()) streamServerNames else listOf("Main", "Mirror")
     val serverLabel = effectiveServers.getOrNull(selectedStreamServerIndex) ?: effectiveServers.firstOrNull()
 
+    val audioLanguageLabel = AudioLanguageCatalog.all.firstOrNull { it.code == audioLanguage }?.label
+        ?: AudioLanguageCatalog.all.first().label
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         PlaybackOsdContent(
             metadataTitle = title,
@@ -3721,7 +3760,7 @@ internal fun PlaybackErrorScreen(
             subtitleLanguage = "",
             selectedSubtitleLabel = null,
             subtitlesCount = 0,
-            audioLanguageLabel = AudioLanguageCatalog.all.first().label,
+            audioLanguageLabel = audioLanguageLabel,
             playbackQuality = playbackQuality,
             detectedVideoHeight = 0,
             disableTouchGestures = false,
@@ -3839,6 +3878,8 @@ internal fun SubtitleStylePickerDialog(
     onChange: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val tokens = LocalAnimeTvTokens.current
+    val previewClearance = tokens.u * 11f + (if (tokens.portrait) tokens.sysNavHeight else 0.dp)
     var currentStyle by remember(style) { mutableIntStateOf(style) }
     var selectedAxis by remember { mutableStateOf<Int?>(null) }
     var lastAxisIndex by remember { mutableIntStateOf(0) }
@@ -3853,11 +3894,13 @@ internal fun SubtitleStylePickerDialog(
                     id = "axis_$index",
                     title = definition.title,
                     value = value,
+                    inlineValue = true,
                     icon = SubtitleStyleCatalog.axisIcons.getOrNull(index)
                 )
             },
             mode = ListOrderMode.MENU,
             initialSelectedIndex = lastAxisIndex,
+            bottomClearance = previewClearance,
             onDismiss = onDismiss,
             onSelect = { index, _ ->
                 lastAxisIndex = index
@@ -3878,6 +3921,7 @@ internal fun SubtitleStylePickerDialog(
             },
             mode = ListOrderMode.LIST,
             initialSelectedIndex = selectedOption,
+            bottomClearance = previewClearance,
             onDismiss = { selectedAxis = null },
             onSelect = { optionIndex, _ ->
                 val updated = SubtitleStyleCatalog.select(currentStyle, axis, optionIndex)
@@ -3990,7 +4034,11 @@ internal fun VttSubtitleCueOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(start = tokens.vw * 3f, end = tokens.vw * 3f, bottom = tokens.vw * 3f),
+            .padding(
+                start = tokens.vw * 3f,
+                end = tokens.vw * 3f,
+                bottom = tokens.vw * 3f + (if (tokens.portrait) tokens.sysNavHeight else 0.dp)
+            ),
         contentAlignment = Alignment.BottomCenter
     ) {
         Column(
@@ -4000,18 +4048,16 @@ internal fun VttSubtitleCueOverlay(
         ) {
             cueLines.forEach { line ->
                 Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = line,
-                        style = baseStyle.copy(
-                            color = outlineColor,
-                            background = Color.Black.copy(alpha = bgAlpha),
-                            shadow = dropShadow,
-                            drawStyle = if (outlineStrokePx > 0f) {
-                                Stroke(width = outlineStrokePx, join = StrokeJoin.Round)
-                            } else null
-                        )
-                    )
                     if (outlineStrokePx > 0f) {
+                        Text(
+                            text = line,
+                            style = baseStyle.copy(
+                                color = outlineColor,
+                                background = Color.Black.copy(alpha = bgAlpha),
+                                shadow = dropShadow,
+                                drawStyle = Stroke(width = outlineStrokePx, join = StrokeJoin.Round)
+                            )
+                        )
                         Text(
                             text = line,
                             style = baseStyle.copy(color = textColor)
