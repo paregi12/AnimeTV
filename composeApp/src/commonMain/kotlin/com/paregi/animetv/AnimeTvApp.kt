@@ -1768,20 +1768,20 @@ fun AnimeTvApp(
                                                     }
                                                 }
                                             } else {
-                                                val errorStreamServers = if (activeAnime?.sourceIndex == SourceCatalog.GOTAKU_INDEX) {
-                                                    buildList {
-                                                        if (activeEpisode.hasSub) {
-                                                            add("Soft Sub")
-                                                            add("Hard Sub")
-                                                        }
-                                                        if (activeEpisode.hasDub) add("Dub")
-                                                    }.ifEmpty { listOf("Main", "Mirror") }
-                                                } else {
-                                                    listOf("Main", "Mirror")
-                                                }
                                                 val errorStreamType = playbackStreamOverride
                                                     ?: if (appSettings.preferDub && activeEpisode.hasDub) PlaybackStreamType.DUB
                                                     else PlaybackStreamType.SUB
+                                                val errorStreamServers = if (activeAnime?.sourceIndex == SourceCatalog.GOTAKU_INDEX) {
+                                                    listOf(
+                                                        if (errorStreamType == PlaybackStreamType.DUB && activeEpisode.hasDub) {
+                                                            "Gotaku Dub"
+                                                        } else {
+                                                            "Gotaku Sub"
+                                                        }
+                                                    )
+                                                } else {
+                                                    listOf("Main", "Mirror")
+                                                }
                                                 PlaybackErrorScreen(
                                                     title = activeAnime?.let {
                                                         displayAnimeTitle(it, appSettings.japaneseTitles)

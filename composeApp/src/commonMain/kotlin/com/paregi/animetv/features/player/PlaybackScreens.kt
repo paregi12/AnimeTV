@@ -61,6 +61,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -116,6 +117,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.paregi.animetv.LocalNavigationSound
 import com.paregi.animetv.PlatformBackHandler
@@ -187,6 +189,17 @@ private enum class PlaybackQuickDialog {
     AUDIO_LANGUAGE,
     QUALITY,
     SUBTITLES
+}
+
+@Composable
+private fun ProvideTightPlaybackTextStyle(content: @Composable () -> Unit) {
+    CompositionLocalProvider(
+        LocalTextStyle provides LocalTextStyle.current.copy(
+            lineHeight = TextUnit.Unspecified,
+            letterSpacing = 0.sp
+        ),
+        content = content
+    )
 }
 
 @Composable
@@ -279,122 +292,124 @@ internal fun PlaybackScreen(
         else -> null
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        PlatformPlayer(
-            url = choice.url,
-            metadataTitle = title,
-            metadataArtist = episodeLabel,
-            metadataDescription = displayAnimeSynopsis(description),
-            metadataGenres = genres,
-            artworkUrl = posterUrl,
-            hasNext = canNext,
-            hasPrevious = canPrevious,
-            episodePickerLabel = episodePickerLabel,
-            onEpisodePickerRequest = null,
-            onNextEpisode = onNext,
-            onPreviousEpisode = onPrevious,
-            headers = choice.headers,
-            subtitles = choice.subtitles,
-            playbackSpeed = playbackSpeed,
-            onPlaybackSpeedDialogRequest = { activeDialog = PlaybackQuickDialog.SPEED },
-            currentStreamType = choice.selectedStreamType,
-            hasSubStream = hasSubStream,
-            hasDubStream = hasDubStream,
-            subStreamLabel = subStreamLabel,
-            onStreamTypeDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_TYPE },
-            streamServerLabel = selectedStreamServer,
-            onStreamServerDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_SERVER },
-            subtitleLanguage = subtitleLanguage,
-            subtitleVariant = subtitleVariant,
-            onSubtitleVariantSelected = onSubtitleVariantSelected,
-            audioLanguage = audioLanguage,
-            audioLanguageLabel = effectiveAudioLabel,
-            onAudioLanguageDialogRequest = { activeDialog = PlaybackQuickDialog.AUDIO_LANGUAGE },
-            subtitleStyle = subtitleStyle,
-            onSubtitleStyleDialogRequest = { subtitleStyleDialogOpen = true },
-            playbackQuality = playbackQuality,
-            onPlaybackQualityChange = onPlaybackQualityChange,
-            onPlaybackQualityDialogRequest = { activeDialog = PlaybackQuickDialog.QUALITY },
-            skipRanges = choice.skipRanges,
-            autoSkipIntro = autoSkipIntro,
-            skipFiller = skipFiller,
-            startPositionMs = startPositionMs,
-            seekSeconds = seekSeconds,
-            videoScale = videoScale,
-            onVideoScaleDialogRequest = null,
-            videoBuffer = videoBuffer,
-            progressiveCache = progressiveCache,
-            cacheSizeMb = cacheSizeMb,
-            disableTouchGestures = disableTouchGestures,
-            onProgress = onProgress,
-            onEnded = onEnded,
-            onBack = onBack,
-            episodes = episodes,
-            selectedEpisodeId = selectedEpisodeId,
-            onEpisodeSelected = onEpisodeSelected,
-            seasons = seasons,
-            related = related,
-            recommendations = recommendations,
-            onAnimeSelected = onAnimeSelected,
-            onOpenSettings = onOpenSettings,
-            inWatchlist = inWatchlist,
-            onToggleWatchlist = onToggleWatchlist,
-            isTracked = isTracked,
-            onTrackingClick = onTrackingClick,
-            onSearchGenre = onSearchGenre,
-            onSubtitlesDialogRequest = { activeIndex ->
-                dialogSubtitleIndex = activeIndex
-                activeDialog = PlaybackQuickDialog.SUBTITLES
-            },
-            selectedSubtitleIndexOverride = selectedSubtitleOverride,
-            onAvailableAudioLanguagesChanged = { availableAudioLanguages = it },
-            onDetectedVideoHeightsChanged = { _, heights -> detectedVideoHeights = heights },
-            showBackHint = showBackHint,
-            currentAnimeId = currentAnimeId,
-            metadataFormat = animeFormat,
-            metadataQuality = animeQuality,
-            metadataRating = animeRating,
-            settingsOverlayOpen = settingsOverlayOpen
-        )
-
-        if (showBackHint) {
-            AppToastOverlay(message = "Press back again to close playback...")
-        }
-
-        PlaybackQuickOptionDialogs(
-            activeDialog = activeDialog,
-            onDismiss = { activeDialog = null },
-            playbackSpeed = playbackSpeed,
-            onPlaybackSpeedChange = onPlaybackSpeedChange,
-            currentStreamType = choice.selectedStreamType,
-            hasSubStream = hasSubStream,
-            hasDubStream = hasDubStream,
-            subStreamLabel = subStreamLabel,
-            onStreamTypeChange = onStreamTypeChange,
-            streamServerNames = effectiveStreamServerNames,
-            selectedStreamServerIndex = selectedStreamServerIndex,
-            onStreamServerChange = onStreamServerChange,
-            audioLanguage = audioLanguage,
-            availableAudioLanguages = availableAudioLanguages,
-            onAudioLanguageChange = onAudioLanguageChange,
-            playbackQuality = playbackQuality,
-            detectedVideoHeights = detectedVideoHeights,
-            onPlaybackQualityChange = onPlaybackQualityChange,
-            subtitles = choice.subtitles,
-            subtitleLanguage = subtitleLanguage,
-            dialogSubtitleIndex = dialogSubtitleIndex,
-            onSubtitleTrackSelect = { trackIndex, formattedVariant ->
-                selectedSubtitleOverride = trackIndex
-                onSubtitleVariantSelected(formattedVariant)
-            }
-        )
-
-        if (subtitleStyleDialogOpen) {
-            SubtitleStylePickerDialog(
-                style = subtitleStyle,
-                onChange = onSubtitleStyleChange,
-                onDismiss = { subtitleStyleDialogOpen = false }
+    ProvideTightPlaybackTextStyle {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            PlatformPlayer(
+                url = choice.url,
+                metadataTitle = title,
+                metadataArtist = episodeLabel,
+                metadataDescription = displayAnimeSynopsis(description),
+                metadataGenres = genres,
+                artworkUrl = posterUrl,
+                hasNext = canNext,
+                hasPrevious = canPrevious,
+                episodePickerLabel = episodePickerLabel,
+                onEpisodePickerRequest = null,
+                onNextEpisode = onNext,
+                onPreviousEpisode = onPrevious,
+                headers = choice.headers,
+                subtitles = choice.subtitles,
+                playbackSpeed = playbackSpeed,
+                onPlaybackSpeedDialogRequest = { activeDialog = PlaybackQuickDialog.SPEED },
+                currentStreamType = choice.selectedStreamType,
+                hasSubStream = hasSubStream,
+                hasDubStream = hasDubStream,
+                subStreamLabel = subStreamLabel,
+                onStreamTypeDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_TYPE },
+                streamServerLabel = selectedStreamServer,
+                onStreamServerDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_SERVER },
+                subtitleLanguage = subtitleLanguage,
+                subtitleVariant = subtitleVariant,
+                onSubtitleVariantSelected = onSubtitleVariantSelected,
+                audioLanguage = audioLanguage,
+                audioLanguageLabel = effectiveAudioLabel,
+                onAudioLanguageDialogRequest = { activeDialog = PlaybackQuickDialog.AUDIO_LANGUAGE },
+                subtitleStyle = subtitleStyle,
+                onSubtitleStyleDialogRequest = { subtitleStyleDialogOpen = true },
+                playbackQuality = playbackQuality,
+                onPlaybackQualityChange = onPlaybackQualityChange,
+                onPlaybackQualityDialogRequest = { activeDialog = PlaybackQuickDialog.QUALITY },
+                skipRanges = choice.skipRanges,
+                autoSkipIntro = autoSkipIntro,
+                skipFiller = skipFiller,
+                startPositionMs = startPositionMs,
+                seekSeconds = seekSeconds,
+                videoScale = videoScale,
+                onVideoScaleDialogRequest = null,
+                videoBuffer = videoBuffer,
+                progressiveCache = progressiveCache,
+                cacheSizeMb = cacheSizeMb,
+                disableTouchGestures = disableTouchGestures,
+                onProgress = onProgress,
+                onEnded = onEnded,
+                onBack = onBack,
+                episodes = episodes,
+                selectedEpisodeId = selectedEpisodeId,
+                onEpisodeSelected = onEpisodeSelected,
+                seasons = seasons,
+                related = related,
+                recommendations = recommendations,
+                onAnimeSelected = onAnimeSelected,
+                onOpenSettings = onOpenSettings,
+                inWatchlist = inWatchlist,
+                onToggleWatchlist = onToggleWatchlist,
+                isTracked = isTracked,
+                onTrackingClick = onTrackingClick,
+                onSearchGenre = onSearchGenre,
+                onSubtitlesDialogRequest = { activeIndex ->
+                    dialogSubtitleIndex = activeIndex
+                    activeDialog = PlaybackQuickDialog.SUBTITLES
+                },
+                selectedSubtitleIndexOverride = selectedSubtitleOverride,
+                onAvailableAudioLanguagesChanged = { availableAudioLanguages = it },
+                onDetectedVideoHeightsChanged = { _, heights -> detectedVideoHeights = heights },
+                showBackHint = showBackHint,
+                currentAnimeId = currentAnimeId,
+                metadataFormat = animeFormat,
+                metadataQuality = animeQuality,
+                metadataRating = animeRating,
+                settingsOverlayOpen = settingsOverlayOpen
             )
+
+            if (showBackHint) {
+                AppToastOverlay(message = "Press back again to close playback...")
+            }
+
+            PlaybackQuickOptionDialogs(
+                activeDialog = activeDialog,
+                onDismiss = { activeDialog = null },
+                playbackSpeed = playbackSpeed,
+                onPlaybackSpeedChange = onPlaybackSpeedChange,
+                currentStreamType = choice.selectedStreamType,
+                hasSubStream = hasSubStream,
+                hasDubStream = hasDubStream,
+                subStreamLabel = subStreamLabel,
+                onStreamTypeChange = onStreamTypeChange,
+                streamServerNames = effectiveStreamServerNames,
+                selectedStreamServerIndex = selectedStreamServerIndex,
+                onStreamServerChange = onStreamServerChange,
+                audioLanguage = audioLanguage,
+                availableAudioLanguages = availableAudioLanguages,
+                onAudioLanguageChange = onAudioLanguageChange,
+                playbackQuality = playbackQuality,
+                detectedVideoHeights = detectedVideoHeights,
+                onPlaybackQualityChange = onPlaybackQualityChange,
+                subtitles = choice.subtitles,
+                subtitleLanguage = subtitleLanguage,
+                dialogSubtitleIndex = dialogSubtitleIndex,
+                onSubtitleTrackSelect = { trackIndex, formattedVariant ->
+                    selectedSubtitleOverride = trackIndex
+                    onSubtitleVariantSelected(formattedVariant)
+                }
+            )
+
+            if (subtitleStyleDialogOpen) {
+                SubtitleStylePickerDialog(
+                    style = subtitleStyle,
+                    onChange = onSubtitleStyleChange,
+                    onDismiss = { subtitleStyleDialogOpen = false }
+                )
+            }
         }
     }
 }
@@ -1764,12 +1779,16 @@ internal fun PlaybackOsdContent(
                             text = osd.icon,
                             color = Color.White.copy(alpha = 0.8f),
                             fontFamily = LocalIconFont.current,
-                            fontSize = fsSp(tokens.fs14)
+                            fontSize = fsSp(tokens.fs14),
+                            lineHeight = fsSp(tokens.fs14),
+                            letterSpacing = 0.sp
                         )
                         Text(
                             text = osd.text,
                             color = Color.White.copy(alpha = 0.8f),
-                            fontSize = fsSp(tokens.fs14)
+                            fontSize = fsSp(tokens.fs14),
+                            lineHeight = fsSp(tokens.fs14) * 1.15f,
+                            letterSpacing = 0.sp
                         )
                     }
                     Spacer(Modifier.height(tokens.vw * 0.5f))
@@ -1943,6 +1962,7 @@ private fun PlaybackMetaLayer(
                 fontSize = if (isPortrait) fsSp(tokens.fs25) else fsSp(tokens.vw * 3f),
                 fontWeight = FontWeight.Bold,
                 lineHeight = if (isPortrait) fsSp(tokens.fs25) * 1.15f else fsSp(tokens.vw * 3.4f),
+                letterSpacing = 0.sp,
                 style = LocalTextStyle.current.copy(shadow = metaTextShadow),
                 modifier = Modifier
                     .width(titleWidth)
@@ -2015,7 +2035,7 @@ private fun PlaybackMetaLayer(
                     state = genresState,
                     userScrollEnabled = visible,
                     horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.5f),
-                    contentPadding = PaddingValues(top = tokens.u * 0.1f, bottom = tokens.u * 0.3f, end = tokens.u * 5f),
+                    contentPadding = PaddingValues(top = tokens.u * 0.1f, bottom = tokens.u * 0.2f, end = tokens.u * 5f),
                     modifier = Modifier
                         .width(descWidth)
                         .padding(bottom = tokens.u * 1f)
@@ -2039,6 +2059,7 @@ private fun PlaybackMetaLayer(
                             icon = item.icon,
                             label = item.label,
                             rowActive = genresRowActive,
+                            selected = idx == safeGenresSel,
                             focusEnabled = visible,
                             shadowsDisabled = shadowsDisabled,
                             textShadowDisabled = textShadowDisabled,
@@ -2105,7 +2126,8 @@ private fun PlaybackMetaLayer(
                                     color = Color(0xFFCCCCCC),
                                     fontSize = fsSp(tokens.fs8),
                                     fontWeight = FontWeight.Bold,
-                                    lineHeight = fsSp(tokens.fs8)
+                                    lineHeight = fsSp(tokens.fs8),
+                                    letterSpacing = 0.sp
                                 )
                             }
                         }
@@ -2118,6 +2140,7 @@ private fun PlaybackMetaLayer(
                         color = Color.White,
                         fontSize = fsSp(tokens.fs13),
                         lineHeight = fsSp(tokens.fs13) * 1.5f,
+                        letterSpacing = 0.sp,
                         maxLines = maxDescLines,
                         overflow = TextOverflow.Ellipsis,
                         style = LocalTextStyle.current.copy(shadow = metaTextShadow)
@@ -2220,10 +2243,10 @@ private fun PlaybackMetaLayer(
             state = settingsState,
             userScrollEnabled = visible,
             horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.5f),
-            contentPadding = PaddingValues(top = tokens.u * 0.2f, bottom = tokens.u * 0.4f, end = tokens.u * 5f),
+            contentPadding = PaddingValues(top = tokens.u * 0.1f, bottom = tokens.u * 0.3f, end = tokens.u * 5f),
             modifier = Modifier
                 .width(settingsWidth)
-                .padding(top = tokens.u * 0.5f, bottom = tokens.u * 1f)
+                .padding(top = tokens.u * 0.4f, bottom = tokens.u * 0.9f)
                 .graphicsLayer { translationX = (tokens.vw * 25f).toPx() * settingsOffset }
                 .then(
                     if (!maskDisabled) {
@@ -2244,6 +2267,7 @@ private fun PlaybackMetaLayer(
                     icon = item.icon,
                     label = item.label,
                     rowActive = settingsRowActive,
+                    selected = idx == safeSettingsSel,
                     focusEnabled = visible,
                     shadowsDisabled = shadowsDisabled,
                     textShadowDisabled = textShadowDisabled,
@@ -2277,6 +2301,7 @@ private fun PbMenuChip(
     icon: String?,
     label: String,
     rowActive: Boolean,
+    selected: Boolean,
     focusEnabled: Boolean,
     shadowsDisabled: Boolean,
     textShadowDisabled: Boolean,
@@ -2291,9 +2316,9 @@ private fun PbMenuChip(
     val hovered by interactionSource.collectIsHoveredAsState()
     val pressed by interactionSource.collectIsPressedAsState()
 
-    val isFocusedActive = rowActive && focused
+    val isChipActive = rowActive && (focused || selected)
     val bgColor = when {
-        pressed || isFocusedActive -> colors.primary1
+        pressed || isChipActive -> colors.primary1
         hovered -> colors.primary3
         rowActive -> Color(0x70FAFDFF)
         else -> Color(0x59A0A5A7)
@@ -2302,7 +2327,7 @@ private fun PbMenuChip(
     Row(
         modifier = modifier
             .then(
-                if (!shadowsDisabled && (pressed || isFocusedActive)) {
+                if (!shadowsDisabled && (pressed || isChipActive)) {
                     Modifier.shadow(tokens.u * 0.4f, RoundedCornerShape(tokens.u * 0.2f), clip = false)
                 } else Modifier
             )
@@ -2325,6 +2350,8 @@ private fun PbMenuChip(
                 color = Color.White,
                 fontFamily = LocalIconFont.current,
                 fontSize = fsSp(tokens.fs10),
+                lineHeight = fsSp(tokens.fs10),
+                letterSpacing = 0.sp,
                 style = LocalTextStyle.current.copy(
                     shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
                 )
@@ -2334,6 +2361,8 @@ private fun PbMenuChip(
             text = label,
             color = Color.White,
             fontSize = fsSp(tokens.fs10),
+            lineHeight = fsSp(tokens.fs10) * 1.15f,
+            letterSpacing = 0.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = LocalTextStyle.current.copy(
@@ -2758,7 +2787,7 @@ private fun PlaybackTracksSection(
             ) {
                 Row(
                     modifier = Modifier
-                        .align(Alignment.TopStart)
+                        .align(Alignment.CenterStart)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -2792,6 +2821,7 @@ private fun PlaybackTracksSection(
                                 fontFamily = LocalIconFont.current,
                                 fontSize = fsSp(ctlSize),
                                 lineHeight = fsSp(ctlSize),
+                                letterSpacing = 0.sp,
                                 textAlign = TextAlign.Center,
                                 style = LocalTextStyle.current.copy(
                                     shadow = Shadow(
@@ -2807,6 +2837,7 @@ private fun PlaybackTracksSection(
                                 fontFamily = LocalIconFont.current,
                                 fontSize = fsSp(ctlSize),
                                 lineHeight = fsSp(ctlSize),
+                                letterSpacing = 0.sp,
                                 textAlign = TextAlign.Center,
                                 style = LocalTextStyle.current.copy(
                                     shadow = Shadow(
@@ -2823,6 +2854,7 @@ private fun PlaybackTracksSection(
                             fontFamily = LocalIconFont.current,
                             fontSize = fsSp(ctlSize),
                             lineHeight = fsSp(ctlSize),
+                            letterSpacing = 0.sp,
                             textAlign = TextAlign.Center,
                             style = LocalTextStyle.current.copy(
                                 shadow = when {
@@ -2842,7 +2874,8 @@ private fun PlaybackTracksSection(
                         color = Color.White,
                         fontSize = fsSp(tokens.fs13),
                         fontWeight = FontWeight.Bold,
-                        lineHeight = fsSp(headerHeight),
+                        lineHeight = fsSp(tokens.fs13) * 1.1f,
+                        letterSpacing = 0.sp,
                         style = LocalTextStyle.current.copy(shadow = trackTextShadow),
                         modifier = Modifier.padding(start = tokens.vw * 0.5f)
                     )
@@ -2853,13 +2886,14 @@ private fun PlaybackTracksSection(
                     color = Color.White,
                     fontSize = fsSp(tokens.fs10),
                     fontWeight = FontWeight.Bold,
-                    lineHeight = fsSp(headerHeight),
+                    lineHeight = fsSp(tokens.fs10) * 1.1f,
+                    letterSpacing = 0.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                     style = LocalTextStyle.current.copy(shadow = trackTextShadow),
                     modifier = Modifier
-                        .align(Alignment.TopCenter)
+                        .align(Alignment.Center)
                         .fillMaxWidth()
                         .padding(horizontal = tokens.vw * 15f)
                 )
@@ -2870,9 +2904,10 @@ private fun PlaybackTracksSection(
                         color = Color.White,
                         fontSize = fsSp(tokens.fs13),
                         fontWeight = FontWeight.Bold,
-                        lineHeight = fsSp(headerHeight),
+                        lineHeight = fsSp(tokens.fs13) * 1.1f,
+                        letterSpacing = 0.sp,
                         style = LocalTextStyle.current.copy(shadow = trackTextShadow),
-                        modifier = Modifier.align(Alignment.TopEnd)
+                        modifier = Modifier.align(Alignment.CenterEnd)
                     )
                 }
             }
@@ -3083,6 +3118,8 @@ private fun PlaybackEpisodesSection(
                 color = if (active) Color.White else Color(0xFFCCCCCC),
                 fontSize = fsSp(tokens.fs12),
                 fontWeight = FontWeight.Bold,
+                lineHeight = fsSp(tokens.fs12) * 1.15f,
+                letterSpacing = 0.sp,
                 style = LocalTextStyle.current.copy(shadow = shadow),
                 modifier = Modifier.align(Alignment.CenterStart)
             )
@@ -3110,7 +3147,9 @@ private fun PlaybackEpisodesSection(
                         text = "USE PROG+ / PROG- FOR PAGING",
                         color = Color.White,
                         fontSize = fsSp(tokens.fs8),
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = fsSp(tokens.fs8) * 1.15f,
+                        letterSpacing = 0.sp
                     )
                 }
             }
@@ -3212,6 +3251,8 @@ private fun PlaybackEpisodesSection(
                             color = if (ep.filler) Color(0xFFFFDDAA) else Color.White,
                             fontSize = fsSp(tokens.fs30),
                             fontWeight = FontWeight.Normal,
+                            lineHeight = fsSp(tokens.fs30) * 1.1f,
+                            letterSpacing = 0.sp,
                             style = LocalTextStyle.current.copy(shadow = shadow)
                         )
 
@@ -3228,7 +3269,9 @@ private fun PlaybackEpisodesSection(
                                     text = IconGlyphs.Mic,
                                     color = Color.White,
                                     fontFamily = LocalIconFont.current,
-                                    fontSize = fsSp(tokens.fs10)
+                                    fontSize = fsSp(tokens.fs10),
+                                    lineHeight = fsSp(tokens.fs10) * 1.2f,
+                                    letterSpacing = 0.sp
                                 )
                             }
                         }
@@ -3246,7 +3289,9 @@ private fun PlaybackEpisodesSection(
                                     text = "FILLER",
                                     color = Color.White,
                                     fontSize = fsSp(tokens.fs7),
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    lineHeight = fsSp(tokens.fs7) * 1.2f,
+                                    letterSpacing = 0.sp
                                 )
                             }
                         }
@@ -3256,6 +3301,8 @@ private fun PlaybackEpisodesSection(
                                 text = episodeTitle.uppercase(),
                                 color = Color.White,
                                 fontSize = fsSp(tokens.fs8),
+                                lineHeight = fsSp(tokens.fs8) * 1.2f,
+                                letterSpacing = 0.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 textAlign = TextAlign.Center,
@@ -3274,6 +3321,8 @@ private fun PlaybackEpisodesSection(
                             color = playingColor,
                             fontSize = fsSp(tokens.fs10),
                             fontWeight = FontWeight.Bold,
+                            lineHeight = fsSp(tokens.fs10) * 1.15f,
+                            letterSpacing = 0.sp,
                             textAlign = TextAlign.Center,
                             style = LocalTextStyle.current.copy(shadow = shadow),
                             modifier = Modifier
@@ -3351,6 +3400,8 @@ private fun PlaybackPosterShelf(
             color = if (active) Color.White else Color(0xFFAAAAAA),
             fontSize = fsSp(tokens.fs13),
             fontWeight = FontWeight.Bold,
+            lineHeight = fsSp(tokens.fs13) * 1.15f,
+            letterSpacing = 0.sp,
             style = LocalTextStyle.current.copy(shadow = shadow),
             modifier = Modifier
                 .padding(horizontal = tokens.vw * 5f)
@@ -3448,6 +3499,8 @@ private fun PlaybackTouchCircleButton(
             color = Color.White,
             fontFamily = LocalIconFont.current,
             fontSize = iconSize,
+            lineHeight = iconSize,
+            letterSpacing = 0.sp,
             textAlign = TextAlign.Center
         )
     }
@@ -3512,12 +3565,16 @@ private fun StreamTypeTopBadge(
                 color = Color.White,
                 fontFamily = LocalIconFont.current,
                 fontSize = fsSp(tokens.fs13),
+                lineHeight = fsSp(tokens.fs13),
+                letterSpacing = 0.sp,
                 style = LocalTextStyle.current.copy(shadow = shadow)
             )
             Text(
                 text = mainLabel,
                 color = Color.White,
                 fontSize = fsSp(tokens.fs13),
+                lineHeight = fsSp(tokens.fs13) * 1.15f,
+                letterSpacing = 0.sp,
                 style = LocalTextStyle.current.copy(shadow = shadow)
             )
         }
@@ -3543,6 +3600,8 @@ private fun StreamTypeTopBadge(
                     color = Color.White,
                     fontSize = fsSp(tokens.fs13),
                     fontWeight = FontWeight.Bold,
+                    lineHeight = fsSp(tokens.fs13) * 1.15f,
+                    letterSpacing = 0.sp,
                     style = LocalTextStyle.current.copy(shadow = shadow)
                 )
             }
@@ -3635,6 +3694,8 @@ private fun PlaybackSkipEventPill(
                 color = Color.White,
                 fontSize = fsSp(tokens.fs14),
                 fontWeight = FontWeight.Normal,
+                lineHeight = fsSp(tokens.fs14) * 1.15f,
+                letterSpacing = 0.sp,
                 style = LocalTextStyle.current.copy(shadow = shadow)
             )
             Text(
@@ -3642,6 +3703,8 @@ private fun PlaybackSkipEventPill(
                 color = Color.White,
                 fontFamily = LocalIconFont.current,
                 fontSize = fsSp(tokens.fs14),
+                lineHeight = fsSp(tokens.fs14),
+                letterSpacing = 0.sp,
                 style = LocalTextStyle.current.copy(shadow = shadow)
             )
         }
@@ -3730,98 +3793,100 @@ internal fun PlaybackErrorScreen(
 
     val audioLanguageLabel = AudioLanguageCatalog.all.firstOrNull { it.code == audioLanguage }?.label
         ?: AudioLanguageCatalog.all.first().label
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        PlaybackOsdContent(
-            metadataTitle = title,
-            episodeLabel = episodeLabel,
-            metadataDescription = description.ifBlank { message },
-            metadataGenres = genres,
-            artworkUrl = artworkUrl,
-            firstFrameRendered = false,
-            hasNext = canNext,
-            hasPrevious = canPrevious,
-            positionMs = 0L,
-            durationMs = 0L,
-            bufferedPositionMs = 0L,
-            isPlaying = false,
-            isLoading = false,
-            isEnded = false,
-            statusTextOverride = "PLAYBACK ERROR",
-            errorMessage = message,
-            skipRanges = emptyList(),
-            autoSkipIntro = false,
-            seekSeconds = 10,
-            playbackSpeed = playbackSpeed,
-            currentStreamType = currentStreamType,
-            hasSubStream = hasSubStream,
-            hasDubStream = hasDubStream,
-            subStreamLabel = subStreamLabel,
-            streamServerLabel = serverLabel,
-            subtitleLanguage = "",
-            selectedSubtitleLabel = null,
-            subtitlesCount = 0,
-            audioLanguageLabel = audioLanguageLabel,
-            playbackQuality = playbackQuality,
-            detectedVideoHeight = 0,
-            disableTouchGestures = false,
-            episodes = episodes,
-            selectedEpisodeId = selectedEpisodeId,
-            seasons = seasons,
-            related = related,
-            recommendations = recommendations,
-            inWatchlist = inWatchlist,
-            isTracked = isTracked,
-            osdHudState = null,
-            seekIndicatorSide = null,
-            onShowOsdHud = {},
-            onShowSeekIndicator = {},
-            onDebouncedSeek = {},
-            onImmediateSeek = {},
-            onTogglePlay = {},
-            onNextEpisode = onNext,
-            onPreviousEpisode = onPrevious,
-            onEpisodeSelected = onEpisodeSelected,
-            onAnimeSelected = onAnimeSelected,
-            onOpenSettings = onOpenSettings,
-            onPlaybackSpeedDialogRequest = { activeDialog = PlaybackQuickDialog.SPEED },
-            onStreamServerDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_SERVER },
-            onPlaybackQualityDialogRequest = { activeDialog = PlaybackQuickDialog.QUALITY },
-            onStreamTypeDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_TYPE },
-            onSubtitlesDialogRequest = null,
-            onAudioLanguageDialogRequest = { activeDialog = PlaybackQuickDialog.AUDIO_LANGUAGE },
-            onToggleWatchlist = onToggleWatchlist,
-            onTrackingClick = onTrackingClick,
-            onSearchGenre = onSearchGenre,
-            onAdjustBrightness = {},
-            onAdjustVolume = {},
-            onBack = onBack,
-            currentAnimeId = currentAnimeId,
-            metadataFormat = metadataFormat,
-            metadataQuality = metadataQuality,
-            metadataRating = metadataRating,
-            settingsOverlayOpen = settingsOverlayOpen
-        )
+    ProvideTightPlaybackTextStyle {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            PlaybackOsdContent(
+                metadataTitle = title,
+                episodeLabel = episodeLabel,
+                metadataDescription = description.ifBlank { message },
+                metadataGenres = genres,
+                artworkUrl = artworkUrl,
+                firstFrameRendered = false,
+                hasNext = canNext,
+                hasPrevious = canPrevious,
+                positionMs = 0L,
+                durationMs = 0L,
+                bufferedPositionMs = 0L,
+                isPlaying = false,
+                isLoading = false,
+                isEnded = false,
+                statusTextOverride = "PLAYBACK ERROR",
+                errorMessage = message,
+                skipRanges = emptyList(),
+                autoSkipIntro = false,
+                seekSeconds = 10,
+                playbackSpeed = playbackSpeed,
+                currentStreamType = currentStreamType,
+                hasSubStream = hasSubStream,
+                hasDubStream = hasDubStream,
+                subStreamLabel = subStreamLabel,
+                streamServerLabel = serverLabel,
+                subtitleLanguage = "",
+                selectedSubtitleLabel = null,
+                subtitlesCount = 0,
+                audioLanguageLabel = audioLanguageLabel,
+                playbackQuality = playbackQuality,
+                detectedVideoHeight = 0,
+                disableTouchGestures = false,
+                episodes = episodes,
+                selectedEpisodeId = selectedEpisodeId,
+                seasons = seasons,
+                related = related,
+                recommendations = recommendations,
+                inWatchlist = inWatchlist,
+                isTracked = isTracked,
+                osdHudState = null,
+                seekIndicatorSide = null,
+                onShowOsdHud = {},
+                onShowSeekIndicator = {},
+                onDebouncedSeek = {},
+                onImmediateSeek = {},
+                onTogglePlay = {},
+                onNextEpisode = onNext,
+                onPreviousEpisode = onPrevious,
+                onEpisodeSelected = onEpisodeSelected,
+                onAnimeSelected = onAnimeSelected,
+                onOpenSettings = onOpenSettings,
+                onPlaybackSpeedDialogRequest = { activeDialog = PlaybackQuickDialog.SPEED },
+                onStreamServerDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_SERVER },
+                onPlaybackQualityDialogRequest = { activeDialog = PlaybackQuickDialog.QUALITY },
+                onStreamTypeDialogRequest = { activeDialog = PlaybackQuickDialog.STREAM_TYPE },
+                onSubtitlesDialogRequest = null,
+                onAudioLanguageDialogRequest = { activeDialog = PlaybackQuickDialog.AUDIO_LANGUAGE },
+                onToggleWatchlist = onToggleWatchlist,
+                onTrackingClick = onTrackingClick,
+                onSearchGenre = onSearchGenre,
+                onAdjustBrightness = {},
+                onAdjustVolume = {},
+                onBack = onBack,
+                currentAnimeId = currentAnimeId,
+                metadataFormat = metadataFormat,
+                metadataQuality = metadataQuality,
+                metadataRating = metadataRating,
+                settingsOverlayOpen = settingsOverlayOpen
+            )
 
-        PlaybackQuickOptionDialogs(
-            activeDialog = activeDialog,
-            onDismiss = { activeDialog = null },
-            playbackSpeed = playbackSpeed,
-            onPlaybackSpeedChange = onPlaybackSpeedChange,
-            currentStreamType = currentStreamType,
-            hasSubStream = hasSubStream,
-            hasDubStream = hasDubStream,
-            subStreamLabel = subStreamLabel,
-            onStreamTypeChange = onStreamTypeChange,
-            streamServerNames = effectiveServers,
-            selectedStreamServerIndex = selectedStreamServerIndex,
-            onStreamServerChange = onStreamServerChange,
-            audioLanguage = audioLanguage,
-            availableAudioLanguages = emptySet(),
-            onAudioLanguageChange = onAudioLanguageChange,
-            playbackQuality = playbackQuality,
-            detectedVideoHeights = emptyList(),
-            onPlaybackQualityChange = onPlaybackQualityChange
-        )
+            PlaybackQuickOptionDialogs(
+                activeDialog = activeDialog,
+                onDismiss = { activeDialog = null },
+                playbackSpeed = playbackSpeed,
+                onPlaybackSpeedChange = onPlaybackSpeedChange,
+                currentStreamType = currentStreamType,
+                hasSubStream = hasSubStream,
+                hasDubStream = hasDubStream,
+                subStreamLabel = subStreamLabel,
+                onStreamTypeChange = onStreamTypeChange,
+                streamServerNames = effectiveServers,
+                selectedStreamServerIndex = selectedStreamServerIndex,
+                onStreamServerChange = onStreamServerChange,
+                audioLanguage = audioLanguage,
+                availableAudioLanguages = emptySet(),
+                onAudioLanguageChange = onAudioLanguageChange,
+                playbackQuality = playbackQuality,
+                detectedVideoHeights = emptyList(),
+                onPlaybackQualityChange = onPlaybackQualityChange
+            )
+        }
     }
 }
 
@@ -3834,39 +3899,45 @@ internal fun PlaybackLoadingScreen() {
     val blurOuter = with(density) { (tokens.vw * 0.2f).toPx().coerceAtLeast(1f) }
     val blurInner = with(density) { (tokens.vw * 0.1f).toPx().coerceAtLeast(1f) }
 
-    Box(Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = tokens.vh * 40f),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            AnimeTvSpinner(
-                size = tokens.u * 8f,
-                strokeWidth = tokens.u * 0.8f,
-                color = colors.primary2
-            )
-            Box(modifier = Modifier.padding(top = tokens.vw * 1f), contentAlignment = Alignment.Center) {
-                if (!textShadowDisabled) {
+    ProvideTightPlaybackTextStyle {
+        Box(Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = tokens.vh * 40f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                AnimeTvSpinner(
+                    size = tokens.u * 8f,
+                    strokeWidth = tokens.u * 0.8f,
+                    color = colors.primary2
+                )
+                Box(modifier = Modifier.padding(top = tokens.vw * 1f), contentAlignment = Alignment.Center) {
+                    if (!textShadowDisabled) {
+                        Text(
+                            text = "LOADING DATA",
+                            color = Color.Black,
+                            fontSize = fsSp(tokens.fs10),
+                            fontWeight = FontWeight.Bold,
+                            lineHeight = fsSp(tokens.fs10) * 1.15f,
+                            letterSpacing = 0.sp,
+                            style = LocalTextStyle.current.copy(
+                                shadow = Shadow(Color.Black, Offset.Zero, blurRadius = blurOuter)
+                            )
+                        )
+                    }
                     Text(
                         text = "LOADING DATA",
-                        color = Color.Black,
+                        color = Color.White,
                         fontSize = fsSp(tokens.fs10),
                         fontWeight = FontWeight.Bold,
+                        lineHeight = fsSp(tokens.fs10) * 1.15f,
+                        letterSpacing = 0.sp,
                         style = LocalTextStyle.current.copy(
-                            shadow = Shadow(Color.Black, Offset.Zero, blurRadius = blurOuter)
+                            shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset.Zero, blurRadius = blurInner) else null
                         )
                     )
                 }
-                Text(
-                    text = "LOADING DATA",
-                    color = Color.White,
-                    fontSize = fsSp(tokens.fs10),
-                    fontWeight = FontWeight.Bold,
-                    style = LocalTextStyle.current.copy(
-                        shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset.Zero, blurRadius = blurInner) else null
-                    )
-                )
             }
         }
     }
@@ -4028,49 +4099,52 @@ internal fun VttSubtitleCueOverlay(
         fontSize = fontSize,
         fontWeight = fontWeight,
         textAlign = TextAlign.Center,
-        lineHeight = fontSize * lineHeightMultiplier
+        lineHeight = fontSize * lineHeightMultiplier,
+        letterSpacing = 0.sp
     )
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(
-                start = tokens.vw * 3f,
-                end = tokens.vw * 3f,
-                bottom = tokens.vw * 3f + (if (tokens.portrait) tokens.sysNavHeight else 0.dp)
-            ),
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        Column(
-            modifier = Modifier.graphicsLayer { alpha = textOpacity },
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(tokens.vw * 0.2f)
+    ProvideTightPlaybackTextStyle {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(
+                    start = tokens.vw * 3f,
+                    end = tokens.vw * 3f,
+                    bottom = tokens.vw * 3f + (if (tokens.portrait) tokens.sysNavHeight else 0.dp)
+                ),
+            contentAlignment = Alignment.BottomCenter
         ) {
-            cueLines.forEach { line ->
-                Box(contentAlignment = Alignment.Center) {
-                    if (outlineStrokePx > 0f) {
-                        Text(
-                            text = line,
-                            style = baseStyle.copy(
-                                color = outlineColor,
-                                background = Color.Black.copy(alpha = bgAlpha),
-                                shadow = dropShadow,
-                                drawStyle = Stroke(width = outlineStrokePx, join = StrokeJoin.Round)
+            Column(
+                modifier = Modifier.graphicsLayer { alpha = textOpacity },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(tokens.vw * 0.2f)
+            ) {
+                cueLines.forEach { line ->
+                    Box(contentAlignment = Alignment.Center) {
+                        if (outlineStrokePx > 0f) {
+                            Text(
+                                text = line,
+                                style = baseStyle.copy(
+                                    color = outlineColor,
+                                    background = Color.Black.copy(alpha = bgAlpha),
+                                    shadow = dropShadow,
+                                    drawStyle = Stroke(width = outlineStrokePx, join = StrokeJoin.Round)
+                                )
                             )
-                        )
-                        Text(
-                            text = line,
-                            style = baseStyle.copy(color = textColor)
-                        )
-                    } else {
-                        Text(
-                            text = line,
-                            style = baseStyle.copy(
-                                color = textColor,
-                                background = Color.Black.copy(alpha = bgAlpha),
-                                shadow = dropShadow
+                            Text(
+                                text = line,
+                                style = baseStyle.copy(color = textColor)
                             )
-                        )
+                        } else {
+                            Text(
+                                text = line,
+                                style = baseStyle.copy(
+                                    color = textColor,
+                                    background = Color.Black.copy(alpha = bgAlpha),
+                                    shadow = dropShadow
+                                )
+                            )
+                        }
                     }
                 }
             }

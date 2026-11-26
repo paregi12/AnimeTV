@@ -22,7 +22,7 @@ internal class GotakuPlaybackResolver(
         preferDub: Boolean,
         hasSub: Boolean,
         source: CatalogSource,
-        mirrorIndex: Int = 0,
+        @Suppress("UNUSED_PARAMETER") mirrorIndex: Int = 0,
         subtitleLanguage: String = "",
         requestedStreamType: PlaybackStreamType? = null
     ): PlaybackChoice {
@@ -37,15 +37,12 @@ internal class GotakuPlaybackResolver(
             it.has("soft_sub") || it.has("hard_sub") || it.has("dub")
         }
         val modes = resolveModes(flags, preferDub, hasSub, subtitleLanguage, requestedStreamType)
-        val selectedIndex = mirrorIndex.coerceIn(0, modes.lastIndex.coerceAtLeast(0))
-        val candidateIndices = listOf(selectedIndex) + modes.indices.filter { it != selectedIndex }
 
-        var chosenIndex = selectedIndex
+        var chosenMode: AudioMode? = null
         var chosenEmbed: JSONObject? = null
         var chosenEmbedUrl: String? = null
         var lastError: Exception? = null
-        for (idx in candidateIndices) {
-            val mode = modes[idx]
+        for (mode in modes) {
             val embedData = try {
                 catalogApi.json(
                     "${source.root}/api/v1/episodes/$episodeId/embed?type=${mode.type}&k=10",
@@ -61,7 +58,7 @@ internal class GotakuPlaybackResolver(
                 ?.optString("url")
                 ?.takeIf(String::isNotBlank)
             if (embedData != null && url != null) {
-                chosenIndex = idx
+                chosenMode = mode
                 chosenEmbed = embedData
                 chosenEmbedUrl = url
                 break
@@ -69,7 +66,7 @@ internal class GotakuPlaybackResolver(
         }
         val embedData = chosenEmbed ?: throw (lastError ?: IllegalStateException("Episode has no playable stream"))
         val embedUrl = chosenEmbedUrl ?: error("Episode response did not include an embed URL")
-        val selectedMode = modes[chosenIndex]
+        val selectedMode = chosenMode ?: error("Episode has no playable stream")
 
         val absoluteEmbed = when {
             embedUrl.startsWith("//") -> "https:$embedUrl"
@@ -107,8 +104,10 @@ internal class GotakuPlaybackResolver(
             subtitles = GotakuSource.subtitles(json.optJSONArray("subtitles")),
             skipRanges = embedData.optJSONObject("skip")?.toSkipRanges().orEmpty(),
             selectedStreamType = selectedMode.streamType,
-            streamServerNames = modes.map { it.label },
-            selectedStreamServerIndex = chosenIndex,
+            streamServerNames = listOf(
+                if (selectedMode.streamType == PlaybackStreamType.DUB) "Gotaku Dub" else "Gotaku Sub"
+            ),
+            selectedStreamServerIndex = 0,
             keySeed = keySeed,
             segmentBytes = segmentBytes
         )
@@ -212,14 +211,13 @@ internal class GotakuPlaybackResolver(
 
     private data class AudioMode(
         val type: String,
-        val label: String,
         val streamType: PlaybackStreamType
     )
 
     private companion object {
-        val SOFT_SUB_MODE = AudioMode("soft_sub", "Soft Sub", PlaybackStreamType.SOFTSUB)
-        val HARD_SUB_MODE = AudioMode("hard_sub", "Hard Sub", PlaybackStreamType.SUB)
-        val DUB_MODE = AudioMode("dub", "Dub", PlaybackStreamType.DUB)
+        val SOFT_SUB_MODE = AudioMode("soft_sub", PlaybackStreamType.SOFTSUB)
+        val HARD_SUB_MODE = AudioMode("hard_sub", PlaybackStreamType.SUB)
+        val DUB_MODE = AudioMode("dub", PlaybackStreamType.DUB)
 
         val MANIFEST_ATTRS_REGEX =
             Regex("""data-manifest-base=["']([^"']+)["'][^>]*data-manifest-stamp=["']([^"']+)["']""")
