@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -42,6 +43,7 @@ import com.paregi.animetv.core.theme.fsSp
 import com.paregi.animetv.core.ui.AnimeTvInlineTabs
 import com.paregi.animetv.core.ui.AnimeTvShelfPlaceholder
 import com.paregi.animetv.core.ui.AnimeTvTitledShelf
+import com.paregi.animetv.core.ui.CardBadgeMode
 import com.paregi.animetv.core.ui.CardDimensions
 import com.paregi.animetv.core.ui.ConfirmDialog
 import com.paregi.animetv.core.ui.FocusCard
@@ -296,6 +298,9 @@ private fun UnifiedMyListScreen(
             }
             .distinctBy { it.animeId to (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) }
     }
+    val historyByAnimeKey = remember(visibleHistory) {
+        visibleHistory.associateBy { it.animeId to (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) }
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val portrait = tokens.portrait
@@ -461,6 +466,7 @@ private fun UnifiedMyListScreen(
                                     title = myListSectionTitle("fav"),
                                     emptyText = "Watchlist is empty",
                                     animes = visibleWatchlist,
+                                    historyByAnimeKey = historyByAnimeKey,
                                     horizontalInset = horizontalInset,
                                     cardDims = cardDims,
                                     largeUi = tokens.largeUi,
@@ -552,26 +558,13 @@ private fun AccountShelf(
         rowState = rowState,
         maskEnabled = maskEnabled
     ) {
-        itemsIndexed(state.entries, key = { idx, it -> "${idx}:${it.status}:${it.anime.id}" }) { _, entry ->
-            val pct = entry.anime.episodeCount?.takeIf { it > 0 && entry.progress > 0 }?.let { total ->
-                (entry.progress.toFloat() / total.toFloat()).coerceIn(0f, 1f)
-            }
-            val epLabel = if (entry.progress > 0) "${entry.progress}" else "-"
-            FocusCard(
-                anime = entry.anime,
-                cardWidth = cardDims.cardWidth,
-                cardHeight = cardDims.cardHeight,
-                posterWidth = cardDims.posterWidth,
-                posterHeight = cardDims.posterHeight,
-                cardTitleSize = cardDims.titleSize,
-                cardTitleLineHeight = cardDims.titleLineHeight,
-                onClick = { onOpenAnime(entry.anime) },
-                progressPercent = pct,
-                progressEpisode = epLabel,
-                largeUi = largeUi,
-                isAniListCard = isAniList
-            )
-        }
+        accountEntryCards(
+            entries = state.entries,
+            cardDims = cardDims,
+            largeUi = largeUi,
+            isAniList = isAniList,
+            onOpenAnime = onOpenAnime
+        )
     }
 }
 
@@ -668,26 +661,40 @@ private fun AccountEntriesRow(
         contentPadding = PaddingValues(horizontal = horizontalInset),
         horizontalArrangement = Arrangement.spacedBy(cardDims.cardGap)
     ) {
-        itemsIndexed(entries, key = { idx, it -> "${idx}:${it.status}:${it.anime.id}" }) { _, entry ->
-            val pct = entry.anime.episodeCount?.takeIf { it > 0 && entry.progress > 0 }?.let { total ->
-                (entry.progress.toFloat() / total.toFloat()).coerceIn(0f, 1f)
-            }
-            val epLabel = if (entry.progress > 0) "${entry.progress}" else "-"
-            FocusCard(
-                anime = entry.anime,
-                cardWidth = cardDims.cardWidth,
-                cardHeight = cardDims.cardHeight,
-                posterWidth = cardDims.posterWidth,
-                posterHeight = cardDims.posterHeight,
-                cardTitleSize = cardDims.titleSize,
-                cardTitleLineHeight = cardDims.titleLineHeight,
-                onClick = { onOpenAnime(entry.anime) },
-                progressPercent = pct,
-                progressEpisode = epLabel,
-                largeUi = largeUi,
-                isAniListCard = isAniList
-            )
-        }
+        accountEntryCards(
+            entries = entries,
+            cardDims = cardDims,
+            largeUi = largeUi,
+            isAniList = isAniList,
+            onOpenAnime = onOpenAnime
+        )
+    }
+}
+
+private fun LazyListScope.accountEntryCards(
+    entries: List<TrackedAnimeEntry>,
+    cardDims: CardDimensions,
+    largeUi: Boolean,
+    isAniList: Boolean,
+    onOpenAnime: (Anime) -> Unit
+) {
+    val badgeMode = if (isAniList) CardBadgeMode.AniListMyList else CardBadgeMode.MalMyList
+    itemsIndexed(entries, key = { idx, it -> "${idx}:${it.status}:${it.anime.id}" }) { _, entry ->
+        val epLabel = if (entry.progress > 0) "${entry.progress}" else "-"
+        FocusCard(
+            anime = entry.anime,
+            cardWidth = cardDims.cardWidth,
+            cardHeight = cardDims.cardHeight,
+            posterWidth = cardDims.posterWidth,
+            posterHeight = cardDims.posterHeight,
+            cardTitleSize = cardDims.titleSize,
+            cardTitleLineHeight = cardDims.titleLineHeight,
+            onClick = { onOpenAnime(entry.anime) },
+            progressEpisode = epLabel,
+            largeUi = largeUi,
+            isAniListCard = isAniList,
+            badgeMode = badgeMode
+        )
     }
 }
 
@@ -696,6 +703,7 @@ private fun LocalListShelf(
     title: String,
     emptyText: String,
     animes: List<Anime>,
+    historyByAnimeKey: Map<Pair<String, Int>, WatchProgress>,
     horizontalInset: Dp,
     cardDims: CardDimensions,
     largeUi: Boolean,
@@ -715,6 +723,11 @@ private fun LocalListShelf(
         maskEnabled = maskEnabled
     ) {
         itemsIndexed(animes, key = { idx, it -> "fav:${idx}:${it.sourceIndex}:${it.id}" }) { _, anime ->
+            val progress = historyByAnimeKey[anime.id to anime.sourceIndex]
+            val pct = progress?.takeIf { it.durationMs > 0 }?.let {
+                (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f)
+            }
+            val epLabel = progress?.episodeId?.let(::extractEpisodeNumber)
             FocusCard(
                 anime = anime,
                 cardWidth = cardDims.cardWidth,
@@ -724,7 +737,10 @@ private fun LocalListShelf(
                 cardTitleSize = cardDims.titleSize,
                 cardTitleLineHeight = cardDims.titleLineHeight,
                 onClick = { onOpenAnime(anime) },
-                largeUi = largeUi
+                progressPercent = pct,
+                progressEpisode = epLabel,
+                largeUi = largeUi,
+                badgeMode = CardBadgeMode.LocalMyList
             )
         }
     }
@@ -801,16 +817,22 @@ private fun HistoryListShelf(
                 onClick = { onHistorySelected(progress) },
                 progressPercent = pct,
                 progressEpisode = epLabel,
-                largeUi = largeUi
+                largeUi = largeUi,
+                badgeMode = CardBadgeMode.LocalMyList
             )
         }
     }
 }
 
+private val EPISODE_NUMBER_REGEX = Regex("""^\d+(?:\.\d+)?$""")
+private val UUID_REGEX = Regex("""^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$""")
+
 private fun extractEpisodeNumber(episodeId: String): String? {
     val pipeTail = episodeId.substringAfterLast('|', "")
-    if (pipeTail.isNotBlank() && pipeTail.all { it.isDigit() }) return pipeTail
-    val dashTail = episodeId.substringAfterLast('-', "")
-    if (dashTail.isNotBlank() && dashTail.all { it.isDigit() }) return dashTail
+    if (EPISODE_NUMBER_REGEX.matches(pipeTail)) return pipeTail
+    if (!UUID_REGEX.matches(episodeId)) {
+        val dashTail = episodeId.substringAfterLast('-', "")
+        if (dashTail.length <= 5 && EPISODE_NUMBER_REGEX.matches(dashTail)) return dashTail
+    }
     return null
 }

@@ -35,7 +35,7 @@ fun normalizeAgeRating(raw: String?): String? {
         "PG", "PGCHILDREN" -> "PG"
         "PG13", "PG13TEENS13OROLDER", "PG13TEENS13ANDOLDER" -> "PG-13"
         "R", "R17", "R17+", "17+" -> "R"
-        "R+", "R+MILDNUDITY", "R+PROFANITY&MILDNUDITY", "18+" -> "R+"
+        "R+", "RPLUS", "R+MILDNUDITY", "R+PROFANITY&MILDNUDITY", "18+" -> "R+"
         "RX", "RXHENTAI", "RXMOREADULTAUDIENCE" -> "Rx"
         "NONE", "NA", "N/A", "NULL", "UNKNOWN", "UNRATED" -> null
         else -> {
@@ -64,6 +64,9 @@ fun ageRatingLevel(raw: String?): Int? = when (normalizeAgeRating(raw)) {
 }
 
 fun isAdultAgeRating(raw: String?): Boolean = (ageRatingLevel(raw) ?: -1) >= 4
+
+fun displayRPlusRating(rating: String?, adult: Boolean = false): String? =
+    if (adult || isAdultAgeRating(rating)) "R+" else null
 
 fun Anime.isAllowedForParentalRating(parentalRating: Int): Boolean {
     if (parentalRating >= 6) return true

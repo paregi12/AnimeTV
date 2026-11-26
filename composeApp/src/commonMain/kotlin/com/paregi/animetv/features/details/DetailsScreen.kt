@@ -78,6 +78,7 @@ import com.paregi.animetv.domain.AnimeDetails
 import com.paregi.animetv.domain.AnimeTrackingState
 import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.WatchProgress
+import com.paregi.animetv.domain.displayRPlusRating
 import com.paregi.animetv.domain.isAdultAgeRating
 import com.paregi.animetv.domain.normalizeAgeRating
 import com.paregi.animetv.navigationClickable
@@ -448,10 +449,7 @@ internal fun DetailsScreen(
 @Composable
 private fun DetailPoster(anime: Anime, modifier: Modifier) {
     val tokens = LocalAnimeTvTokens.current
-    val colors = LocalAnimeTvColors.current
-    val normalizedRating = normalizeAgeRating(anime.rating)
-    val displayRating = normalizedRating ?: if (anime.adult) "R+" else null
-    val isAdult = anime.adult || isAdultAgeRating(normalizedRating)
+    val displayRating = displayRPlusRating(anime.rating, anime.adult)
 
     Box(modifier.background(Color.Black)) {
         AsyncImage(
@@ -469,7 +467,7 @@ private fun DetailPoster(anime: Anime, modifier: Modifier) {
                     .align(Alignment.TopStart)
                     .padding(tokens.u * 0.5f)
                     .clip(RoundedCornerShape(tokens.u * 0.2f))
-                    .background(if (isAdult) Color(0xFFAA0000) else colors.primary2)
+                    .background(Color(0xFFAA0000))
                     .padding(horizontal = tokens.u * 0.4f, vertical = tokens.u * 0.2f)
             )
         }

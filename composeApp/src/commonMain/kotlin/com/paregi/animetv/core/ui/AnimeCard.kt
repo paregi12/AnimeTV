@@ -75,6 +75,7 @@ import com.paregi.animetv.core.theme.LocalJapaneseTitles
 import com.paregi.animetv.core.theme.LocalPerformanceEffects
 import com.paregi.animetv.core.theme.fsSp
 import com.paregi.animetv.domain.Anime
+import com.paregi.animetv.domain.displayRPlusRating
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformImagePainter
@@ -154,6 +155,7 @@ internal fun FocusCard(
     largeUi: Boolean = false,
     useScheduleBadges: Boolean = false,
     isAniListCard: Boolean = false,
+    badgeMode: CardBadgeMode? = null,
     showPlayingRibbon: Boolean = false,
     onFocused: (() -> Unit)? = null
 ) {
@@ -181,8 +183,28 @@ internal fun FocusCard(
         animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
     )
 
-    val badges = remember(anime, progressPercent, progressEpisode, posterBottomAired, posterBottomLabel) {
-        resolveCardBadges(anime, progressPercent, progressEpisode, posterBottomAired, posterBottomLabel)
+    val effectiveBadgeMode = badgeMode ?: when {
+        useScheduleBadges -> CardBadgeMode.Schedule
+        isAniListCard -> CardBadgeMode.AniListMyList
+        else -> CardBadgeMode.Catalog
+    }
+
+    val badges = remember(
+        anime,
+        progressPercent,
+        progressEpisode,
+        posterBottomAired,
+        posterBottomLabel,
+        effectiveBadgeMode
+    ) {
+        resolveCardBadges(
+            anime = anime,
+            progressPercent = progressPercent,
+            progressEpisode = progressEpisode,
+            airingAired = posterBottomAired,
+            airingTime = posterBottomLabel,
+            mode = effectiveBadgeMode
+        )
     }
 
     val posterShape = RoundedCornerShape((u * 0.3f).coerceAtLeast(1.dp))
@@ -264,8 +286,7 @@ internal fun FocusCard(
             val topSegments = buildTopBadgeSegments(
                 badges = badges,
                 posterCornerLabel = posterCornerLabel,
-                useScheduleBadges = useScheduleBadges,
-                isAniListCard = isAniListCard,
+                badgeMode = effectiveBadgeMode,
                 glassMode = cardStyle.badgeStyle != 0,
                 primaryBg = colors.primaryBg,
                 primary1 = colors.primary1,
@@ -288,7 +309,7 @@ internal fun FocusCard(
                 )
             }
 
-            if (isAniListCard && badges.hasNextAired) {
+            if (effectiveBadgeMode == CardBadgeMode.AniListMyList && badges.hasNextAired) {
                 val borderWidth = (u * 0.15f).coerceAtLeast(1.dp)
                 val nextPillShape = RoundedCornerShape(topEnd = u * 0.5f, bottomEnd = u * 0.5f)
                 val nextPillTop = posterHeight - (if (isLargeLandscape || tokens.portrait) u * 3.5f else u * 2.5f)
@@ -323,11 +344,9 @@ internal fun FocusCard(
                 posterBottomLabel = posterBottomLabel,
                 posterBottomIcon = posterBottomIcon,
                 posterBottomAired = posterBottomAired,
-                useScheduleBadges = useScheduleBadges,
-                isAniListCard = isAniListCard,
+                badgeMode = effectiveBadgeMode,
                 glassMode = cardStyle.badgeStyle != 0,
                 primaryBg = colors.primaryBg,
-                primary1 = colors.primary1,
                 primary2 = colors.primary2
             )
             if (bottomSegments.isNotEmpty()) {
@@ -431,15 +450,10 @@ internal fun FocusCard(
     }
 }
 
-private fun adultBadgeText(rating: String?): String = rating?.takeIf {
-    it.equals("Rx", ignoreCase = true) || it.equals("R+", ignoreCase = true)
-} ?: "R+"
-
 private fun buildTopBadgeSegments(
     badges: CardBadgeData,
     posterCornerLabel: String?,
-    useScheduleBadges: Boolean,
-    isAniListCard: Boolean,
+    badgeMode: CardBadgeMode,
     glassMode: Boolean,
     primaryBg: Color,
     primary1: Color,
@@ -454,20 +468,22 @@ private fun buildTopBadgeSegments(
         )
     }
     return buildList {
-        if ((useScheduleBadges || isAniListCard) && badges.isAdult) {
-            add(
-                BadgeSegment(
-                    text = adultBadgeText(badges.rating),
-                    background = Color(0xFF880000),
-                    textColor = if (glassMode) Color(0xFFEF4444) else Color.White
+        if (badgeMode == CardBadgeMode.Schedule || badgeMode == CardBadgeMode.AniListMyList) {
+            displayRPlusRating(badges.rating, badges.isAdult)?.let { rPlus ->
+                add(
+                    BadgeSegment(
+                        text = rPlus,
+                        background = Color(0xFF880000),
+                        textColor = if (glassMode) Color(0xFFEF4444) else Color.White
+                    )
                 )
-            )
+            }
         }
         badges.format?.takeIf { it.isNotBlank() }?.let { fmt ->
             add(BadgeSegment(text = fmt, background = primaryBg))
         }
-        when {
-            useScheduleBadges -> {
+        when (badgeMode) {
+            CardBadgeMode.Schedule -> {
                 badges.progressEpisode?.takeIf { it.isNotBlank() }?.let { ep ->
                     add(BadgeSegment(text = ep, background = primary1, icon = IconGlyphs.Movie))
                 }
@@ -475,18 +491,30 @@ private fun buildTopBadgeSegments(
                     add(BadgeSegment(text = "$total", background = primary2, icon = IconGlyphs.Bookmark))
                 }
             }
-            isAniListCard -> {
+            CardBadgeMode.AniListMyList -> {
                 val aired = badges.airedEpisode
                 val total = badges.totalEpisodes
                 if (aired != null && aired > 0) {
                     add(BadgeSegment(text = "$aired", background = primary2, icon = IconGlyphs.Movie))
-                } else if (total != null) {
+                } else if (total != null && total > 0) {
                     add(BadgeSegment(text = "$total", background = primary2, icon = IconGlyphs.Bookmark))
                 }
                 val epLabel = badges.progressEpisode?.takeIf { it.isNotBlank() } ?: "-"
                 add(BadgeSegment(text = epLabel, background = primary1, icon = IconGlyphs.AvgPace))
             }
-            else -> {
+            CardBadgeMode.MalMyList -> {
+                badges.totalEpisodes?.takeIf { it > 0 }?.let { total ->
+                    add(BadgeSegment(text = "$total", background = primary2, icon = IconGlyphs.Bookmark))
+                }
+                val epLabel = badges.progressEpisode?.takeIf { it.isNotBlank() } ?: "-"
+                add(BadgeSegment(text = epLabel, background = primary1, icon = IconGlyphs.AvgPace))
+            }
+            CardBadgeMode.LocalMyList -> {
+                badges.progressEpisode?.takeIf { it.isNotBlank() }?.let { ep ->
+                    add(BadgeSegment(text = ep, background = primary1, icon = IconGlyphs.AvgPace))
+                }
+            }
+            CardBadgeMode.Catalog -> {
                 val subEp = badges.subEpisode
                 val dubEp = badges.dubEpisode
                 val haveEpCount = (if (subEp != null) 1 else 0) + (if (dubEp != null) 1 else 0)
@@ -519,11 +547,9 @@ private fun buildBottomBadgeSegments(
     posterBottomLabel: String?,
     posterBottomIcon: String?,
     posterBottomAired: Boolean,
-    useScheduleBadges: Boolean,
-    isAniListCard: Boolean,
+    badgeMode: CardBadgeMode,
     glassMode: Boolean,
     primaryBg: Color,
-    primary1: Color,
     primary2: Color
 ): List<BadgeSegment> {
     if (!posterBottomLabel.isNullOrBlank()) {
@@ -537,7 +563,7 @@ private fun buildBottomBadgeSegments(
             )
         )
     }
-    if (isAniListCard || useScheduleBadges) return emptyList()
+    if (badgeMode != CardBadgeMode.Catalog) return emptyList()
 
     return buildList {
         val scoreDisplay = if (glassMode) {
@@ -555,16 +581,14 @@ private fun buildBottomBadgeSegments(
                 )
             )
         }
-        if (badges.isAdult) {
+        displayRPlusRating(badges.rating, badges.isAdult)?.let { rPlus ->
             add(
                 BadgeSegment(
-                    text = adultBadgeText(badges.rating),
+                    text = rPlus,
                     background = Color(0xFF880000),
                     textColor = if (glassMode) Color(0xFFEF4444) else Color.White
                 )
             )
-        } else if (!badges.rating.isNullOrBlank()) {
-            add(BadgeSegment(text = badges.rating, background = primary1))
         }
         if (badges.isUpcoming) {
             add(

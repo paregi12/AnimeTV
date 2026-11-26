@@ -60,6 +60,7 @@ internal object ReAnimeSource {
             ?.trim()
             ?.takeIf(String::isNotBlank)
         val rating = normalizeAgeRating(json.optText("rating"))
+            ?: normalizeAgeRating(json.optText("age_rating"))
         return Anime(
             id = id,
             title = name,
@@ -80,7 +81,7 @@ internal object ReAnimeSource {
                 ?: json.optInt("dubbed").takeIf { it > 0 },
             format = json.optText("format"),
             // Re:ANIME search and home responses omit is_adult, so infer it for R+/Rx ratings.
-            adult = json.optBoolean("is_adult") || isAdultAgeRating(rating),
+            adult = json.optFlag("is_adult") || isAdultAgeRating(rating),
             latestSubEpisode = json.optInt("subbed"),
             latestDubEpisode = json.optInt("dubbed"),
             malId = json.optIdString("mal_id"),
@@ -184,6 +185,16 @@ internal object ReAnimeSource {
 
     private fun JSONObject.optText(key: String): String? =
         if (isNull(key)) null else optString(key).takeIf(String::isNotBlank)
+
+    private fun JSONObject.optFlag(key: String): Boolean {
+        if (isNull(key)) return false
+        return when (val value = opt(key)) {
+            is Boolean -> value
+            is Number -> value.toInt() != 0
+            is String -> value.equals("true", ignoreCase = true) || value == "1"
+            else -> false
+        }
+    }
 
     private fun JSONObject.optIdString(key: String): String? {
         if (isNull(key)) return null

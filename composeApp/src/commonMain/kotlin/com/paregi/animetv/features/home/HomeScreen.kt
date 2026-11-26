@@ -112,6 +112,7 @@ import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.HomeFeed
 import com.paregi.animetv.domain.HomeLayout
 import com.paregi.animetv.domain.WatchProgress
+import com.paregi.animetv.domain.displayRPlusRating
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformScheduleDays
@@ -827,8 +828,8 @@ private fun HeroWatchNowButton(active: Boolean) {
 private data class HeroMetaText(val text: String, val color: Color)
 
 private fun buildHeroMetaItems(anime: Anime): List<HeroMetaText> = buildList {
-    if (anime.adult) {
-        add(HeroMetaText("R+", Color(0xFFFF3333)))
+    displayRPlusRating(anime.rating, anime.adult)?.let {
+        add(HeroMetaText(it, Color(0xFFFF3333)))
     }
     val fmt = anime.format
         ?.replace("TV_SHORT", "TV", ignoreCase = true)

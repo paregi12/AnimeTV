@@ -113,8 +113,8 @@ import com.paregi.animetv.domain.SearchHistoryRepository
 import com.paregi.animetv.domain.SettingsRepository
 import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.SubtitleTrack
+import com.paregi.animetv.domain.isAdultAgeRating
 import com.paregi.animetv.domain.isAllowedForParentalRating
-import com.paregi.animetv.domain.normalizeAgeRating
 import com.paregi.animetv.domain.TranslationRepository
 import com.paregi.animetv.domain.TvIntegrationRepository
 import com.paregi.animetv.domain.TvLaunchRequest
@@ -1403,11 +1403,14 @@ fun AnimeTvApp(
                                             } ?: activeAnime?.genres.orEmpty()
                                             val playerFormat = playerDetailsAnime?.format ?: activeAnime?.format
                                             val playerQuality = playerDetailsAnime?.status ?: activeAnime?.status
-                                            val playerRating = normalizeAgeRating(playerDetailsAnime?.rating)
-                                                ?: normalizeAgeRating(activeAnime?.rating)
-                                                ?: if (playerDetailsAnime?.adult == true || activeAnime?.adult == true) {
-                                                    "R+"
-                                                } else null
+                                            val playerRating = if (
+                                                playerDetailsAnime?.adult == true ||
+                                                activeAnime?.adult == true ||
+                                                isAdultAgeRating(playerDetailsAnime?.rating) ||
+                                                isAdultAgeRating(activeAnime?.rating)
+                                            ) {
+                                                "R+"
+                                            } else null
                                             val inWatchlistNow = activeAnime != null &&
                                                 sourceWatchlist.any { it.id == activeAnime.id }
                                             val isTrackedNow =
@@ -1862,14 +1865,10 @@ fun AnimeTvApp(
                                                     repository = animeRepository,
                                                     onAnimeSelected = { openAnime(it, null) },
                                                     onHistorySelected = { progress ->
-                                                        progress.anime?.let { openAnime(it, progress.episodeId) }
+                                                        progress.anime?.let { openAnime(it, null) }
                                                     },
                                                     onContinueWatching = { anime ->
-                                                        openAnime(
-                                                            anime,
-                                                            sourceHistory.sortedByDescending { it.updatedAtEpochMs }
-                                                                .firstOrNull { it.animeId == anime.id }?.episodeId
-                                                        )
+                                                        openAnime(anime, null)
                                                     },
                                                     onScrollOffsetChange = { offset ->
                                                         scrollOffsets[targetSection] = offset

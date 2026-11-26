@@ -1,8 +1,7 @@
 package com.paregi.animetv.core.ui
 
 import com.paregi.animetv.domain.Anime
-import com.paregi.animetv.domain.isAdultAgeRating
-import com.paregi.animetv.domain.normalizeAgeRating
+import com.paregi.animetv.domain.displayRPlusRating
 import kotlin.math.roundToInt
 
 internal fun imageCdnUrl(url: String?, enabled: Boolean): String? {
@@ -47,6 +46,14 @@ internal fun displayAnimeSynopsis(synopsis: String): String = synopsis
     .replace(Regex("\\n{2,}"), "\n")
     .trim()
 
+internal enum class CardBadgeMode {
+    Catalog,
+    Schedule,
+    AniListMyList,
+    MalMyList,
+    LocalMyList
+}
+
 internal data class CardBadgeData(
     val format: String? = null,
     val subEpisode: Int? = null,
@@ -72,77 +79,98 @@ internal fun resolveCardBadges(
     progressPercent: Float? = null,
     progressEpisode: String? = null,
     airingAired: Boolean? = null,
-    airingTime: String? = null
+    airingTime: String? = null,
+    mode: CardBadgeMode = CardBadgeMode.Catalog
 ): CardBadgeData {
     val normFormat = anime.format
         ?.replace("TV_SHORT", "TV", ignoreCase = true)
         ?.takeIf { it.isNotBlank() && !it.equals("unknown", ignoreCase = true) }
         ?.uppercase()
-    val isSource = anime.latestSubEpisode > 0 || anime.latestDubEpisode > 0
-    val durationFormatted = anime.duration?.let { dur ->
-        Regex("\\d+").find(dur)?.value?.let { "$it min" } ?: dur.lowercase()
-    }
-    // AniList entries carry score while Gotaku/ReAnime catalog entries leave score null.
-    val allowScore = !isSource
-    val scoreVal = anime.score?.takeIf { allowScore && it > 0f }?.let { if (it > 10f) it / 10f else it }
-    val scoreFormatted = scoreVal?.takeIf { it > 0f }?.let {
-        val rounded = kotlin.math.round(it * 10f) / 10f
-        if (rounded % 1f == 0f) "${rounded.toInt()}.0" else rounded.toString()
-    }
-    val scorePercent = anime.score?.takeIf { allowScore && it > 0f }?.let { raw ->
-        if (raw <= 10f) (raw * 10f).roundToInt() else raw.roundToInt()
-    }?.coerceIn(0, 100)
-
+    val rPlusRating = displayRPlusRating(anime.rating, anime.adult)
+    val isAdult = rPlusRating != null
     val nextAiredEp = anime.nextAiringEpisode?.let { it - 1 }?.takeIf { it > 0 }
     val watchedNum = progressEpisode?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() } ?: 0
-    val hasNextAired = nextAiredEp != null && watchedNum < nextAiredEp
-    val normalizedRating = normalizeAgeRating(anime.rating)
-    val isAdult = anime.adult || isAdultAgeRating(normalizedRating)
 
-    return if (isSource) {
-        val haveEpCount = (if (anime.latestSubEpisode > 0) 1 else 0) + (if (anime.latestDubEpisode > 0) 1 else 0)
-        CardBadgeData(
+    return when (mode) {
+        CardBadgeMode.LocalMyList -> CardBadgeData(
             format = normFormat,
-            subEpisode = anime.latestSubEpisode.takeIf { it > 0 },
-            dubEpisode = anime.latestDubEpisode.takeIf { it > 0 },
-            totalEpisodes = anime.episodeCount,
-            airedEpisode = if (haveEpCount == 0 && (anime.episodeCount ?: 0) > 0) anime.episodeCount else null,
-            isAdult = isAdult,
-            rating = normalizedRating,
-            score = scorePercent,
-            scoreFormatted = scoreFormatted,
-            duration = durationFormatted,
             progressPercent = progressPercent,
-            progressEpisode = progressEpisode,
-            hasNextAired = hasNextAired,
-            airingTime = airingTime,
-            airingAired = airingAired ?: false
+            progressEpisode = progressEpisode?.takeIf { it.isNotBlank() }
         )
-    } else {
-        val isMovie = normFormat == "MOVIE"
-        val totalEpisodes = if (isMovie) null else anime.episodeCount
-        val airedEpisode = if (isMovie) {
-            1
-        } else {
-            nextAiredEp ?: if (anime.status?.contains("airing", ignoreCase = true) == true) anime.episodeCount else null
+        CardBadgeMode.MalMyList -> CardBadgeData(
+            format = normFormat,
+            totalEpisodes = anime.episodeCount?.takeIf { it > 0 },
+            progressEpisode = progressEpisode?.takeIf { it.isNotBlank() }
+        )
+        CardBadgeMode.AniListMyList -> CardBadgeData(
+            format = normFormat,
+            totalEpisodes = anime.episodeCount?.takeIf { it > 0 },
+            airedEpisode = nextAiredEp,
+            isAdult = isAdult,
+            rating = rPlusRating,
+            progressEpisode = progressEpisode?.takeIf { it.isNotBlank() },
+            hasNextAired = nextAiredEp != null && watchedNum < nextAiredEp
+        )
+        CardBadgeMode.Catalog, CardBadgeMode.Schedule -> {
+            val isSource = anime.latestSubEpisode > 0 || anime.latestDubEpisode > 0
+            val durationFormatted = anime.duration?.let { dur ->
+                Regex("\\d+").find(dur)?.value?.let { "$it min" } ?: dur.lowercase()
+            }
+            // AniList entries carry score while Gotaku/ReAnime catalog entries leave score null.
+            val allowScore = !isSource
+            val scoreVal = anime.score?.takeIf { allowScore && it > 0f }?.let { if (it > 10f) it / 10f else it }
+            val scoreFormatted = scoreVal?.takeIf { it > 0f }?.let {
+                val rounded = kotlin.math.round(it * 10f) / 10f
+                if (rounded % 1f == 0f) "${rounded.toInt()}.0" else rounded.toString()
+            }
+            val scorePercent = anime.score?.takeIf { allowScore && it > 0f }?.let { raw ->
+                if (raw <= 10f) (raw * 10f).roundToInt() else raw.roundToInt()
+            }?.coerceIn(0, 100)
+
+            if (isSource) {
+                val haveEpCount = (if (anime.latestSubEpisode > 0) 1 else 0) + (if (anime.latestDubEpisode > 0) 1 else 0)
+                CardBadgeData(
+                    format = normFormat,
+                    subEpisode = anime.latestSubEpisode.takeIf { it > 0 },
+                    dubEpisode = anime.latestDubEpisode.takeIf { it > 0 },
+                    totalEpisodes = anime.episodeCount,
+                    airedEpisode = if (haveEpCount == 0 && (anime.episodeCount ?: 0) > 0) anime.episodeCount else null,
+                    isAdult = isAdult,
+                    rating = rPlusRating,
+                    score = scorePercent,
+                    scoreFormatted = scoreFormatted,
+                    duration = durationFormatted,
+                    progressPercent = progressPercent,
+                    progressEpisode = progressEpisode,
+                    airingTime = airingTime,
+                    airingAired = airingAired ?: false
+                )
+            } else {
+                val isMovie = normFormat == "MOVIE"
+                val totalEpisodes = if (isMovie) null else anime.episodeCount
+                val airedEpisode = if (isMovie) {
+                    1
+                } else {
+                    nextAiredEp ?: if (anime.status?.contains("airing", ignoreCase = true) == true) anime.episodeCount else null
+                }
+                val isUpcoming = anime.status?.contains("not_yet", ignoreCase = true) == true
+                CardBadgeData(
+                    format = normFormat,
+                    totalEpisodes = totalEpisodes,
+                    airedEpisode = airedEpisode,
+                    isAdult = isAdult,
+                    rating = rPlusRating,
+                    score = scorePercent,
+                    scoreFormatted = scoreFormatted,
+                    duration = durationFormatted,
+                    year = anime.year?.toString(),
+                    isUpcoming = isUpcoming,
+                    progressPercent = progressPercent,
+                    progressEpisode = progressEpisode,
+                    airingTime = airingTime,
+                    airingAired = airingAired ?: false
+                )
+            }
         }
-        val isUpcoming = anime.status?.contains("not_yet", ignoreCase = true) == true
-        CardBadgeData(
-            format = normFormat,
-            totalEpisodes = totalEpisodes,
-            airedEpisode = airedEpisode,
-            isAdult = isAdult,
-            rating = normalizedRating,
-            score = scorePercent,
-            scoreFormatted = scoreFormatted,
-            duration = durationFormatted,
-            year = anime.year?.toString(),
-            isUpcoming = isUpcoming,
-            progressPercent = progressPercent,
-            progressEpisode = progressEpisode,
-            hasNextAired = hasNextAired,
-            airingTime = airingTime,
-            airingAired = airingAired ?: false
-        )
     }
 }

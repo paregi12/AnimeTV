@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.res.Resources
+import android.graphics.Rect as AndroidRect
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
 import android.media.AudioManager
@@ -45,8 +46,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -392,6 +397,8 @@ actual fun PlatformPlayer(
         if (!html5Player) null else WebView(context).apply {
             isFocusable = false
             isFocusableInTouchMode = false
+            isLongClickable = false
+            setOnLongClickListener { true }
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
@@ -593,11 +600,19 @@ actual fun PlatformPlayer(
         positionMs = target
         seekDebounceJob?.cancel()
         seekDebounceJob = coroutineScope.launch {
-            delay(500L)
-            if (html5Player) {
-                html5View?.evaluateJavascript("window.animeTvCommand('seek', ${target / 1000.0});", null)
-            } else {
-                player?.seekTo(target)
+            val currentJob = coroutineContext[Job]
+            try {
+                delay(500L)
+                if (html5Player) {
+                    html5View?.evaluateJavascript("window.animeTvCommand('seek', ${target / 1000.0});", null)
+                    delay(300L)
+                } else {
+                    player?.seekTo(target)
+                }
+            } finally {
+                if (seekDebounceJob === currentJob) {
+                    seekDebounceJob = null
+                }
             }
         }
     }
@@ -814,7 +829,7 @@ actual fun PlatformPlayer(
                     )
                 }
             }
-            if (seekDebounceJob == null) {
+            if (seekDebounceJob?.isActive != true) {
                 positionMs = currentPosition()
             }
             durationMs = currentDuration()
@@ -863,8 +878,54 @@ actual fun PlatformPlayer(
     }
     val useComposeCueOverlay = cueLines.isNotEmpty() && !hasBitmapCue
     val showNativeSubtitleViewState = rememberUpdatedState(!useComposeCueOverlay)
+    val rootView = LocalView.current
+    val density = LocalDensity.current
+    var playerBoundsInRoot by remember { mutableStateOf<AndroidRect?>(null) }
 
-    PlaybackOsdContent(
+    DisposableEffect(rootView, playerBoundsInRoot, disableTouchGestures) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val bounds = playerBoundsInRoot
+            if (!disableTouchGestures && bounds != null && bounds.width() > 0 && bounds.height() > 0) {
+                val edgeWidthPx = minOf(
+                    with(density) { 40.dp.roundToPx() },
+                    (bounds.width() * 0.15f).roundToInt()
+                ).coerceAtLeast(1)
+                val maxBandPx = with(density) { 200.dp.roundToPx() }
+                val bandHeight = minOf(maxBandPx, bounds.height())
+                val top = bounds.top + (bounds.height() - bandHeight) / 2
+                val bottom = top + bandHeight
+                rootView.systemGestureExclusionRects = listOf(
+                    AndroidRect(bounds.left, top, bounds.left + edgeWidthPx, bottom),
+                    AndroidRect(bounds.right - edgeWidthPx, top, bounds.right, bottom)
+                )
+            } else {
+                rootView.systemGestureExclusionRects = emptyList()
+            }
+        }
+        onDispose {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                rootView.systemGestureExclusionRects = emptyList()
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coords ->
+                val rect = coords.boundsInRoot()
+                val updated = AndroidRect(
+                    rect.left.roundToInt(),
+                    rect.top.roundToInt(),
+                    rect.right.roundToInt(),
+                    rect.bottom.roundToInt()
+                )
+                if (playerBoundsInRoot != updated) {
+                    playerBoundsInRoot = updated
+                }
+            }
+    ) {
+        PlaybackOsdContent(
         metadataTitle = metadataTitle,
         episodeLabel = metadataArtist,
         metadataDescription = metadataDescription,
@@ -1046,6 +1107,7 @@ actual fun PlatformPlayer(
             }
         }
     )
+    }
 }
 
 private fun buildPlaybackMediaItem(
@@ -1204,7 +1266,7 @@ private class PlayerVolumeController(private val context: Context) {
             ((current - minimum) * 100f / span).coerceIn(0f, 100f)
         }
 
-        val updatedPercent = (basePercent + direction * 10f).coerceIn(0f, 100f)
+        val updatedPercent = (basePercent + direction * 2f).coerceIn(0f, 100f)
         val updatedStream = (minimum + (updatedPercent * span / 100f).roundToInt())
             .coerceIn(minimum, maximum)
 
@@ -1232,7 +1294,7 @@ private class PlayerBrightnessController(private val context: Context) {
         val window = activity.window
         val attributes = window.attributes
         val current = brightnessLevel ?: resolveInitialBrightnessLevel(context, attributes)
-        val updated = (current + direction * 10).coerceIn(0, 255)
+        val updated = (current + direction * 5).coerceIn(0, 255)
         brightnessLevel = updated
         attributes.screenBrightness = updated / 255f
         window.attributes = attributes

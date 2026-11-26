@@ -74,6 +74,13 @@ class MainActivity : ComponentActivity() {
         tvIntegrationRepository.handleLaunchIntent(intent)
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            applySystemUi(Configuration.ORIENTATION_LANDSCAPE)
+        }
+    }
+
     override fun onDestroy() {
         if (isFinishing) debugLogRepository.onHostFinished()
         streamProxy.close()
@@ -105,7 +112,11 @@ class MainActivity : ComponentActivity() {
                     View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         } else {
             WindowCompat.setDecorFitsSystemWindows(window, false)
-            window.clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN)
+            window.clearFlags(
+                WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN or
+                    WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS or
+                    WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION
+            )
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.systemBars())

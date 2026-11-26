@@ -29,7 +29,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -98,6 +97,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -149,7 +149,7 @@ import com.paregi.animetv.domain.SkipRange
 import com.paregi.animetv.domain.SubtitleLanguageCatalog
 import com.paregi.animetv.domain.SubtitleStyleCatalog
 import com.paregi.animetv.domain.SubtitleTrack
-import com.paregi.animetv.domain.normalizeAgeRating
+import com.paregi.animetv.domain.isAdultAgeRating
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformSubtitleFontFamily
@@ -158,6 +158,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.time.TimeSource
 
@@ -877,12 +878,13 @@ internal fun PlaybackOsdContent(
     val currentMenuZones by rememberUpdatedState(menuZones)
     val currentActiveZone by rememberUpdatedState(activeZone)
 
-    fun moveZone(delta: Int, fromTouchSwipe: Boolean = false): Boolean {
+    fun moveZone(delta: Int, preventCloseOnTop: Boolean = false): Boolean {
+        if (!osdVisible) return false
         val zones = currentMenuZones
         val currentIdx = zones.indexOf(currentActiveZone).coerceAtLeast(0)
         val targetIdx = currentIdx + delta
         if (targetIdx < 0) {
-            if (!fromTouchSwipe && !hasError) {
+            if (!preventCloseOnTop && !hasError) {
                 playClickSound()
                 osdVisible = false
             }
@@ -924,6 +926,14 @@ internal fun PlaybackOsdContent(
     val currentShowSeekIndicator by rememberUpdatedState(onShowSeekIndicator)
     val currentShowOsdHud by rememberUpdatedState(onShowOsdHud)
     val currentDebouncedSeek by rememberUpdatedState(onDebouncedSeek)
+    val currentReadOsdVisible by rememberUpdatedState { osdVisible }
+    val currentOpenOsdZone by rememberUpdatedState { zone: PlaybackMenuZone ->
+        activeZone = zone
+        osdVisible = true
+    }
+    val currentDismissOsd by rememberUpdatedState {
+        if (!hasError) osdVisible = false
+    }
     val gestureClock = remember { TimeSource.Monotonic.markNow() }
     var gestureSeekMs by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(positionMs) {
@@ -1164,6 +1174,203 @@ internal fun PlaybackOsdContent(
                     }
                 }
             }
+            .pointerInput(disableTouchGestures, seekSeconds, hasError) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val downFinalEvent = awaitPointerEvent(PointerEventPass.Final)
+                    val downFinalChange = downFinalEvent.changes.firstOrNull { it.id == down.id }
+                    if (down.isConsumed || downFinalChange?.isConsumed == true || currentSettingsOverlayOpen) {
+                        return@awaitEachGesture
+                    }
+
+                    val downX = down.position.x
+                    val downY = down.position.y
+                    val downTime = gestureClock.elapsedNow().inWholeMilliseconds
+                    val touchSlop = viewConfiguration.touchSlop
+                    val lockSlopPx = maxOf(touchSlop * 1.5f, 14.dp.toPx())
+                    val fallbackSlopPx = lockSlopPx * 2.5f
+                    val seekStepPx = (size.width * 0.06f).coerceIn(36.dp.toPx(), 56.dp.toPx())
+                    val firstSeekThreshold = (seekStepPx * 0.6f).coerceAtLeast(lockSlopPx)
+                    val verticalRangePx = (size.height * 0.55f).coerceIn(180.dp.toPx(), 320.dp.toPx())
+                    val levelStepPx = verticalRangePx / 50f
+                    val zoneStepPx = (size.height * 0.14f).coerceIn(44.dp.toPx(), 72.dp.toPx())
+                    val firstZoneThreshold = (zoneStepPx * 0.6f).coerceAtLeast(lockSlopPx)
+
+                    var isDrag = false
+                    var movedPastSlop = false
+                    var childClaimed = false
+                    var multiTouch = false
+                    var released = false
+                    var upConsumed = false
+                    // 1=horiz seek, 2=left brightness, 3=right volume, 4=OSD zone swipe, 5=closed vert open
+                    var mode = 0
+                    var horizontalCarry = 0f
+                    var verticalCarry = 0f
+                    var nextSeekThreshold = firstSeekThreshold
+                    var nextZoneThreshold = firstZoneThreshold
+                    var currentPos = down.position
+
+                    while (true) {
+                        val initialEvent = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = initialEvent.changes.firstOrNull { it.id == down.id }
+                        if (change == null) {
+                            awaitPointerEvent(PointerEventPass.Final)
+                            break
+                        }
+                        if (initialEvent.changes.count { it.pressed } > 1) {
+                            multiTouch = true
+                        }
+                        if (!change.pressed) {
+                            val finalEvent = awaitPointerEvent(PointerEventPass.Final)
+                            val finalChange = finalEvent.changes.firstOrNull { it.id == down.id }
+                            upConsumed = finalChange?.isConsumed == true
+                            released = true
+                            break
+                        }
+
+                        if (!change.isConsumed && !childClaimed && !multiTouch && !currentSettingsOverlayOpen) {
+                            val dragAmount = change.position - currentPos
+                            currentPos = change.position
+                            var justStartedDrag = false
+
+                            if (!isDrag) {
+                                val totalDx = abs(change.position.x - downX)
+                                val totalDy = abs(change.position.y - downY)
+                                if (totalDx > touchSlop || totalDy > touchSlop) {
+                                    movedPastSlop = true
+                                }
+                                val osdOpen = currentReadOsdVisible()
+                                val axisMargin = if (osdOpen) 1.5f else 1.35f
+                                val horizLock = totalDx >= lockSlopPx && totalDx > totalDy * axisMargin
+                                val vertLock = totalDy >= lockSlopPx && totalDy > totalDx * axisMargin
+                                val diagDist = hypot(totalDx, totalDy)
+                                val diagVertFallback = diagDist >= fallbackSlopPx &&
+                                    totalDy > totalDx * if (osdOpen) 1.15f else 1f
+                                val diagHorizFallback = !osdOpen && diagDist >= fallbackSlopPx && totalDx > totalDy
+
+                                if (horizLock || vertLock || diagVertFallback || diagHorizFallback) {
+                                    val isHorizontal = horizLock || diagHorizFallback
+                                    val resolvedMode = when {
+                                        isHorizontal && !osdOpen && !disableTouchGestures && !hasError -> 1
+                                        !isHorizontal && !osdOpen && !disableTouchGestures && !hasError && downX < size.width * 0.2f -> 2
+                                        !isHorizontal && !osdOpen && !disableTouchGestures && !hasError && downX > size.width * 0.8f -> 3
+                                        !isHorizontal && osdOpen -> 4
+                                        !isHorizontal && !osdOpen && !hasError -> 5
+                                        else -> 0
+                                    }
+                                    if (resolvedMode != 0) {
+                                        isDrag = true
+                                        justStartedDrag = true
+                                        mode = resolvedMode
+                                        pendingTapJob?.cancel()
+                                        pendingTapJob = null
+                                    }
+                                }
+                            }
+
+                            if (isDrag && mode != 0) {
+                                change.consume()
+                                when (mode) {
+                                    1 -> {
+                                        horizontalCarry += if (justStartedDrag) (change.position.x - downX) else dragAmount.x
+                                        while (nextSeekThreshold > 0f && abs(horizontalCarry) >= nextSeekThreshold) {
+                                            val direction = if (horizontalCarry > 0f) 1 else -1
+                                            horizontalCarry -= direction * nextSeekThreshold
+                                            nextSeekThreshold = seekStepPx
+                                            currentPerformDeltaSeek(direction)
+                                        }
+                                    }
+                                    2, 3 -> {
+                                        verticalCarry += if (justStartedDrag) (change.position.y - downY) else dragAmount.y
+                                        while (levelStepPx > 0f && abs(verticalCarry) >= levelStepPx) {
+                                            val carrySign = if (verticalCarry > 0f) 1 else -1
+                                            verticalCarry -= carrySign * levelStepPx
+                                            val direction = -carrySign
+                                            if (mode == 2) currentAdjustBrightness(direction) else currentAdjustVolume(direction)
+                                        }
+                                    }
+                                    5 -> {
+                                        val openingTracks = (change.position.y - downY) < 0f
+                                        verticalCarry = 0f
+                                        nextZoneThreshold = zoneStepPx
+                                        playClickSound()
+                                        bumpInteraction()
+                                        currentOpenOsdZone(
+                                            if (openingTracks) PlaybackMenuZone.TRACKS else PlaybackMenuZone.SETTINGS
+                                        )
+                                        mode = 4
+                                    }
+                                    4 -> {
+                                        verticalCarry += if (justStartedDrag) (change.position.y - downY) else dragAmount.y
+                                        while (nextZoneThreshold > 0f && abs(verticalCarry) >= nextZoneThreshold) {
+                                            val carrySign = if (verticalCarry > 0f) 1 else -1
+                                            verticalCarry -= carrySign * nextZoneThreshold
+                                            nextZoneThreshold = zoneStepPx
+                                            val delta = -carrySign
+                                            currentMoveZone(delta, false)
+                                            if (!currentReadOsdVisible()) {
+                                                mode = 0
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            currentPos = change.position
+                        }
+
+                        val finalEvent = awaitPointerEvent(PointerEventPass.Final)
+                        val finalChange = finalEvent.changes.firstOrNull { it.id == down.id }
+                        if (!isDrag && finalChange?.isConsumed == true) {
+                            childClaimed = true
+                        }
+                    }
+
+                    if (!isDrag && !movedPastSlop && released && !childClaimed && !multiTouch && !upConsumed && !currentSettingsOverlayOpen) {
+                        if (currentReadOsdVisible()) {
+                            currentDismissOsd()
+                        } else {
+                            val tapSide = when {
+                                downX < size.width * 0.2f -> 1
+                                downX > size.width * 0.8f -> 2
+                                else -> 0
+                            }
+                            if (tapSide == 0 || hasError) {
+                                pendingTapJob?.cancel()
+                                pendingTapJob = null
+                                lastTapTime = 0L
+                                lastTapSide = 0
+                                bumpInteraction()
+                                currentOpenOsdZone(PlaybackMenuZone.TRACKS)
+                            } else {
+                                val isDouble = (downTime - lastTapTime < 280L) && (lastTapSide == tapSide)
+                                if (isDouble) {
+                                    pendingTapJob?.cancel()
+                                    pendingTapJob = null
+                                    lastTapTime = downTime
+                                    lastTapSide = tapSide
+                                    val direction = if (tapSide == 2) 1 else -1
+                                    currentPerformDeltaSeek(direction)
+                                    triggerLocalSeekRipple(direction)
+                                    currentShowSeekIndicator(direction)
+                                } else {
+                                    lastTapTime = downTime
+                                    lastTapSide = tapSide
+                                    pendingTapJob?.cancel()
+                                    pendingTapJob = coroutineScope.launch {
+                                        delay(300L)
+                                        bumpInteraction()
+                                        currentOpenOsdZone(PlaybackMenuZone.TRACKS)
+                                        lastTapTime = 0L
+                                        lastTapSide = 0
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
     ) {
         val screenHeightPx = with(density) { maxHeight.toPx() }.roundToInt().coerceAtLeast(1)
 
@@ -1185,152 +1392,13 @@ internal fun PlaybackOsdContent(
             }
         }
 
-        // Full-screen touch gesture layer active even when OSD is open (outside control hits).
+        // Prevent native AndroidView (WebView/PlayerView) from claiming raw pointer events.
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(disableTouchGestures, seekSeconds, hasError) {
+                .pointerInput(Unit) {
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.isConsumed || currentSettingsOverlayOpen) return@awaitEachGesture
-                        val downX = down.position.x
-                        val downY = down.position.y
-                        val downTime = gestureClock.elapsedNow().inWholeMilliseconds
-                        var isDrag = false
-                        // 1=horiz seek, 2=left brightness, 3=right volume, 4=OSD zone swipe, 5=closed center/disabled vert swipe
-                        var mode = 0
-                        var horizontalCarry = 0f
-                        var verticalCarry = 0f
-                        var nextSeekThreshold = size.width * 0.07f
-                        var nextLevelThreshold = size.width * 0.07f
-                        var currentPos = down.position
-
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) {
-                                break
-                            }
-                            if (change.isConsumed) return@awaitEachGesture
-
-                            val dragAmount = change.position - currentPos
-                            currentPos = change.position
-                            var justStartedDrag = false
-
-                            if (!isDrag) {
-                                val totalDx = abs(change.position.x - downX)
-                                val totalDy = abs(change.position.y - downY)
-                                val touchSlop = viewConfiguration.touchSlop
-                                if (totalDx > touchSlop || totalDy > touchSlop) {
-                                    isDrag = true
-                                    justStartedDrag = true
-                                    pendingTapJob?.cancel()
-                                    pendingTapJob = null
-                                    mode = when {
-                                        totalDx > totalDy && !currentOsdVisible && !disableTouchGestures && !hasError -> 1
-                                        totalDy > totalDx && !currentOsdVisible && !disableTouchGestures && !hasError && downX < size.width * 0.2f -> 2
-                                        totalDy > totalDx && !currentOsdVisible && !disableTouchGestures && !hasError && downX > size.width * 0.8f -> 3
-                                        totalDy > totalDx && currentOsdVisible -> 4
-                                        totalDy > totalDx && !currentOsdVisible && !hasError -> 5
-                                        else -> 0
-                                    }
-                                }
-                            }
-
-                            if (isDrag && mode != 0) {
-                                change.consume()
-                                when (mode) {
-                                    1 -> {
-                                        horizontalCarry += if (justStartedDrag) (change.position.x - downX) else dragAmount.x
-                                        while (nextSeekThreshold > 0f && abs(horizontalCarry) >= nextSeekThreshold) {
-                                            val direction = if (horizontalCarry > 0f) 1 else -1
-                                            horizontalCarry -= direction * nextSeekThreshold
-                                            nextSeekThreshold = size.width * 0.01f
-                                            currentPerformDeltaSeek(direction)
-                                        }
-                                    }
-                                    2, 3 -> {
-                                        verticalCarry += if (justStartedDrag) (change.position.y - downY) else dragAmount.y
-                                        while (nextLevelThreshold > 0f && abs(verticalCarry) >= nextLevelThreshold) {
-                                            val carrySign = if (verticalCarry > 0f) 1 else -1
-                                            verticalCarry -= carrySign * nextLevelThreshold
-                                            nextLevelThreshold = size.width * 0.01f
-                                            val direction = -carrySign
-                                            if (mode == 2) currentAdjustBrightness(direction) else currentAdjustVolume(direction)
-                                        }
-                                    }
-                                    4 -> {
-                                        verticalCarry += if (justStartedDrag) (change.position.y - downY) else dragAmount.y
-                                        val stepPx = size.width * 0.07f
-                                        if (stepPx > 0f && abs(verticalCarry) >= stepPx) {
-                                            val delta = if (verticalCarry < 0f) 1 else -1
-                                            verticalCarry = 0f
-                                            currentMoveZone(delta, true)
-                                        }
-                                    }
-                                    5 -> {
-                                        verticalCarry += if (justStartedDrag) (change.position.y - downY) else dragAmount.y
-                                        val stepPx = size.width * 0.07f
-                                        if (stepPx > 0f && abs(verticalCarry) >= stepPx) {
-                                            val openingTracks = verticalCarry < 0f
-                                            verticalCarry = 0f
-                                            playClickSound()
-                                            bumpInteraction()
-                                            activeZone = if (openingTracks) PlaybackMenuZone.TRACKS else PlaybackMenuZone.SETTINGS
-                                            osdVisible = true
-                                            mode = 4
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!isDrag) {
-                            if (currentOsdVisible) {
-                                if (!hasError) {
-                                    osdVisible = false
-                                }
-                            } else {
-                                val tapSide = when {
-                                    downX < size.width * 0.2f -> 1
-                                    downX > size.width * 0.8f -> 2
-                                    else -> 0
-                                }
-                                if (tapSide == 0 || hasError) {
-                                    pendingTapJob?.cancel()
-                                    pendingTapJob = null
-                                    lastTapTime = 0L
-                                    lastTapSide = 0
-                                    bumpInteraction()
-                                    activeZone = PlaybackMenuZone.TRACKS
-                                    osdVisible = true
-                                } else {
-                                    val isDouble = (downTime - lastTapTime < 280L) && (lastTapSide == tapSide)
-                                    if (isDouble) {
-                                        pendingTapJob?.cancel()
-                                        pendingTapJob = null
-                                        lastTapTime = downTime
-                                        lastTapSide = tapSide
-                                        val direction = if (tapSide == 2) 1 else -1
-                                        currentPerformDeltaSeek(direction)
-                                        triggerLocalSeekRipple(direction)
-                                        currentShowSeekIndicator(direction)
-                                    } else {
-                                        lastTapTime = downTime
-                                        lastTapSide = tapSide
-                                        pendingTapJob?.cancel()
-                                        pendingTapJob = coroutineScope.launch {
-                                            delay(300L)
-                                            bumpInteraction()
-                                            activeZone = PlaybackMenuZone.TRACKS
-                                            osdVisible = true
-                                            lastTapTime = 0L
-                                            lastTapSide = 0
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        awaitFirstDown(requireUnconsumed = false)
                     }
                 }
         )
@@ -1917,6 +1985,7 @@ private fun PlaybackMetaLayer(
                 }
                 LazyRow(
                     state = genresState,
+                    userScrollEnabled = visible,
                     horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.5f),
                     modifier = Modifier
                         .width(tokens.vw * 50f)
@@ -1965,8 +2034,8 @@ private fun PlaybackMetaLayer(
             val infoPills = buildList {
                 metadataFormat?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
                 metadataQuality?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
-                metadataRating?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
-                    add(normalizeAgeRating(raw) ?: raw.uppercase())
+                metadataRating?.trim()?.takeIf { isAdultAgeRating(it) }?.let {
+                    add("R+")
                 }
                 if (seasonsCount > 0) add("$seasonsCount SEASONS")
                 if (episodesCount > 1) add("$episodesCount EPISODES")
@@ -2114,6 +2183,7 @@ private fun PlaybackMetaLayer(
         }
         LazyRow(
             state = settingsState,
+            userScrollEnabled = visible,
             horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.5f),
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -2352,6 +2422,9 @@ private fun PlaybackActionsLayer(
 
     val listFocusEnabled = osdVisible && activeZone >= PlaybackMenuZone.TRACKS
 
+    val currentActiveZone by rememberUpdatedState(activeZone)
+    val currentOnActivateZone by rememberUpdatedState(onActivateZone)
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -2363,11 +2436,12 @@ private fun PlaybackActionsLayer(
                 .wrapContentHeight(align = Alignment.Top, unbounded = true)
                 .offset { IntOffset(0, animatedOffsetY) }
                 .onSizeChanged { totalIactionsHeightPx = it.height }
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    enabled = osdVisible
-                ) { onActivateZone(activeZone) }
+                .pointerInput(osdVisible) {
+                    if (!osdVisible) return@pointerInput
+                    detectTapGestures {
+                        currentOnActivateZone(currentActiveZone)
+                    }
+                }
                 .background(
                     Brush.verticalGradient(
                         0f to Color.Transparent,
@@ -2378,6 +2452,7 @@ private fun PlaybackActionsLayer(
             // #pb_tracks
             val tracksActive = osdVisible && activeZone == PlaybackMenuZone.TRACKS
             PlaybackTracksSection(
+                osdVisible = osdVisible,
                 active = tracksActive,
                 focusEnabled = listFocusEnabled,
                 episodeLabel = episodeLabel,
@@ -2406,6 +2481,7 @@ private fun PlaybackActionsLayer(
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (episodes.isNotEmpty()) {
                     PlaybackEpisodesSection(
+                        osdVisible = osdVisible,
                         active = osdVisible && activeZone == PlaybackMenuZone.EPISODES,
                         focusEnabled = listFocusEnabled,
                         episodes = episodes,
@@ -2432,6 +2508,7 @@ private fun PlaybackActionsLayer(
                     PlaybackPosterShelf(
                         title = "Seasons",
                         zone = PlaybackMenuZone.SEASONS,
+                        osdVisible = osdVisible,
                         active = osdVisible && activeZone == PlaybackMenuZone.SEASONS,
                         focusEnabled = listFocusEnabled,
                         animes = seasons,
@@ -2453,6 +2530,7 @@ private fun PlaybackActionsLayer(
                     PlaybackPosterShelf(
                         title = "Related",
                         zone = PlaybackMenuZone.RELATED,
+                        osdVisible = osdVisible,
                         active = osdVisible && activeZone == PlaybackMenuZone.RELATED,
                         focusEnabled = listFocusEnabled,
                         animes = related,
@@ -2473,6 +2551,7 @@ private fun PlaybackActionsLayer(
                     PlaybackPosterShelf(
                         title = "Recommendation",
                         zone = PlaybackMenuZone.RECS,
+                        osdVisible = osdVisible,
                         active = osdVisible && activeZone == PlaybackMenuZone.RECS,
                         focusEnabled = listFocusEnabled,
                         animes = recommendations,
@@ -2495,6 +2574,7 @@ private fun PlaybackActionsLayer(
 
 @Composable
 private fun PlaybackTracksSection(
+    osdVisible: Boolean,
     active: Boolean,
     focusEnabled: Boolean,
     episodeLabel: String,
@@ -2532,6 +2612,7 @@ private fun PlaybackTracksSection(
 
     val currentOnActivate by rememberUpdatedState(onActivate)
     val currentOnSeekTarget by rememberUpdatedState(onSeekTarget)
+    val currentDurationMs by rememberUpdatedState(durationMs)
     val displayPosText = when {
         hasError -> "PLAYBACK ERROR"
         !statusTextOverride.isNullOrBlank() -> statusTextOverride
@@ -2551,34 +2632,58 @@ private fun PlaybackTracksSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .wrapContentHeight()
-                .pointerInput(durationMs, hasError) {
-                    if (hasError) return@pointerInput
-                    detectTapGestures { offset ->
-                        currentOnActivate()
-                        if (durationMs > 0L && size.width > 0) {
-                            val pct = (offset.x / size.width).coerceIn(0f, 1f)
-                            currentOnSeekTarget((pct * durationMs).toLong())
+                .pointerInput(osdVisible, hasError) {
+                    if (!osdVisible || hasError) return@pointerInput
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.isConsumed) return@awaitEachGesture
+                        val downX = down.position.x
+                        val downY = down.position.y
+                        val slop = viewConfiguration.touchSlop
+                        var horizontalDrag = false
+                        var cancelled = false
+
+                        fun seekAt(x: Float) {
+                            val dur = currentDurationMs
+                            if (dur > 0L && size.width > 0) {
+                                val pct = (x / size.width).coerceIn(0f, 1f)
+                                currentOnSeekTarget((pct * dur).toLong())
+                            }
+                        }
+
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (change.isConsumed) {
+                                cancelled = true
+                                break
+                            }
+                            if (!change.pressed) {
+                                if (!horizontalDrag && !cancelled) {
+                                    change.consume()
+                                    currentOnActivate()
+                                    seekAt(change.position.x)
+                                }
+                                break
+                            }
+                            val dx = abs(change.position.x - downX)
+                            val dy = abs(change.position.y - downY)
+                            if (!horizontalDrag) {
+                                if (dx > slop && dx >= dy) {
+                                    horizontalDrag = true
+                                    change.consume()
+                                    currentOnActivate()
+                                    seekAt(change.position.x)
+                                } else if (dy > slop && dy > dx * 1.35f) {
+                                    cancelled = true
+                                    break
+                                }
+                            } else {
+                                change.consume()
+                                seekAt(change.position.x)
+                            }
                         }
                     }
-                }
-                .pointerInput(durationMs, hasError) {
-                    if (hasError) return@pointerInput
-                    detectHorizontalDragGestures(
-                        onDragStart = { offset ->
-                            currentOnActivate()
-                            if (durationMs > 0L && size.width > 0) {
-                                val pct = (offset.x / size.width).coerceIn(0f, 1f)
-                                currentOnSeekTarget((pct * durationMs).toLong())
-                            }
-                        },
-                        onHorizontalDrag = { change, _ ->
-                            change.consume()
-                            if (durationMs > 0L && size.width > 0) {
-                                val pct = (change.position.x / size.width).coerceIn(0f, 1f)
-                                currentOnSeekTarget((pct * durationMs).toLong())
-                            }
-                        }
-                    )
                 }
         ) {
             // Header row (#pb_track_left, #pb_track_title, #pb_track_dur) pinned at top (2vw).
@@ -2595,7 +2700,7 @@ private fun PlaybackTracksSection(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            enabled = !hasError
+                            enabled = osdVisible && !hasError
                         ) {
                             onActivate()
                             onTogglePlay()
@@ -2818,6 +2923,7 @@ private fun PlaybackTracksSection(
 
 @Composable
 private fun PlaybackEpisodesSection(
+    osdVisible: Boolean,
     active: Boolean,
     focusEnabled: Boolean,
     episodes: List<Episode>,
@@ -2948,6 +3054,7 @@ private fun PlaybackEpisodesSection(
 
         LazyRow(
             state = listState,
+            userScrollEnabled = osdVisible,
             horizontalArrangement = Arrangement.spacedBy(tokens.vw * 0.5f),
             contentPadding = PaddingValues(horizontal = tokens.vw * 5f),
             modifier = Modifier
@@ -3121,6 +3228,7 @@ private fun PlaybackEpisodesSection(
 private fun PlaybackPosterShelf(
     title: String,
     zone: PlaybackMenuZone,
+    osdVisible: Boolean,
     active: Boolean,
     focusEnabled: Boolean,
     animes: List<Anime>,
@@ -3186,6 +3294,7 @@ private fun PlaybackPosterShelf(
         )
         LazyRow(
             state = listState,
+            userScrollEnabled = osdVisible,
             horizontalArrangement = Arrangement.spacedBy(dims.cardGap),
             contentPadding = PaddingValues(horizontal = tokens.vw * 5f, vertical = tokens.vw * 0.3f),
             modifier = Modifier
