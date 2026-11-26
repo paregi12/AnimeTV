@@ -281,6 +281,21 @@ private fun UnifiedMyListScreen(
     }
 
     val listState = rememberLazyListState()
+    val visibleWatchlist = remember(watchlist, profileRating, selectedSource) {
+        watchlist.filter {
+            (selectedSource == null || it.sourceIndex == selectedSource) &&
+                it.allowedForRating(profileRating)
+        }
+    }
+    val visibleHistory = remember(watchHistory, profileRating, selectedSource) {
+        watchHistory
+            .sortedByDescending { it.updatedAtEpochMs }
+            .filter {
+                (selectedSource == null || (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) == selectedSource) &&
+                    it.anime?.allowedForRating(profileRating) == true
+            }
+            .distinctBy { it.animeId to (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) }
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val portrait = tokens.portrait
@@ -304,21 +319,6 @@ private fun UnifiedMyListScreen(
             onScrollOffsetChange(scrollOffsetDp)
         }
 
-        val visibleWatchlist = remember(watchlist, profileRating, selectedSource) {
-            watchlist.filter {
-                (selectedSource == null || it.sourceIndex == selectedSource) &&
-                    it.allowedForRating(profileRating)
-            }
-        }
-        val visibleHistory = remember(watchHistory, profileRating, selectedSource) {
-            watchHistory
-                .sortedByDescending { it.updatedAtEpochMs }
-                .filter {
-                    (selectedSource == null || (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) == selectedSource) &&
-                        it.anime?.allowedForRating(profileRating) == true
-                }
-                .distinctBy { it.animeId to (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) }
-        }
         val openAccountAnime: (Anime) -> Unit = { anime ->
             onOpenAnime(selectedSource?.let { anime.copy(sourceIndex = it) } ?: anime)
         }
