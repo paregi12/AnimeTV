@@ -12,6 +12,7 @@ import android.os.Looper
 import android.util.Log
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.HomeFeed
+import com.paregi.animetv.domain.isAllowedForParentalRating
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -116,9 +117,7 @@ class TvChannelRefreshJobService : JobService() {
     }
 }
 
-private fun Anime.allowedForProfileRating(rating: Int): Boolean = rating >= 4 ||
-    (!adult && !title.contains("censor", ignoreCase = true) &&
-        originalTitle?.contains("censor", ignoreCase = true) != true)
+private fun Anime.allowedForProfileRating(rating: Int): Boolean = isAllowedForParentalRating(rating)
 
 private fun HomeFeed.filteredForProfileRating(rating: Int): HomeFeed = copy(
     featured = featured.filter { it.allowedForProfileRating(rating) },

@@ -17,14 +17,19 @@ import com.paregi.animetv.domain.SearchPage
 import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.SubtitleTrack
 import com.paregi.animetv.domain.TranslationRepository
+import com.paregi.animetv.source.anilist.AniListCatalogApi
+import com.paregi.animetv.source.anilist.AniListGraphQlClient
+import com.paregi.animetv.source.anilist.AniListHomeShelves
 import com.paregi.animetv.source.anilist.AndroidAniListApi
 import com.paregi.animetv.source.AndroidCatalogApi
 import com.paregi.animetv.source.AndroidPlaybackResolver
+import com.paregi.animetv.source.CatalogSource
 import com.paregi.animetv.source.CatalogSourceSelector
 import com.paregi.animetv.source.gotaku.GotakuSource
 import com.paregi.animetv.source.gotaku.GotakuSync
 import com.paregi.animetv.source.lookup.SourceAnimeLookup
 import com.paregi.animetv.source.shared.AndroidSourceHttpClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -32,6 +37,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
+import java.util.Calendar
 
 /** Android source adapters for Gotaku and the ReAnime catalog API. */
 class AndroidAnimeRepository(
@@ -43,12 +49,21 @@ class AndroidAnimeRepository(
     private val sourceHttpClient = AndroidSourceHttpClient(networkStack, ::sourceSnapshot)
     private val catalogApi = AndroidCatalogApi(sourceHttpClient::requestBytes, GotakuSync(networkStack))
     private val sourceAnimeLookup = SourceAnimeLookup(catalogApi)
+    private val aniListClient = AniListGraphQlClient(
+        requestJsonCall = sourceHttpClient::requestJson,
+        requestTextCall = { url, body, contentType, referer ->
+            sourceHttpClient.request(url, body, contentType, referer = referer)
+        }
+    )
+    private val aniListCatalogApi = AniListCatalogApi(aniListClient)
     private val aniListApi = AndroidAniListApi(
         requestJsonCall = sourceHttpClient::requestJson,
         requestTextCall = { url, body, contentType, referer ->
             sourceHttpClient.request(url, body, contentType, referer = referer)
         }
     )
+    @Volatile
+    private var cachedAniListHome: AniListHomeShelves? = null
     private val playbackResolver = AndroidPlaybackResolver(
         streamProxy = streamProxy,
         catalogApi = catalogApi,
@@ -146,69 +161,104 @@ class AndroidAnimeRepository(
         highResolutionImages: Boolean
     ): HomeFeed = withContext(Dispatchers.IO) {
         val source = sourceSnapshot()
+        val alYearTarget = Calendar.getInstance().apply {
+            timeInMillis = System.currentTimeMillis() - 2_592_000_000L
+        }.get(Calendar.YEAR)
         coroutineScope {
-            val trendingDeferred = async { catalogApi.fetchTitles(if (source.isReAnime) "popularity_desc" else "trending_day", 1, source) }
-            val recentDeferred = async { catalogApi.fetchTitles(if (source.isReAnime) "latest_aired" else "latest", 1, source) }
-            val popularDeferred = async { catalogApi.fetchTitles(if (source.isReAnime) "score_desc" else "trending_week", 1, source) }
-            val alRecentDeferred = async { runCatching { aniListApi.fetchTvRecent(source) }.getOrDefault(emptyList()) }
-            val alTopDeferred = async { runCatching { aniListApi.fetchTvRanking(trending = false, source = source) }.getOrDefault(emptyList()) }
-            val alPopularDeferred = async { runCatching { aniListApi.fetchTvRanking(trending = true, source = source) }.getOrDefault(emptyList()) }
-            val alUpcomingDeferred = async { runCatching { aniListApi.search(SearchFilters(query = "", season = "UPCOMING", aniList = true), 1, source).results }.getOrDefault(emptyList()) }
-            val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
-            val alYearDeferred = async { runCatching { aniListApi.search(SearchFilters(query = "", year = currentYear, aniList = true), 1, source).results }.getOrDefault(emptyList()) }
+            val trendingDeferred = async {
+                safeFetch {
+                    catalogApi.fetchTitles(if (source.isReAnime) "trending_today" else "trending_day", 1, source)
+                }
+            }
+            val recentDeferred = async {
+                safeFetch {
+                    catalogApi.fetchTitles(if (source.isReAnime) "latest_aired" else "latest", 1, source)
+                }
+            }
+            val popularDeferred = async {
+                safeFetch {
+                    catalogApi.fetchTitles(if (source.isReAnime) "popularity_desc" else "trending_week", 1, source)
+                }
+            }
+            val aniListDeferred = async {
+                try {
+                    aniListCatalogApi.fetchHomeShelves(
+                        highResolutionImages = highResolutionImages,
+                        includeFeatured = useAniListTrending,
+                        year = alYearTarget,
+                        source = source
+                    )
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+            }
 
             val trending = trendingDeferred.await()
             val recent = recentDeferred.await()
             val popular = popularDeferred.await()
-            val alRecent = alRecentDeferred.await()
-            val alTop = alTopDeferred.await()
-            val alPopular = alPopularDeferred.await()
-            val alUpcoming = alUpcomingDeferred.await()
-            val alYear = alYearDeferred.await()
+            val alShelves = mergeAniListHome(aniListDeferred.await(), source)
 
             val featured = if (useAniListTrending) {
-                runCatching { aniListApi.fetchTrending(highResolutionImages, source) }
-                    .getOrDefault(emptyList())
-                    .ifEmpty { trending.take(6) }
-            } else trending.take(6)
-
-            val sections = buildList {
-                add(
-                    AnimeSection(
-                        "recent",
-                        if (source.isReAnime) "Recently Released" else "Recently Updated",
-                        recent
-                    )
-                )
-                add(AnimeSection("trending", "Trending Today", trending))
-                add(
-                    AnimeSection(
-                        "popular",
-                        if (source.isReAnime) "Most Popular" else "Popular This Week",
-                        popular
-                    )
-                )
-                if (alRecent.isNotEmpty()) {
-                    add(AnimeSection("alrecent", "Recently Released - AniList", alRecent))
-                }
-                if (alTop.isNotEmpty()) {
-                    add(AnimeSection("altop", "Top Anime - AniList", alTop))
-                }
-                if (alPopular.isNotEmpty()) {
-                    add(AnimeSection("alpopular", "All Time Popular - AniList", alPopular))
-                }
-                if (alYear.isNotEmpty()) {
-                    add(AnimeSection("alyear", "Top $currentYear - AniList", alYear))
-                }
-                if (alUpcoming.isNotEmpty()) {
-                    add(AnimeSection("alupcoming", "Upcoming - AniList", alUpcoming))
-                }
+                alShelves.featured.orEmpty().ifEmpty { trending.take(6) }.ifEmpty { recent.take(6) }
+            } else {
+                trending.take(6).ifEmpty { recent.take(6) }
             }
+
+            val sections = listOf(
+                AnimeSection(
+                    "recent",
+                    if (source.isReAnime) "Recently Released" else "Recently Updated",
+                    recent
+                ),
+                AnimeSection("trending", "Trending Today", trending),
+                AnimeSection(
+                    "popular",
+                    if (source.isReAnime) "Most Popular" else "Popular This Week",
+                    popular
+                ),
+                AnimeSection("alrecent", "Recently Released - AniList", alShelves.recent.orEmpty()),
+                AnimeSection("altop", "Top Anime - AniList", alShelves.top.orEmpty()),
+                AnimeSection("alpopular", "All Time Popular - AniList", alShelves.popular.orEmpty()),
+                AnimeSection("alyear", "Top $alYearTarget - AniList", alShelves.year.orEmpty()),
+                AnimeSection("alupcoming", "Upcoming - AniList", alShelves.upcoming.orEmpty())
+            )
             HomeFeed(
                 featured = featured,
                 sections = sections
             )
         }
+    }
+
+    private suspend fun safeFetch(block: suspend () -> List<Anime>): List<Anime> = try {
+        block()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    private fun mergeAniListHome(
+        fresh: AniListHomeShelves?,
+        source: CatalogSource
+    ): AniListHomeShelves {
+        val prev = cachedAniListHome
+        fun List<Anime>.forSource() = map {
+            if (it.sourceIndex == source.index) it else it.copy(sourceIndex = source.index)
+        }
+        val merged = AniListHomeShelves(
+            featured = fresh?.featured ?: prev?.featured?.forSource(),
+            recent = fresh?.recent ?: prev?.recent?.forSource(),
+            top = fresh?.top ?: prev?.top?.forSource(),
+            popular = fresh?.popular ?: prev?.popular?.forSource(),
+            year = fresh?.year ?: prev?.year?.forSource(),
+            upcoming = fresh?.upcoming ?: prev?.upcoming?.forSource()
+        )
+        if (fresh != null && listOfNotNull(fresh.recent, fresh.top, fresh.popular, fresh.year, fresh.upcoming).isNotEmpty()) {
+            cachedAniListHome = merged
+        }
+        return merged
     }
 
     suspend fun loadAndroidTvHome(): HomeFeed = withContext(Dispatchers.IO) {

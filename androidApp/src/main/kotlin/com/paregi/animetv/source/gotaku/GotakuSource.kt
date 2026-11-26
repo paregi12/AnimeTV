@@ -4,6 +4,8 @@ import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.SubtitleTrack
+import com.paregi.animetv.domain.isAdultAgeRating
+import com.paregi.animetv.domain.normalizeAgeRating
 import com.paregi.animetv.source.shared.toSourceGenreList
 import com.paregi.animetv.source.shared.toSourceStringList
 import com.paregi.animetv.source.shared.toSubtitleLanguageTag
@@ -25,6 +27,8 @@ internal object GotakuSource {
         val durationMs = json.optPositiveLong("duration") ?: 0L
         val genres = (json.optJSONArray("genres").toSourceGenreList() +
             json.optJSONArray("themes").toSourceGenreList()).distinct()
+        val rating = normalizeAgeRating(json.optText("rating"))
+            ?: normalizeAgeRating(json.optText("age_rating"))
         return Anime(
             id = id,
             title = json.optText("name") ?: json.optText("title") ?: id,
@@ -46,10 +50,10 @@ internal object GotakuSource {
                 durationMs > 0 -> "${durationMs}MIN"
                 else -> null
             },
-            rating = json.optText("rating") ?: json.optText("age_rating"),
+            rating = rating,
             episodeCount = episodes?.optPositiveInt("total"),
             format = json.optText("format"),
-            adult = json.optBoolean("is_adult"),
+            adult = json.optBoolean("is_adult") || isAdultAgeRating(rating),
             latestSubEpisode = episodes?.optInt("latest_sub") ?: 0,
             latestDubEpisode = episodes?.optInt("latest_dub") ?: 0,
             malId = links?.optText("mal")?.trimEnd('/')?.substringAfterLast('/')?.takeIf(String::isNotBlank),
@@ -148,11 +152,15 @@ internal object GotakuSource {
             } else {
                 item.optText("name")
             } ?: return@mapNotNull null
+            val rating = normalizeAgeRating(item.optText("rating"))
+                ?: normalizeAgeRating(item.optText("age_rating"))
             Anime(
                 id = id,
                 title = title,
                 posterUrl = item.optText("poster_url"),
+                rating = rating,
                 format = item.optText("format"),
+                adult = item.optBoolean("is_adult") || isAdultAgeRating(rating),
                 sourceIndex = SourceCatalog.GOTAKU_INDEX
             )
         }.distinctBy { it.id }

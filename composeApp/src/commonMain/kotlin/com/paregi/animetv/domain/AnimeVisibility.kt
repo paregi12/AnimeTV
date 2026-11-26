@@ -1,8 +1,6 @@
 package com.paregi.animetv.domain
 
-internal fun Anime.allowedForRating(rating: Int): Boolean = rating >= 4 ||
-    (!adult && !title.contains("censor", ignoreCase = true) &&
-        originalTitle?.contains("censor", ignoreCase = true) != true)
+internal fun Anime.allowedForRating(rating: Int): Boolean = isAllowedForParentalRating(rating)
 
 internal fun HomeFeed.filteredForRating(rating: Int): HomeFeed = copy(
     featured = featured.filter { it.allowedForRating(rating) },

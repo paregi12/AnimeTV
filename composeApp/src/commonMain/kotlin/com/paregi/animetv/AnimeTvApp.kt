@@ -113,6 +113,8 @@ import com.paregi.animetv.domain.SearchHistoryRepository
 import com.paregi.animetv.domain.SettingsRepository
 import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.SubtitleTrack
+import com.paregi.animetv.domain.isAllowedForParentalRating
+import com.paregi.animetv.domain.normalizeAgeRating
 import com.paregi.animetv.domain.TranslationRepository
 import com.paregi.animetv.domain.TvIntegrationRepository
 import com.paregi.animetv.domain.TvLaunchRequest
@@ -210,6 +212,7 @@ fun AnimeTvApp(
     var myListLayoutDialogOpen by remember { mutableStateOf(false) }
     var clearHistoryStage by remember { mutableIntStateOf(0) }
     var settingsReady by remember { mutableStateOf(false) }
+    var pendingTvWatchNextSource by remember { mutableStateOf<Int?>(null) }
     var homeFeed by remember { mutableStateOf(HomeFeed()) }
     var watchlist by remember { mutableStateOf(emptyList<Anime>()) }
     var watchHistory by remember { mutableStateOf(emptyList<WatchProgress>()) }
@@ -380,6 +383,7 @@ fun AnimeTvApp(
         sidebarOpen = false
         sidebarExitArmed = false
         settingsReady = false
+        pendingTvWatchNextSource = null
         settingsOpen = false
         settingsReloadPending = false
         pendingSearchFilter = null
@@ -443,9 +447,7 @@ fun AnimeTvApp(
     }
 
     fun isAnimeRestricted(anime: Anime): Boolean =
-        activeProfile?.parentalRating?.let { it < 4 } == true &&
-            (anime.adult || anime.title.contains("censor", ignoreCase = true) ||
-                anime.originalTitle?.contains("censor", ignoreCase = true) == true)
+        !anime.isAllowedForParentalRating(activeProfile?.parentalRating ?: 6)
 
     suspend fun translateSynopsisCached(synopsis: String?, language: String): String? {
         if (synopsis.isNullOrBlank() || language.isBlank() ||
@@ -562,8 +564,14 @@ fun AnimeTvApp(
         }
         settingsReady = false
         val stored = runCatching { settingsRepository.readSettings() }.getOrDefault(AppSettings())
-        val availableSource = animeRepository.selectSource(stored.selectedSource, stored.sourceDomains[stored.selectedSource])
-        appSettings = stored.copy(selectedSource = availableSource)
+        val watchNextSource = pendingTvWatchNextSource?.also { pendingTvWatchNextSource = null }
+        val desiredSource = watchNextSource ?: stored.selectedSource
+        val availableSource = animeRepository.selectSource(desiredSource, stored.sourceDomains[desiredSource])
+        val resolvedSettings = stored.copy(selectedSource = availableSource)
+        if (watchNextSource != null && resolvedSettings.selectedSource != stored.selectedSource) {
+            runCatching { settingsRepository.updateSettings(resolvedSettings) }
+        }
+        appSettings = resolvedSettings
         myListLayout = runCatching { settingsRepository.readMyListLayout() }
             .getOrDefault(MyListLayout.default())
         homeLayout = runCatching { settingsRepository.readHomeLayout() }
@@ -958,7 +966,7 @@ fun AnimeTvApp(
         coroutineScope.launch { runCatching { searchHistoryRepository.record(term) } }
     }
 
-    val openAnime: (Anime, String?) -> Unit = { anime, resumeId ->
+    fun openAnime(anime: Anime, resumeId: String?, allowSourceSwitch: Boolean = false) {
         if (isAnimeRestricted(anime)) {
             showToast("PARENTAL: Opening anime is not allowed...")
         } else {
@@ -980,16 +988,28 @@ fun AnimeTvApp(
             animeDetails = null
             detailsLoading = true
             translatedSynopsis = null
-            retainedDetailAnime = anime
-            retainedAnimeDetails = null
-            retainedSynopsis = anime.synopsis
-            resumeEpisodeId = resumeId
-            if (anime.sourceIndex != appSettings.selectedSource) {
-                val updated = appSettings.copy(selectedSource = anime.sourceIndex)
-                appSettings = updated
-                onSettingsChange(updated)
+            val targetSource = if (allowSourceSwitch) {
+                SourceCatalog.find(anime.sourceIndex)?.index
+            } else null
+            if (targetSource != null) {
+                if (!settingsReady) {
+                    pendingTvWatchNextSource = targetSource
+                } else if (targetSource != appSettings.selectedSource) {
+                    val updated = appSettings.copy(selectedSource = targetSource)
+                    appSettings = updated
+                    onSettingsChange(updated)
+                }
             }
-            selectedAnime = anime
+            val effectiveAnime = when {
+                targetSource != null -> anime.copy(sourceIndex = targetSource)
+                settingsReady -> anime.copy(sourceIndex = appSettings.selectedSource)
+                else -> anime
+            }
+            retainedDetailAnime = effectiveAnime
+            retainedAnimeDetails = null
+            retainedSynopsis = effectiveAnime.synopsis
+            resumeEpisodeId = resumeId
+            selectedAnime = effectiveAnime
         }
     }
 
@@ -999,9 +1019,10 @@ fun AnimeTvApp(
             return
         }
         closePlayerPreview()
-        playerPreviewSynopsis = anime.synopsis
+        val effectiveAnime = if (settingsReady) anime.copy(sourceIndex = appSettings.selectedSource) else anime
+        playerPreviewSynopsis = effectiveAnime.synopsis
         playerPreviewLoading = true
-        playerPreviewAnime = anime
+        playerPreviewAnime = effectiveAnime
     }
 
     fun saveActiveContinueWatching() {
@@ -1111,7 +1132,11 @@ fun AnimeTvApp(
 
     val currentTvLaunchHandler = rememberUpdatedState<(TvLaunchRequest) -> Unit> { request ->
         playbackStartOverride = null
-        openAnime(request.anime, request.episodeId)
+        openAnime(
+            request.anime,
+            request.episodeId,
+            allowSourceSwitch = !request.episodeId.isNullOrBlank()
+        )
         tvResumePosition = request.episodeId?.let { it to request.positionMs }
     }
     DisposableEffect(tvIntegrationRepository, activeProfile?.prefix) {
@@ -1317,12 +1342,18 @@ fun AnimeTvApp(
                                 val activeEpisode = selectedEpisode
                                 val activeAnime = selectedAnime
                                 val profileRating = activeProfile?.parentalRating ?: 6
+                                val selectedSource = appSettings.selectedSource
+                                val sourceWatchlist = watchlist.filter { it.sourceIndex == selectedSource }
+                                val sourceHistory = watchHistory.filter {
+                                    (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) == selectedSource
+                                }
                                 val homeWithHistory = homeFeed.copy(
-                                    continueWatching = (watchHistory.sortedByDescending { it.updatedAtEpochMs }
-                                        .mapNotNull { it.anime } + homeFeed.continueWatching).distinctBy { it.id }
+                                    continueWatching = (sourceHistory.sortedByDescending { it.updatedAtEpochMs }
+                                        .mapNotNull { it.anime } + homeFeed.continueWatching.filter { it.sourceIndex == selectedSource })
+                                        .distinctBy { it.id to it.sourceIndex }
                                 ).filteredForRating(profileRating)
-                                val visibleWatchlist = watchlist.filter { it.allowedForRating(profileRating) }
-                                val visibleHistory = watchHistory.sortedByDescending { it.updatedAtEpochMs }
+                                val visibleWatchlist = sourceWatchlist.filter { it.allowedForRating(profileRating) }
+                                val visibleHistory = sourceHistory.sortedByDescending { it.updatedAtEpochMs }
                                     .filter { it.anime?.allowedForRating(profileRating) == true }
                                     .distinctBy { it.animeId }
                                 val visibleSchedule = schedule.filter { it.anime.allowedForRating(profileRating) }
@@ -1372,9 +1403,13 @@ fun AnimeTvApp(
                                             } ?: activeAnime?.genres.orEmpty()
                                             val playerFormat = playerDetailsAnime?.format ?: activeAnime?.format
                                             val playerQuality = playerDetailsAnime?.status ?: activeAnime?.status
-                                            val playerRating = playerDetailsAnime?.rating ?: activeAnime?.rating
+                                            val playerRating = normalizeAgeRating(playerDetailsAnime?.rating)
+                                                ?: normalizeAgeRating(activeAnime?.rating)
+                                                ?: if (playerDetailsAnime?.adult == true || activeAnime?.adult == true) {
+                                                    "R+"
+                                                } else null
                                             val inWatchlistNow = activeAnime != null &&
-                                                watchlist.any { it.id == activeAnime.id }
+                                                sourceWatchlist.any { it.id == activeAnime.id }
                                             val isTrackedNow =
                                                 animeTracking.aniList.isTracked || animeTracking.mal.isTracked
                                             val playerSubLabel = if (activeAnime?.sourceIndex == SourceCatalog.REANIME_INDEX) {
@@ -1382,12 +1417,13 @@ fun AnimeTvApp(
                                             } else "Hardsub"
                                             val onPlayerToggleWatchlist: () -> Unit = {
                                                 activeAnime?.let { anime ->
-                                                    val currentlySaved = watchlist.any { it.id == anime.id }
+                                                    val targetAnime = anime.copy(sourceIndex = selectedSource)
+                                                    val currentlySaved = sourceWatchlist.any { it.id == targetAnime.id }
                                                     coroutineScope.launch {
                                                         if (currentlySaved) {
-                                                            libraryRepository.removeFromWatchlist(anime.id)
+                                                            libraryRepository.removeFromWatchlist(targetAnime.id, selectedSource)
                                                         } else {
-                                                            libraryRepository.addToWatchlist(anime)
+                                                            libraryRepository.addToWatchlist(targetAnime)
                                                         }
                                                         watchlist = libraryRepository.loadWatchlist()
                                                     }
@@ -1495,7 +1531,11 @@ fun AnimeTvApp(
                                                     startPositionMs = playbackPositionMs
                                                         ?: playbackStartOverride?.takeIf { it.first == activeEpisode.id }?.second
                                                         ?: tvResumePosition?.takeIf { it.first == activeEpisode.id }?.second
-                                                        ?: watchHistory.firstOrNull { it.episodeId == activeEpisode.id }?.positionMs
+                                                        ?: sourceHistory.sortedByDescending { it.updatedAtEpochMs }
+                                                            .firstOrNull {
+                                                                it.episodeId == activeEpisode.id &&
+                                                                    (activeAnime == null || it.animeId == activeAnime.id)
+                                                            }?.positionMs
                                                         ?: 0L,
                                                     seekSeconds = appSettings.seekSeconds,
                                                     videoScale = appSettings.videoScale,
@@ -1511,6 +1551,7 @@ fun AnimeTvApp(
                                                         playbackPositionMs = position
                                                         playbackDurationMs = duration
                                                         activeAnime?.let { anime ->
+                                                            val savedAnime = anime.copy(sourceIndex = selectedSource)
                                                             val episodeNumber = activeEpisode.number.toIntOrNull()
                                                                 ?: activeEpisode.number.toDoubleOrNull()?.toInt()
                                                             val progressPercent = if (duration > 0) {
@@ -1520,14 +1561,14 @@ fun AnimeTvApp(
                                                             if (episodeNumber != null && progressPercent >= trackingThreshold) {
                                                                 coroutineScope.launch {
                                                                     accountRepository.updateTrackedProgress(
-                                                                        anime,
+                                                                        savedAnime,
                                                                         episodeNumber
                                                                     )
                                                                 }
                                                             }
                                                             coroutineScope.launch {
                                                                 tvIntegrationRepository.updateContinueWatching(
-                                                                    anime,
+                                                                    savedAnime,
                                                                     activeEpisode,
                                                                     position,
                                                                     duration
@@ -1558,19 +1599,20 @@ fun AnimeTvApp(
                                                             coroutineScope.launch {
                                                                 libraryRepository.saveProgress(
                                                                     WatchProgress(
-                                                                        animeId = anime.id,
+                                                                        animeId = savedAnime.id,
                                                                         episodeId = activeEpisode.id,
                                                                         positionMs = position,
                                                                         durationMs = duration,
                                                                         updatedAtEpochMs = 0,
-                                                                        anime = anime
+                                                                        anime = savedAnime
                                                                     )
                                                                 )
-                                                                if (homeFeed.continueWatching.firstOrNull()?.id != anime.id) {
+                                                                val topContinue = homeFeed.continueWatching.firstOrNull()
+                                                                if (topContinue?.id != savedAnime.id || topContinue.sourceIndex != savedAnime.sourceIndex) {
                                                                     watchHistory = libraryRepository.loadHistory()
                                                                     homeFeed = homeFeed.copy(
-                                                                        continueWatching = (listOf(anime) +
-                                                                            homeFeed.continueWatching).distinctBy { it.id }
+                                                                        continueWatching = (listOf(savedAnime) +
+                                                                            homeFeed.continueWatching).distinctBy { it.id to it.sourceIndex }
                                                                     )
                                                                 }
                                                             }
@@ -1805,7 +1847,7 @@ fun AnimeTvApp(
                                                     scheduleLoading = scheduleLoading,
                                                     onRemoveFromWatchlist = { anime ->
                                                         coroutineScope.launch {
-                                                            libraryRepository.removeFromWatchlist(anime.id)
+                                                            libraryRepository.removeFromWatchlist(anime.id, anime.sourceIndex)
                                                             watchlist = libraryRepository.loadWatchlist()
                                                         }
                                                     },
@@ -1825,7 +1867,8 @@ fun AnimeTvApp(
                                                     onContinueWatching = { anime ->
                                                         openAnime(
                                                             anime,
-                                                            watchHistory.firstOrNull { it.animeId == anime.id }?.episodeId
+                                                            sourceHistory.sortedByDescending { it.updatedAtEpochMs }
+                                                                .firstOrNull { it.animeId == anime.id }?.episodeId
                                                         )
                                                     },
                                                     onScrollOffsetChange = { offset ->
@@ -1924,12 +1967,12 @@ fun AnimeTvApp(
                                                             retry
                                                         )
                                                     },
-                                                    watchProgress = watchHistory.filter {
+                                                    watchProgress = sourceHistory.filter {
                                                         it.animeId == detailAnime.id
                                                     }.maxByOrNull { it.updatedAtEpochMs },
-                                                    inHistory = watchHistory.any { it.animeId == detailAnime.id },
+                                                    inHistory = sourceHistory.any { it.animeId == detailAnime.id },
                                                     skipFiller = appSettings.skipFiller,
-                                                    inWatchlist = watchlist.any { it.id == detailAnime.id },
+                                                    inWatchlist = sourceWatchlist.any { it.id == detailAnime.id },
                                                     tracking = animeTracking,
                                                     trackingLoading = trackingLoading,
                                                     trackingBusy = trackingBusy,
@@ -1960,22 +2003,23 @@ fun AnimeTvApp(
                                                         settingsOpen = true
                                                     },
                                                     onWatchlistChange = { shouldSave ->
+                                                        val targetAnime = detailAnime.copy(sourceIndex = selectedSource)
                                                         coroutineScope.launch {
                                                             if (shouldSave) {
-                                                                libraryRepository.addToWatchlist(detailAnime)
+                                                                libraryRepository.addToWatchlist(targetAnime)
                                                             } else {
-                                                                libraryRepository.removeFromWatchlist(detailAnime.id)
+                                                                libraryRepository.removeFromWatchlist(targetAnime.id, selectedSource)
                                                             }
                                                             watchlist = libraryRepository.loadWatchlist()
                                                         }
                                                     },
                                                     onHistoryChange = { shouldKeep ->
                                                         if (!shouldKeep) coroutineScope.launch {
-                                                            libraryRepository.removeAnimeHistory(detailAnime.id)
+                                                            libraryRepository.removeAnimeHistory(detailAnime.id, selectedSource)
                                                             watchHistory = libraryRepository.loadHistory()
                                                             homeFeed = homeFeed.copy(
                                                                 continueWatching = homeFeed.continueWatching.filterNot {
-                                                                    it.id == detailAnime.id
+                                                                    it.id == detailAnime.id && it.sourceIndex == selectedSource
                                                                 }
                                                             )
                                                         }
@@ -2050,14 +2094,14 @@ fun AnimeTvApp(
                                                                 retry
                                                             )
                                                         },
-                                                        watchProgress = watchHistory.filter {
+                                                        watchProgress = sourceHistory.filter {
                                                             it.animeId == detailTarget.id || it.animeId == previewAnime.id
                                                         }.maxByOrNull { it.updatedAtEpochMs },
-                                                        inHistory = watchHistory.any {
+                                                        inHistory = sourceHistory.any {
                                                             it.animeId == detailTarget.id || it.animeId == previewAnime.id
                                                         },
                                                         skipFiller = appSettings.skipFiller,
-                                                        inWatchlist = watchlist.any {
+                                                        inWatchlist = sourceWatchlist.any {
                                                             it.id == detailTarget.id || it.id == previewAnime.id
                                                         },
                                                         tracking = playerPreviewTracking,
@@ -2093,22 +2137,30 @@ fun AnimeTvApp(
                                                             settingsOpen = true
                                                         },
                                                         onWatchlistChange = { shouldSave ->
+                                                            val targetAnime = detailTarget.copy(sourceIndex = selectedSource)
                                                             coroutineScope.launch {
                                                                 if (shouldSave) {
-                                                                    libraryRepository.addToWatchlist(detailTarget)
+                                                                    libraryRepository.addToWatchlist(targetAnime)
                                                                 } else {
-                                                                    libraryRepository.removeFromWatchlist(detailTarget.id)
+                                                                    libraryRepository.removeFromWatchlist(detailTarget.id, selectedSource)
+                                                                    if (previewAnime.id != detailTarget.id) {
+                                                                        libraryRepository.removeFromWatchlist(previewAnime.id, selectedSource)
+                                                                    }
                                                                 }
                                                                 watchlist = libraryRepository.loadWatchlist()
                                                             }
                                                         },
                                                         onHistoryChange = { shouldKeep ->
                                                             if (!shouldKeep) coroutineScope.launch {
-                                                                libraryRepository.removeAnimeHistory(detailTarget.id)
+                                                                libraryRepository.removeAnimeHistory(detailTarget.id, selectedSource)
+                                                                if (previewAnime.id != detailTarget.id) {
+                                                                    libraryRepository.removeAnimeHistory(previewAnime.id, selectedSource)
+                                                                }
                                                                 watchHistory = libraryRepository.loadHistory()
                                                                 homeFeed = homeFeed.copy(
                                                                     continueWatching = homeFeed.continueWatching.filterNot {
-                                                                        it.id == detailTarget.id
+                                                                        (it.id == detailTarget.id || it.id == previewAnime.id) &&
+                                                                            it.sourceIndex == selectedSource
                                                                     }
                                                                 )
                                                             }
@@ -2573,15 +2625,19 @@ fun AnimeTvApp(
                                     ConfirmDialog(
                                         title = "Confirm Watch History",
                                         titleIcon = IconGlyphs.Warning,
-                                        message = "<h6>WARNING!!!</h6>You Have <b>${watchHistory.size}</b> anime in your watch history.<br><b>Clear it now?</b>",
+                                        message = "<h6>WARNING!!!</h6>You Have <b>${visibleHistory.size}</b> anime in your watch history.<br><b>Clear it now?</b>",
                                         yesLabel = "YES",
                                         noLabel = "NO",
                                         onConfirm = {
                                             clearHistoryStage = 0
                                             coroutineScope.launch {
-                                                libraryRepository.clearHistory()
-                                                watchHistory = emptyList()
-                                                homeFeed = homeFeed.copy(continueWatching = emptyList())
+                                                libraryRepository.clearHistory(selectedSource)
+                                                watchHistory = libraryRepository.loadHistory()
+                                                homeFeed = homeFeed.copy(
+                                                    continueWatching = homeFeed.continueWatching.filterNot {
+                                                        it.sourceIndex == selectedSource
+                                                    }
+                                                )
                                                 tvIntegrationRepository.clearContinueWatching()
                                             }
                                         },

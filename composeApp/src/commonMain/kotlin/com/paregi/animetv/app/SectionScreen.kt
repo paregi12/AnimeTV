@@ -66,7 +66,8 @@ internal fun SectionScreen(
                     onRemoveFromWatchlist = onRemoveFromWatchlist,
                     onHistorySelected = onHistorySelected,
                     onClearWatchHistory = onClearWatchHistory,
-                    onScrollOffsetChange = onScrollOffsetChange
+                    onScrollOffsetChange = onScrollOffsetChange,
+                    selectedSource = settings.selectedSource
                 )
             } else {
                 HomeScreen(
@@ -80,7 +81,8 @@ internal fun SectionScreen(
                     homeLayout = homeLayout,
                     onScrollOffsetChange = onScrollOffsetChange,
                     onRefreshRequested = onRefreshHome,
-                    onAboutFooterClick = onAboutFooterClick
+                    onAboutFooterClick = onAboutFooterClick,
+                    sourceName = SourceCatalog.find(settings.selectedSource)?.displayName ?: "Gotaku"
                 )
             }
         }
@@ -110,7 +112,8 @@ internal fun SectionScreen(
             onRemoveFromWatchlist = onRemoveFromWatchlist,
             onHistorySelected = onHistorySelected,
             onClearWatchHistory = onClearWatchHistory,
-            onScrollOffsetChange = onScrollOffsetChange
+            onScrollOffsetChange = onScrollOffsetChange,
+            selectedSource = settings.selectedSource
         )
         Section.Schedule -> ScheduleScreen(
             schedule,

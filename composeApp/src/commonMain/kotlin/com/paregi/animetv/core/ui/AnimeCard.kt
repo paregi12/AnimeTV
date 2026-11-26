@@ -431,6 +431,10 @@ internal fun FocusCard(
     }
 }
 
+private fun adultBadgeText(rating: String?): String = rating?.takeIf {
+    it.equals("Rx", ignoreCase = true) || it.equals("R+", ignoreCase = true)
+} ?: "R+"
+
 private fun buildTopBadgeSegments(
     badges: CardBadgeData,
     posterCornerLabel: String?,
@@ -453,7 +457,7 @@ private fun buildTopBadgeSegments(
         if ((useScheduleBadges || isAniListCard) && badges.isAdult) {
             add(
                 BadgeSegment(
-                    text = "R+",
+                    text = adultBadgeText(badges.rating),
                     background = Color(0xFF880000),
                     textColor = if (glassMode) Color(0xFFEF4444) else Color.White
                 )
@@ -554,7 +558,7 @@ private fun buildBottomBadgeSegments(
         if (badges.isAdult) {
             add(
                 BadgeSegment(
-                    text = "R+",
+                    text = adultBadgeText(badges.rating),
                     background = Color(0xFF880000),
                     textColor = if (glassMode) Color(0xFFEF4444) else Color.White
                 )

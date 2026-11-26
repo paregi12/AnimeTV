@@ -1,6 +1,8 @@
 package com.paregi.animetv.core.ui
 
 import com.paregi.animetv.domain.Anime
+import com.paregi.animetv.domain.isAdultAgeRating
+import com.paregi.animetv.domain.normalizeAgeRating
 import kotlin.math.roundToInt
 
 internal fun imageCdnUrl(url: String?, enabled: Boolean): String? {
@@ -94,6 +96,8 @@ internal fun resolveCardBadges(
     val nextAiredEp = anime.nextAiringEpisode?.let { it - 1 }?.takeIf { it > 0 }
     val watchedNum = progressEpisode?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() } ?: 0
     val hasNextAired = nextAiredEp != null && watchedNum < nextAiredEp
+    val normalizedRating = normalizeAgeRating(anime.rating)
+    val isAdult = anime.adult || isAdultAgeRating(normalizedRating)
 
     return if (isSource) {
         val haveEpCount = (if (anime.latestSubEpisode > 0) 1 else 0) + (if (anime.latestDubEpisode > 0) 1 else 0)
@@ -103,8 +107,8 @@ internal fun resolveCardBadges(
             dubEpisode = anime.latestDubEpisode.takeIf { it > 0 },
             totalEpisodes = anime.episodeCount,
             airedEpisode = if (haveEpCount == 0 && (anime.episodeCount ?: 0) > 0) anime.episodeCount else null,
-            isAdult = anime.adult,
-            rating = anime.rating?.takeIf { !anime.adult },
+            isAdult = isAdult,
+            rating = normalizedRating,
             score = scorePercent,
             scoreFormatted = scoreFormatted,
             duration = durationFormatted,
@@ -127,8 +131,8 @@ internal fun resolveCardBadges(
             format = normFormat,
             totalEpisodes = totalEpisodes,
             airedEpisode = airedEpisode,
-            isAdult = anime.adult,
-            rating = anime.rating?.takeIf { !anime.adult },
+            isAdult = isAdult,
+            rating = normalizedRating,
             score = scorePercent,
             scoreFormatted = scoreFormatted,
             duration = durationFormatted,

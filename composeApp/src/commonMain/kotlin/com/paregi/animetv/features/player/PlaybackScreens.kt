@@ -13,6 +13,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -65,6 +66,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -147,6 +149,7 @@ import com.paregi.animetv.domain.SkipRange
 import com.paregi.animetv.domain.SubtitleLanguageCatalog
 import com.paregi.animetv.domain.SubtitleStyleCatalog
 import com.paregi.animetv.domain.SubtitleTrack
+import com.paregi.animetv.domain.normalizeAgeRating
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformSubtitleFontFamily
@@ -1212,6 +1215,7 @@ internal fun PlaybackOsdContent(
 
                             val dragAmount = change.position - currentPos
                             currentPos = change.position
+                            var justStartedDrag = false
 
                             if (!isDrag) {
                                 val totalDx = abs(change.position.x - downX)
@@ -1219,12 +1223,13 @@ internal fun PlaybackOsdContent(
                                 val touchSlop = viewConfiguration.touchSlop
                                 if (totalDx > touchSlop || totalDy > touchSlop) {
                                     isDrag = true
+                                    justStartedDrag = true
                                     pendingTapJob?.cancel()
                                     pendingTapJob = null
                                     mode = when {
                                         totalDx > totalDy && !currentOsdVisible && !disableTouchGestures && !hasError -> 1
-                                        totalDy > totalDx && !currentOsdVisible && !disableTouchGestures && downX < size.width * 0.2f -> 2
-                                        totalDy > totalDx && !currentOsdVisible && !disableTouchGestures && downX > size.width * 0.8f -> 3
+                                        totalDy > totalDx && !currentOsdVisible && !disableTouchGestures && !hasError && downX < size.width * 0.2f -> 2
+                                        totalDy > totalDx && !currentOsdVisible && !disableTouchGestures && !hasError && downX > size.width * 0.8f -> 3
                                         totalDy > totalDx && currentOsdVisible -> 4
                                         totalDy > totalDx && !currentOsdVisible && !hasError -> 5
                                         else -> 0
@@ -1236,7 +1241,7 @@ internal fun PlaybackOsdContent(
                                 change.consume()
                                 when (mode) {
                                     1 -> {
-                                        horizontalCarry += dragAmount.x
+                                        horizontalCarry += if (justStartedDrag) (change.position.x - downX) else dragAmount.x
                                         while (nextSeekThreshold > 0f && abs(horizontalCarry) >= nextSeekThreshold) {
                                             val direction = if (horizontalCarry > 0f) 1 else -1
                                             horizontalCarry -= direction * nextSeekThreshold
@@ -1245,16 +1250,17 @@ internal fun PlaybackOsdContent(
                                         }
                                     }
                                     2, 3 -> {
-                                        verticalCarry += dragAmount.y
+                                        verticalCarry += if (justStartedDrag) (change.position.y - downY) else dragAmount.y
                                         while (nextLevelThreshold > 0f && abs(verticalCarry) >= nextLevelThreshold) {
-                                            val direction = if (verticalCarry < 0f) 1 else -1
-                                            verticalCarry -= direction * nextLevelThreshold
+                                            val carrySign = if (verticalCarry > 0f) 1 else -1
+                                            verticalCarry -= carrySign * nextLevelThreshold
                                             nextLevelThreshold = size.width * 0.01f
+                                            val direction = -carrySign
                                             if (mode == 2) currentAdjustBrightness(direction) else currentAdjustVolume(direction)
                                         }
                                     }
                                     4 -> {
-                                        verticalCarry += dragAmount.y
+                                        verticalCarry += if (justStartedDrag) (change.position.y - downY) else dragAmount.y
                                         val stepPx = size.width * 0.07f
                                         if (stepPx > 0f && abs(verticalCarry) >= stepPx) {
                                             val delta = if (verticalCarry < 0f) 1 else -1
@@ -1263,7 +1269,7 @@ internal fun PlaybackOsdContent(
                                         }
                                     }
                                     5 -> {
-                                        verticalCarry += dragAmount.y
+                                        verticalCarry += if (justStartedDrag) (change.position.y - downY) else dragAmount.y
                                         val stepPx = size.width * 0.07f
                                         if (stepPx > 0f && abs(verticalCarry) >= stepPx) {
                                             val openingTracks = verticalCarry < 0f
@@ -1636,18 +1642,27 @@ internal fun PlaybackOsdContent(
         }
 
         // #pb_osd: Top-center floating HUD for seek, volume, and brightness.
+        var lastOsdForFade by remember { mutableStateOf<PlayerOsdHudState?>(null) }
+        if (osdHudState != null) {
+            lastOsdForFade = osdHudState
+        }
         val osdSlidePx = with(density) { (tokens.vw * 2f).roundToPx() }
         AnimatedVisibility(
             visible = osdHudState != null,
-            enter = fadeIn(tween(tokens.tim3s, easing = tokens.easing)) +
-                scaleIn(initialScale = 0.9f, animationSpec = tween(tokens.tim3s, easing = tokens.easing)) +
-                slideInVertically(tween(tokens.tim3s, easing = tokens.easing)) { -osdSlidePx },
-            exit = fadeOut(tween(tokens.tim3s, easing = tokens.easing)) +
-                scaleOut(targetScale = 0.9f, animationSpec = tween(tokens.tim3s, easing = tokens.easing)) +
-                slideOutVertically(tween(tokens.tim3s, easing = tokens.easing)) { -osdSlidePx },
+            enter = if (tokens.tim3s == 0) EnterTransition.None else {
+                fadeIn(tween(tokens.tim3s, easing = tokens.easing)) +
+                    scaleIn(initialScale = 0.9f, animationSpec = tween(tokens.tim3s, easing = tokens.easing)) +
+                    slideInVertically(tween(tokens.tim3s, easing = tokens.easing)) { -osdSlidePx }
+            },
+            exit = if (tokens.tim3s == 0) ExitTransition.None else {
+                fadeOut(tween(tokens.tim3s, easing = tokens.easing)) +
+                    scaleOut(targetScale = 0.9f, animationSpec = tween(tokens.tim3s, easing = tokens.easing)) +
+                    slideOutVertically(tween(tokens.tim3s, easing = tokens.easing)) { -osdSlidePx }
+            },
             modifier = Modifier.align(Alignment.TopCenter).padding(top = tokens.vw * 3f)
         ) {
-            osdHudState?.let { osd ->
+            val osd = osdHudState ?: lastOsdForFade
+            if (osd != null) {
                 Column(
                     modifier = Modifier
                         .clip(RoundedCornerShape(tokens.vw * 1f))
@@ -1687,11 +1702,21 @@ internal fun PlaybackOsdContent(
                                 .height(tokens.vw * 1f)
                                 .clip(RoundedCornerShape(tokens.vw * 1f))
                         ) {
-                            val animatedWidth by animateFloatAsState(
-                                targetValue = (osd.progressPercent / 100f).coerceIn(0f, 1f),
-                                animationSpec = tween(durationMillis = tokens.tim5s, easing = tokens.easing),
-                                label = "pb-osd-progress"
-                            )
+                            val osdCategory = when (osd.text) {
+                                "Brightness" -> "brightness"
+                                "Volume" -> "volume"
+                                else -> "other"
+                            }
+                            val animatedWidth by key(osdCategory) {
+                                animateFloatAsState(
+                                    targetValue = (osd.progressPercent / 100f).coerceIn(0f, 1f),
+                                    animationSpec = if (tokens.tim1s == 0) snap() else tween(
+                                        durationMillis = tokens.tim1s,
+                                        easing = tokens.easing
+                                    ),
+                                    label = "pb-osd-progress"
+                                )
+                            }
                             Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
@@ -1940,7 +1965,9 @@ private fun PlaybackMetaLayer(
             val infoPills = buildList {
                 metadataFormat?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
                 metadataQuality?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
-                metadataRating?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) }
+                metadataRating?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
+                    add(normalizeAgeRating(raw) ?: raw.uppercase())
+                }
                 if (seasonsCount > 0) add("$seasonsCount SEASONS")
                 if (episodesCount > 1) add("$episodesCount EPISODES")
             }

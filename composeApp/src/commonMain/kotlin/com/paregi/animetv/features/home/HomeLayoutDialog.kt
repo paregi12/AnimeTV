@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import com.paregi.animetv.core.ui.ListOrderDialog
 import com.paregi.animetv.core.ui.ListOrderItem
 import com.paregi.animetv.core.ui.ListOrderMode
+import com.paregi.animetv.domain.DEFAULT_HOME_SECTIONS
 import com.paregi.animetv.domain.HOME_SECTION_IDS
 import com.paregi.animetv.domain.HomeLayout
 import com.paregi.animetv.domain.HomeSectionPreference
@@ -37,10 +38,12 @@ internal fun HomeLayoutDialog(
 ) {
     val resolvedSource = sourceName.ifBlank { "Gotaku" }
     val fullSections = remember(layout) {
-        val base = layout.sections.filter { it.id in HOME_SECTION_IDS }
+        val base = layout.sections.map {
+            if (it.id == "top") it.copy(id = "popular") else it
+        }.filter { it.id in HOME_SECTION_IDS }.distinctBy { it.id }
         val existingIds = base.map { it.id }.toSet()
         val missing = HOME_SECTION_IDS.filterNot { it in existingIds }
-            .map { HomeSectionPreference(it, enabled = false) }
+            .map { HomeSectionPreference(it, enabled = it in DEFAULT_HOME_SECTIONS) }
         base + missing
     }
     var latestSections by remember(fullSections) { mutableStateOf(fullSections) }

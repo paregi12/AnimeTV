@@ -4,6 +4,8 @@ import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.SubtitleTrack
+import com.paregi.animetv.domain.isAdultAgeRating
+import com.paregi.animetv.domain.normalizeAgeRating
 import com.paregi.animetv.source.shared.toSourceGenreList
 import com.paregi.animetv.source.shared.toSourceStringList
 import com.paregi.animetv.source.shared.toSubtitleLanguageTag
@@ -57,6 +59,7 @@ internal object ReAnimeSource {
             ?.replace(HTML_TAG_REGEX, "")
             ?.trim()
             ?.takeIf(String::isNotBlank)
+        val rating = normalizeAgeRating(json.optText("rating"))
         return Anime(
             id = id,
             title = name,
@@ -71,12 +74,13 @@ internal object ReAnimeSource {
             score = score,
             status = json.optText("status"),
             duration = json.optInt("duration").takeIf { it > 0 }?.let { "${it}MIN" },
-            rating = json.optText("rating"),
+            rating = rating,
             episodeCount = json.optInt("episodes").takeIf { it > 0 }
                 ?: json.optInt("subbed").takeIf { it > 0 }
                 ?: json.optInt("dubbed").takeIf { it > 0 },
             format = json.optText("format"),
-            adult = json.optBoolean("is_adult"),
+            // Re:ANIME search and home responses omit is_adult, so infer it for R+/Rx ratings.
+            adult = json.optBoolean("is_adult") || isAdultAgeRating(rating),
             latestSubEpisode = json.optInt("subbed"),
             latestDubEpisode = json.optInt("dubbed"),
             malId = json.optIdString("mal_id"),

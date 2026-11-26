@@ -58,11 +58,11 @@ internal class ReAnimeCatalogApi(
 
     override suspend fun fetchTitles(sort: String, page: Int, source: CatalogSource): List<Anime> {
         val safePage = page.coerceAtLeast(1)
-        if (sort == "latest_aired" || sort == "latest") {
+        val offset = (safePage - 1) * HOME_PAGE_SIZE
+        if (safePage == 1 && (sort == "latest_aired" || sort == "latest")) {
             val latest = try {
-                json(source.root + "/api/v1/home/latest-aired?limit=24", source)
-                    .optJSONArray("data")
-                    .toAnimeList()
+                val root = json(source.root + "/api/v1/home/latest-aired?limit=$HOME_PAGE_SIZE&lang=sub", source)
+                (root.optJSONArray("data") ?: root.optJSONArray("results")).toAnimeList()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -70,10 +70,30 @@ internal class ReAnimeCatalogApi(
             }
             if (latest.isNotEmpty()) return latest
         }
-        val effectiveSort = if (sort == "latest_aired" || sort == "latest") "popularity_desc" else sort
+        if (sort == "trending_day" || sort == "trending_today") {
+            val trending = try {
+                val url = Uri.parse(source.root + "/api/v1/top/anime").buildUpon()
+                    .appendQueryParameter("period", "today")
+                    .appendQueryParameter("limit", HOME_PAGE_SIZE.toString())
+                    .appendQueryParameter("offset", offset.toString())
+                    .build().toString()
+                val root = json(url, source)
+                (root.optJSONArray("data") ?: root.optJSONArray("results")).toAnimeList()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (trending.isNotEmpty()) return trending
+        }
+        val effectiveSort = when (sort) {
+            "latest_aired", "latest", "trending_day", "trending_today", "trending_week", "popular" -> "popularity_desc"
+            "top" -> "score_desc"
+            else -> sort
+        }
         val url = Uri.parse(source.root + "/api/v1/search").buildUpon()
-            .appendQueryParameter("limit", PAGE_SIZE.toString())
-            .appendQueryParameter("offset", ((safePage - 1) * PAGE_SIZE).toString())
+            .appendQueryParameter("limit", HOME_PAGE_SIZE.toString())
+            .appendQueryParameter("offset", ((safePage - 1) * HOME_PAGE_SIZE).toString())
             .appendQueryParameter("sort", effectiveSort)
             .build().toString()
         val root = json(url, source)
@@ -172,5 +192,6 @@ internal class ReAnimeCatalogApi(
 
     private companion object {
         const val PAGE_SIZE = 36
+        const val HOME_PAGE_SIZE = 28
     }
 }

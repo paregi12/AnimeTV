@@ -52,6 +52,7 @@ import com.paregi.animetv.domain.AccountRepository
 import com.paregi.animetv.domain.AccountState
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.MyListLayout
+import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.TrackedAnimeEntry
 import com.paregi.animetv.domain.WatchProgress
 import com.paregi.animetv.domain.allowedForRating
@@ -112,7 +113,8 @@ internal fun OriginalStyleMyListScreen(
     onRemoveFromWatchlist: (Anime) -> Unit,
     onHistorySelected: (WatchProgress) -> Unit,
     onClearWatchHistory: () -> Unit,
-    onScrollOffsetChange: (Dp) -> Unit = {}
+    onScrollOffsetChange: (Dp) -> Unit = {},
+    selectedSource: Int? = null
 ) {
     UnifiedMyListScreen(
         watchlist = watchlist,
@@ -126,7 +128,8 @@ internal fun OriginalStyleMyListScreen(
         onRemoveFromWatchlist = onRemoveFromWatchlist,
         onHistorySelected = onHistorySelected,
         onClearWatchHistory = onClearWatchHistory,
-        onScrollOffsetChange = onScrollOffsetChange
+        onScrollOffsetChange = onScrollOffsetChange,
+        selectedSource = selectedSource
     )
 }
 
@@ -143,7 +146,8 @@ internal fun AccountListsScreen(
     onRemoveFromWatchlist: (Anime) -> Unit,
     onHistorySelected: (WatchProgress) -> Unit,
     onClearWatchHistory: () -> Unit,
-    onScrollOffsetChange: (Dp) -> Unit = {}
+    onScrollOffsetChange: (Dp) -> Unit = {},
+    selectedSource: Int? = null
 ) {
     UnifiedMyListScreen(
         watchlist = watchlist,
@@ -157,7 +161,8 @@ internal fun AccountListsScreen(
         onRemoveFromWatchlist = onRemoveFromWatchlist,
         onHistorySelected = onHistorySelected,
         onClearWatchHistory = onClearWatchHistory,
-        onScrollOffsetChange = onScrollOffsetChange
+        onScrollOffsetChange = onScrollOffsetChange,
+        selectedSource = selectedSource
     )
 }
 
@@ -181,7 +186,8 @@ private fun UnifiedMyListScreen(
     onRemoveFromWatchlist: (Anime) -> Unit,
     onHistorySelected: (WatchProgress) -> Unit,
     onClearWatchHistory: () -> Unit,
-    onScrollOffsetChange: (Dp) -> Unit = {}
+    onScrollOffsetChange: (Dp) -> Unit = {},
+    selectedSource: Int? = null
 ) {
     @Suppress("UNUSED_VARIABLE")
     val unusedLayoutCb = onMyListLayoutChange
@@ -298,11 +304,23 @@ private fun UnifiedMyListScreen(
             onScrollOffsetChange(scrollOffsetDp)
         }
 
-        val visibleWatchlist = remember(watchlist, profileRating) {
-            watchlist.filter { it.allowedForRating(profileRating) }
+        val visibleWatchlist = remember(watchlist, profileRating, selectedSource) {
+            watchlist.filter {
+                (selectedSource == null || it.sourceIndex == selectedSource) &&
+                    it.allowedForRating(profileRating)
+            }
         }
-        val visibleHistory = remember(watchHistory, profileRating) {
-            watchHistory.filter { it.anime?.allowedForRating(profileRating) == true }
+        val visibleHistory = remember(watchHistory, profileRating, selectedSource) {
+            watchHistory
+                .sortedByDescending { it.updatedAtEpochMs }
+                .filter {
+                    (selectedSource == null || (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) == selectedSource) &&
+                        it.anime?.allowedForRating(profileRating) == true
+                }
+                .distinctBy { it.animeId to (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) }
+        }
+        val openAccountAnime: (Anime) -> Unit = { anime ->
+            onOpenAnime(selectedSource?.let { anime.copy(sourceIndex = it) } ?: anime)
         }
 
         LazyColumn(
@@ -349,7 +367,7 @@ private fun UnifiedMyListScreen(
                                     cardDims = cardDims,
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
-                                    onOpenAnime = onOpenAnime,
+                                    onOpenAnime = openAccountAnime,
                                     onNearEnd = { paginationTrigger = AccountProvider.MAL to malTabStatus }
                                 )
                             }
@@ -365,7 +383,7 @@ private fun UnifiedMyListScreen(
                                     cardDims = cardDims,
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
-                                    onOpenAnime = onOpenAnime,
+                                    onOpenAnime = openAccountAnime,
                                     onNearEnd = { paginationTrigger = AccountProvider.MAL to "watching" }
                                 )
                             }
@@ -381,7 +399,7 @@ private fun UnifiedMyListScreen(
                                     cardDims = cardDims,
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
-                                    onOpenAnime = onOpenAnime,
+                                    onOpenAnime = openAccountAnime,
                                     onNearEnd = { paginationTrigger = AccountProvider.MAL to "plan_to_watch" }
                                 )
                             }
@@ -400,7 +418,7 @@ private fun UnifiedMyListScreen(
                                     cardDims = cardDims,
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
-                                    onOpenAnime = onOpenAnime,
+                                    onOpenAnime = openAccountAnime,
                                     onNearEnd = { paginationTrigger = AccountProvider.ANILIST to aniListTabStatus }
                                 )
                             }
@@ -416,7 +434,7 @@ private fun UnifiedMyListScreen(
                                     cardDims = cardDims,
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
-                                    onOpenAnime = onOpenAnime,
+                                    onOpenAnime = openAccountAnime,
                                     onNearEnd = { paginationTrigger = AccountProvider.ANILIST to "CURRENT" }
                                 )
                             }
@@ -432,7 +450,7 @@ private fun UnifiedMyListScreen(
                                     cardDims = cardDims,
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
-                                    onOpenAnime = onOpenAnime,
+                                    onOpenAnime = openAccountAnime,
                                     onNearEnd = { paginationTrigger = AccountProvider.ANILIST to "PLANNING" }
                                 )
                             }
@@ -481,7 +499,7 @@ private fun UnifiedMyListScreen(
                     "<b>You want to continue?</b>"
             } else {
                 "<h6><c>warning</c> WARNING!!!</h6>" +
-                    "You Have <b>${watchHistory.size}</b> anime in your watch history.<br>" +
+                    "You Have <b>${visibleHistory.size}</b> anime in your watch history.<br>" +
                     "<b>Clear it now?</b>"
             },
             onConfirm = {
@@ -696,7 +714,7 @@ private fun LocalListShelf(
         rowState = rowState,
         maskEnabled = maskEnabled
     ) {
-        itemsIndexed(animes, key = { idx, it -> "fav:${idx}:${it.id}" }) { _, anime ->
+        itemsIndexed(animes, key = { idx, it -> "fav:${idx}:${it.sourceIndex}:${it.id}" }) { _, anime ->
             FocusCard(
                 anime = anime,
                 cardWidth = cardDims.cardWidth,
@@ -766,7 +784,7 @@ private fun HistoryListShelf(
             }
         } else null
     ) {
-        itemsIndexed(history, key = { idx, it -> "history:${idx}:${it.animeId}:${it.episodeId}" }) { _, progress ->
+        itemsIndexed(history, key = { idx, it -> "history:${idx}:${it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX}:${it.animeId}:${it.episodeId}" }) { _, progress ->
             val anime = progress.anime ?: return@itemsIndexed
             val pct = if (progress.durationMs > 0) {
                 (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)

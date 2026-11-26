@@ -78,6 +78,8 @@ import com.paregi.animetv.domain.AnimeDetails
 import com.paregi.animetv.domain.AnimeTrackingState
 import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.WatchProgress
+import com.paregi.animetv.domain.isAdultAgeRating
+import com.paregi.animetv.domain.normalizeAgeRating
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 import kotlinx.coroutines.delay
@@ -131,7 +133,13 @@ internal fun DetailsScreen(
     }
     val isLoading = loading || (details == null && fallbackLoading)
 
-    val detailAnime = details?.anime ?: anime
+    val detailAnime = details?.anime?.let { loaded ->
+        val mergedRating = normalizeAgeRating(loaded.rating) ?: normalizeAgeRating(anime.rating)
+        loaded.copy(
+            rating = mergedRating,
+            adult = loaded.adult || anime.adult || isAdultAgeRating(mergedRating)
+        )
+    } ?: anime
     val episodes = details?.episodes.orEmpty()
     val firstPlayableEpisode = episodes.firstOrNull { !skipFiller || !it.filler }
     val recordedResumeEpisode = watchProgress?.let { progress ->
@@ -441,9 +449,9 @@ internal fun DetailsScreen(
 private fun DetailPoster(anime: Anime, modifier: Modifier) {
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
-    val rawRating = anime.rating?.takeIf { it.isNotBlank() } ?: if (anime.adult) "R+" else null
-    val isAdult = anime.adult || rawRating?.equals("18+", ignoreCase = true) == true ||
-        rawRating?.equals("R+", ignoreCase = true) == true
+    val normalizedRating = normalizeAgeRating(anime.rating)
+    val displayRating = normalizedRating ?: if (anime.adult) "R+" else null
+    val isAdult = anime.adult || isAdultAgeRating(normalizedRating)
 
     Box(modifier.background(Color.Black)) {
         AsyncImage(
@@ -452,7 +460,7 @@ private fun DetailPoster(anime: Anime, modifier: Modifier) {
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
-        rawRating?.let { rating ->
+        displayRating?.let { rating ->
             Text(
                 text = rating,
                 color = Color.White,

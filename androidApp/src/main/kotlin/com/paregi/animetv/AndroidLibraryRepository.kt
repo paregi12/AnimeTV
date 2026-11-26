@@ -3,7 +3,10 @@ package com.paregi.animetv
 import android.content.Context
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.LibraryRepository
+import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.WatchProgress
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -11,80 +14,131 @@ import org.json.JSONObject
 class AndroidLibraryRepository(context: Context, private val namespace: ProfileNamespace) : LibraryRepository {
     private val preferences = context.applicationContext
         .getSharedPreferences("KMP_LIBRARY", Context.MODE_PRIVATE)
+    private val lock = Mutex()
 
-    override suspend fun loadWatchlist(): List<Anime> {
+    private data class StoredHistoryRecord(
+        val progress: WatchProgress,
+        val sourceIndex: Int
+    )
+
+    override suspend fun loadWatchlist(sourceIndex: Int?): List<Anime> {
+        val all = loadWatchlistInternal()
+        return if (sourceIndex == null) all else all.filter { it.sourceIndex == sourceIndex }
+    }
+
+    override suspend fun addToWatchlist(anime: Anime) {
+        lock.withLock {
+            val entries = loadWatchlistInternal().associateBy { it.id to it.sourceIndex }.toMutableMap()
+            entries[anime.id to anime.sourceIndex] = anime
+            saveWatchlistInternal(entries.values)
+        }
+    }
+
+    override suspend fun removeFromWatchlist(animeId: String, sourceIndex: Int) {
+        lock.withLock {
+            val remaining = loadWatchlistInternal().filterNot {
+                it.id == animeId && it.sourceIndex == sourceIndex
+            }
+            saveWatchlistInternal(remaining)
+        }
+    }
+
+    override suspend fun loadHistory(sourceIndex: Int?): List<WatchProgress> {
+        val records = loadHistoryRecords()
+        val filtered = if (sourceIndex == null) records else records.filter { it.sourceIndex == sourceIndex }
+        return filtered.map { it.progress }
+    }
+
+    override suspend fun saveProgress(progress: WatchProgress) {
+        lock.withLock {
+            val now = System.currentTimeMillis()
+            val targetSource = progress.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX
+            val updated = progress.copy(
+                updatedAtEpochMs = progress.updatedAtEpochMs.takeIf { it > 0L } ?: now
+            )
+            val records = loadHistoryRecords()
+                .filterNot {
+                    it.progress.animeId == updated.animeId &&
+                        it.progress.episodeId == updated.episodeId &&
+                        it.sourceIndex == targetSource
+                }
+                .toMutableList()
+            records.add(0, StoredHistoryRecord(updated, targetSource))
+            saveHistoryRecords(records.take(500))
+        }
+    }
+
+    override suspend fun removeAnimeHistory(animeId: String, sourceIndex: Int) {
+        lock.withLock {
+            val remaining = loadHistoryRecords().filterNot {
+                it.progress.animeId == animeId && it.sourceIndex == sourceIndex
+            }
+            saveHistoryRecords(remaining)
+        }
+    }
+
+    override suspend fun clearHistory(sourceIndex: Int?) {
+        lock.withLock {
+            if (sourceIndex == null) {
+                preferences.edit().putString(namespace.key(KEY_HISTORY), "[]").apply()
+            } else {
+                val remaining = loadHistoryRecords().filterNot { it.sourceIndex == sourceIndex }
+                saveHistoryRecords(remaining)
+            }
+        }
+    }
+
+    private fun loadWatchlistInternal(): List<Anime> {
         val data = runCatching {
             JSONArray(preferences.getString(namespace.key(KEY_WATCHLIST), "[]") ?: "[]")
         }.getOrDefault(JSONArray())
         return (0 until data.length()).mapNotNull { data.optJSONObject(it)?.toAnime() }
     }
 
-    override suspend fun addToWatchlist(anime: Anime) {
-        val entries = loadWatchlist().associateBy { it.id }.toMutableMap()
-        entries[anime.id] = anime
+    private fun saveWatchlistInternal(items: Collection<Anime>) {
         preferences.edit().putString(namespace.key(KEY_WATCHLIST), JSONArray().apply {
-            entries.values.forEach { put(it.toJson()) }
+            items.forEach { put(it.toJson()) }
         }.toString()).apply()
     }
 
-    override suspend fun removeFromWatchlist(animeId: String) {
-        val remaining = loadWatchlist().filterNot { it.id == animeId }
-        preferences.edit().putString(namespace.key(KEY_WATCHLIST), JSONArray().apply {
-            remaining.forEach { put(it.toJson()) }
-        }.toString()).apply()
-    }
-
-    override suspend fun loadHistory(): List<WatchProgress> {
+    private fun loadHistoryRecords(): List<StoredHistoryRecord> {
         val data = runCatching {
             JSONArray(preferences.getString(namespace.key(KEY_HISTORY), "[]") ?: "[]")
         }.getOrDefault(JSONArray())
         return (0 until data.length()).mapNotNull { i ->
             val item = data.optJSONObject(i) ?: return@mapNotNull null
-            WatchProgress(
-                animeId = item.optString("animeId"),
-                episodeId = item.optString("episodeId"),
-                positionMs = item.optLong("positionMs"),
-                durationMs = item.optLong("durationMs"),
-                updatedAtEpochMs = item.optLong("updatedAtEpochMs"),
-                anime = item.optJSONObject("anime")?.toAnime()
+            val topSource = item.optSourceIndex(SourceCatalog.GOTAKU_INDEX)
+            val anime = item.optJSONObject("anime")?.toAnime(defaultSourceIndex = topSource)
+            val recordSource = anime?.sourceIndex ?: topSource
+            StoredHistoryRecord(
+                progress = WatchProgress(
+                    animeId = item.optString("animeId"),
+                    episodeId = item.optString("episodeId"),
+                    positionMs = item.optLong("positionMs"),
+                    durationMs = item.optLong("durationMs"),
+                    updatedAtEpochMs = item.optLong("updatedAtEpochMs"),
+                    anime = anime
+                ),
+                sourceIndex = recordSource
             )
         }
     }
 
-    override suspend fun saveProgress(progress: WatchProgress) {
-        val records = loadHistory().filterNot { it.episodeId == progress.episodeId }.toMutableList()
-        records.add(0, progress)
+    private fun saveHistoryRecords(records: List<StoredHistoryRecord>) {
         val json = JSONArray().apply {
-            records.take(500).forEach { item ->
-                put(JSONObject()
-                    .put("animeId", item.animeId)
-                    .put("episodeId", item.episodeId)
-                    .put("positionMs", item.positionMs)
-                    .put("durationMs", item.durationMs)
-                    .put("updatedAtEpochMs", System.currentTimeMillis())
-                    .put("anime", item.anime?.toJson()))
-            }
-        }
-        preferences.edit().putString(namespace.key(KEY_HISTORY), json.toString()).apply()
-    }
-
-    override suspend fun removeAnimeHistory(animeId: String) {
-        val remaining = loadHistory().filterNot { it.animeId == animeId }
-        preferences.edit().putString(namespace.key(KEY_HISTORY), JSONArray().apply {
-            remaining.forEach { item ->
+            records.forEach { record ->
+                val item = record.progress
                 put(JSONObject()
                     .put("animeId", item.animeId)
                     .put("episodeId", item.episodeId)
                     .put("positionMs", item.positionMs)
                     .put("durationMs", item.durationMs)
                     .put("updatedAtEpochMs", item.updatedAtEpochMs)
+                    .put("sourceIndex", record.sourceIndex)
                     .put("anime", item.anime?.toJson()))
             }
-        }.toString()).apply()
-    }
-
-    override suspend fun clearHistory() {
-        preferences.edit().putString(namespace.key(KEY_HISTORY), "[]").apply()
+        }
+        preferences.edit().putString(namespace.key(KEY_HISTORY), json.toString()).apply()
     }
 
     private fun Anime.toJson() = JSONObject().apply {
@@ -112,7 +166,7 @@ class AndroidLibraryRepository(context: Context, private val namespace: ProfileN
         put("sourceIndex", sourceIndex)
     }
 
-    private fun JSONObject.toAnime() = Anime(
+    private fun JSONObject.toAnime(defaultSourceIndex: Int = SourceCatalog.GOTAKU_INDEX) = Anime(
         id = optString("id"),
         title = optString("title"),
         originalTitle = optString("originalTitle").takeIf { it.isNotBlank() },
@@ -138,8 +192,11 @@ class AndroidLibraryRepository(context: Context, private val namespace: ProfileN
         latestDubEpisode = optInt("latestDubEpisode"),
         malId = optString("malId").takeIf { it.isNotBlank() },
         aniListId = optString("aniListId").takeIf { it.isNotBlank() },
-        sourceIndex = optInt("sourceIndex", 9)
+        sourceIndex = optSourceIndex(defaultSourceIndex)
     )
+
+    private fun JSONObject.optSourceIndex(fallback: Int): Int =
+        if (has("sourceIndex") && !isNull("sourceIndex")) optInt("sourceIndex", fallback) else fallback
 
     private companion object {
         const val KEY_WATCHLIST = "watchlist"

@@ -3,6 +3,7 @@ package com.paregi.animetv
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.res.Resources
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
 import android.media.AudioManager
@@ -105,6 +106,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 private object PlaybackCache {
     private var cache: SimpleCache? = null
@@ -297,6 +299,8 @@ actual fun PlatformPlayer(
     val tokens = LocalAnimeTvTokens.current
     val showToast = LocalAppToast.current
     val coroutineScope = rememberCoroutineScope()
+    val brightnessController = remember(context) { PlayerBrightnessController(context) }
+    val volumeController = remember(context) { PlayerVolumeController(context) }
 
     var positionMs by remember(url, html5Player) { mutableStateOf(startPositionMs) }
     var durationMs by remember(url, html5Player) { mutableStateOf(0L) }
@@ -929,17 +933,17 @@ actual fun PlatformPlayer(
         onTrackingClick = onTrackingClick,
         onSearchGenre = onSearchGenre,
         onAdjustBrightness = { direction ->
-            val brightness = adjustWindowBrightness(context, direction * (10f / 255f))
+            val brightnessLevel = brightnessController.adjust(direction)
             showOsdHud(
                 PlayerOsdHudState(
                     icon = IconGlyphs.LightMode,
                     text = "Brightness",
-                    progressPercent = floor((brightness * 100f).toDouble()).toFloat().coerceIn(0f, 100f)
+                    progressPercent = floor((brightnessLevel / 255.0) * 100.0).toFloat().coerceIn(0f, 100f)
                 )
             )
         },
         onAdjustVolume = { direction ->
-            val volume = adjustMediaVolume(context, direction)
+            val volume = volumeController.adjust(direction)
             val volIcon = when {
                 volume == 0 -> IconGlyphs.VolumeOff
                 volume < 40 -> IconGlyphs.VolumeMute
@@ -1180,32 +1184,101 @@ private fun findMatchingTextGroup(
     return textPairs.getOrNull(targetIndex)
 }
 
-private fun adjustMediaVolume(context: Context, direction: Int): Int {
-    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    val maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-    val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-    val currentPercent = current * 100f / maximum
-    val updatedPercent = (currentPercent + direction * 10f).coerceIn(0f, 100f)
-    val updated = (updatedPercent * maximum / 100f).toInt().coerceIn(0, maximum)
-    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, updated, 0)
-    return updatedPercent.toInt()
+private class PlayerVolumeController(private val context: Context) {
+    private var lastAppliedStreamVolume: Int = -1
+    private var trackedPercent: Float = -1f
+
+    fun adjust(direction: Int): Int {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val minimum = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            audioManager.getStreamMinVolume(AudioManager.STREAM_MUSIC).coerceIn(0, maximum)
+        } else 0
+        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(minimum, maximum)
+        val span = (maximum - minimum).coerceAtLeast(1)
+
+        // Preserve sub-step virtual percent while avoiding drift after hardware volume key presses.
+        val basePercent = if (trackedPercent >= 0f && current == lastAppliedStreamVolume) {
+            trackedPercent
+        } else {
+            ((current - minimum) * 100f / span).coerceIn(0f, 100f)
+        }
+
+        val updatedPercent = (basePercent + direction * 10f).coerceIn(0f, 100f)
+        val updatedStream = (minimum + (updatedPercent * span / 100f).roundToInt())
+            .coerceIn(minimum, maximum)
+
+        if (updatedStream != current) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, updatedStream, 0)
+        }
+        val actualAfter = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(minimum, maximum)
+        if (updatedStream != current && actualAfter == current) {
+            lastAppliedStreamVolume = actualAfter
+            val actualPercent = ((actualAfter - minimum) * 100f / span).coerceIn(0f, 100f)
+            trackedPercent = actualPercent
+            return actualPercent.roundToInt().coerceIn(0, 100)
+        }
+        lastAppliedStreamVolume = actualAfter
+        trackedPercent = updatedPercent
+        return updatedPercent.roundToInt().coerceIn(0, 100)
+    }
 }
 
-private fun adjustWindowBrightness(context: Context, delta: Float): Float {
-    val activity = context.findActivity() ?: return 0.5f
-    val window = activity.window
-    val attributes = window.attributes
-    val current = if (attributes.screenBrightness >= 0f) {
-        attributes.screenBrightness
-    } else {
-        runCatching {
-            Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
-        }.getOrDefault(0.5f)
+private class PlayerBrightnessController(private val context: Context) {
+    private var brightnessLevel: Int? = null
+
+    fun adjust(direction: Int): Int {
+        val activity = context.findActivity() ?: return 127
+        val window = activity.window
+        val attributes = window.attributes
+        val current = brightnessLevel ?: resolveInitialBrightnessLevel(context, attributes)
+        val updated = (current + direction * 10).coerceIn(0, 255)
+        brightnessLevel = updated
+        attributes.screenBrightness = updated / 255f
+        window.attributes = attributes
+        return updated
     }
-    val updated = (current + delta).coerceIn(0f, 1f)
-    attributes.screenBrightness = updated
-    window.attributes = attributes
-    return updated
+}
+
+private fun resolveInitialBrightnessLevel(
+    context: Context,
+    attributes: WindowManager.LayoutParams
+): Int {
+    if (attributes.screenBrightness >= 0f) {
+        return (attributes.screenBrightness.coerceIn(0f, 1f) * 255f).roundToInt().coerceIn(0, 255)
+    }
+    val floatBrightness = runCatching {
+        Settings.System.getFloat(context.contentResolver, "screen_brightness_float", Float.NaN)
+    }.getOrDefault(Float.NaN)
+    if (!floatBrightness.isNaN() && floatBrightness in 0f..1f) {
+        return (floatBrightness * 255f).roundToInt().coerceIn(0, 255)
+    }
+    val intBrightness = runCatching {
+        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+    }.getOrDefault(-1)
+    if (intBrightness >= 0) {
+        val maxResId = Resources.getSystem().getIdentifier(
+            "config_screenBrightnessSettingMaximum",
+            "integer",
+            "android"
+        )
+        val configMax = if (maxResId != 0) {
+            runCatching { Resources.getSystem().getInteger(maxResId) }.getOrDefault(255)
+        } else 255
+        // Vendor panels (e.g., 12-bit 0..4095) may exceed framework configMax.
+        val effectiveMax = when {
+            intBrightness <= configMax -> configMax.coerceAtLeast(1)
+            intBrightness <= 1023 -> 1023
+            intBrightness <= 2047 -> 2047
+            intBrightness <= 4095 -> 4095
+            intBrightness <= 8191 -> 8191
+            intBrightness <= 10000 -> 10000
+            else -> intBrightness
+        }
+        val normalized = (intBrightness.toFloat() / effectiveMax).coerceIn(0f, 1f)
+        return (normalized * 255f).roundToInt().coerceIn(0, 255)
+    }
+    return 127
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

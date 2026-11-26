@@ -1,19 +1,160 @@
 package com.paregi.animetv.source.anilist
 
-import com.paregi.animetv.source.*
-import com.paregi.animetv.source.shared.*
-
-
 import android.net.Uri
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.SearchFilters
 import com.paregi.animetv.domain.SearchPage
+import com.paregi.animetv.source.CatalogSource
+import com.paregi.animetv.source.shared.toSourceStringList
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Calendar
 import java.util.Locale
+
+internal data class AniListHomeShelves(
+    val featured: List<Anime>? = null,
+    val recent: List<Anime>? = null,
+    val top: List<Anime>? = null,
+    val popular: List<Anime>? = null,
+    val year: List<Anime>? = null,
+    val upcoming: List<Anime>? = null
+)
 
 /** AniList home shelves, search filtering, and catalog response mapping. */
 internal class AniListCatalogApi(private val client: AniListGraphQlClient) {
+    suspend fun fetchHomeShelves(
+        highResolutionImages: Boolean,
+        includeFeatured: Boolean,
+        year: Int,
+        source: CatalogSource
+    ): AniListHomeShelves {
+        val nowSeconds = System.currentTimeMillis() / 1_000L
+        val startDate = currentFuzzyDateInt()
+        val featuredBlock = if (includeFeatured) {
+            """
+            featured: Page(page: 1, perPage: 12) {
+              media(type: ANIME, sort: TRENDING_DESC, isAdult: false) {
+                ...homeMedia
+                bannerImage description genres
+                trailer { id site thumbnail }
+              }
+            }
+            """.trimIndent()
+        } else ""
+        val query = """
+            fragment homeMedia on Media {
+              id idMal
+              title { romaji english native }
+              coverImage { large extraLarge medium }
+              startDate { year month day }
+              status duration format seasonYear season isAdult averageScore episodes
+              nextAiringEpisode { episode }
+            }
+            query(${'$'}tm: Int, ${'$'}year: Int, ${'$'}startDate: FuzzyDateInt) {
+              $featuredBlock
+              alrecent: Page(page: 1, perPage: 50) {
+                airingSchedules(airingAt_greater: 0, airingAt_lesser: ${'$'}tm, sort: TIME_DESC, notYetAired: false) {
+                  episode
+                  media {
+                    ...homeMedia
+                    type countryOfOrigin
+                  }
+                }
+              }
+              altop: Page(page: 1, perPage: 20) {
+                media(sort: SCORE_DESC, isAdult: false, type: ANIME, status_not_in: [HIATUS, CANCELLED, NOT_YET_RELEASED]) {
+                  ...homeMedia
+                }
+              }
+              alpopular: Page(page: 1, perPage: 20) {
+                media(sort: POPULARITY_DESC, isAdult: false, type: ANIME, status_not_in: [HIATUS, CANCELLED, NOT_YET_RELEASED]) {
+                  ...homeMedia
+                }
+              }
+              alyear: Page(page: 1, perPage: 20) {
+                media(sort: SCORE_DESC, seasonYear: ${'$'}year, isAdult: false, type: ANIME, status_not_in: [HIATUS, CANCELLED, NOT_YET_RELEASED]) {
+                  ...homeMedia
+                }
+              }
+              alupcoming: Page(page: 1, perPage: 20) {
+                media(sort: START_DATE, isAdult: false, type: ANIME, status: NOT_YET_RELEASED, startDate_greater: ${'$'}startDate) {
+                  ...homeMedia
+                }
+              }
+            }
+        """.trimIndent()
+        val variables = JSONObject()
+            .put("tm", nowSeconds)
+            .put("year", year)
+            .put("startDate", startDate)
+        val data = runCatching {
+            postGraphQl(query, variables).optJSONObject("data")
+        }.getOrElse { error ->
+            if (error is CancellationException) throw error
+            null
+        }
+
+        val featured = if (includeFeatured) {
+            data?.optJSONObject("featured")?.optJSONArray("media")
+                ?.let { parseTrendingMedia(it, highResolutionImages, source) }
+                ?: runCatching { fetchTrending(highResolutionImages, source) }.getOrNull()
+        } else null
+        val recent = data?.optJSONObject("alrecent")?.optJSONArray("airingSchedules")
+            ?.let { parseRecentSchedules(it, highResolutionImages, source) }
+            ?: runCatching { fetchRecentReleases(highResolutionImages, source) }.getOrNull()
+        val top = data?.optJSONObject("altop")?.optJSONArray("media")
+            ?.toHomeAnimeList(highResolutionImages, source)
+            ?: runCatching {
+                fetchHomeMediaSection(
+                    sort = "SCORE_DESC",
+                    extraArgs = "status_not_in: [HIATUS, CANCELLED, NOT_YET_RELEASED]",
+                    highResolutionImages = highResolutionImages,
+                    source = source
+                )
+            }.getOrNull()
+        val popular = data?.optJSONObject("alpopular")?.optJSONArray("media")
+            ?.toHomeAnimeList(highResolutionImages, source)
+            ?: runCatching {
+                fetchHomeMediaSection(
+                    sort = "POPULARITY_DESC",
+                    extraArgs = "status_not_in: [HIATUS, CANCELLED, NOT_YET_RELEASED]",
+                    highResolutionImages = highResolutionImages,
+                    source = source
+                )
+            }.getOrNull()
+        val yearList = data?.optJSONObject("alyear")?.optJSONArray("media")
+            ?.toHomeAnimeList(highResolutionImages, source)
+            ?: runCatching {
+                fetchHomeMediaSection(
+                    sort = "SCORE_DESC",
+                    extraArgs = "seasonYear: $year, status_not_in: [HIATUS, CANCELLED, NOT_YET_RELEASED]",
+                    highResolutionImages = highResolutionImages,
+                    source = source
+                )
+            }.getOrNull()
+        val upcoming = data?.optJSONObject("alupcoming")?.optJSONArray("media")
+            ?.toHomeAnimeList(highResolutionImages, source)
+            ?: runCatching {
+                fetchHomeMediaSection(
+                    sort = "START_DATE",
+                    extraArgs = "status: NOT_YET_RELEASED, startDate_greater: $startDate",
+                    highResolutionImages = highResolutionImages,
+                    source = source
+                )
+            }.getOrNull()
+
+        return AniListHomeShelves(
+            featured = featured,
+            recent = recent,
+            top = top,
+            popular = popular,
+            year = yearList,
+            upcoming = upcoming
+        )
+    }
+
     suspend fun fetchTvRecent(source: CatalogSource): List<Anime> {
         val query = """
             query(${'$'}tm: Int, ${'$'}page: Int, ${'$'}perPage: Int) {
@@ -28,17 +169,12 @@ internal class AniListCatalogApi(private val client: AniListGraphQlClient) {
               }
             }
         """.trimIndent()
-        val response = client.requestJson(
-            "https://graphql.anilist.co",
-            body = JSONObject().put("query", query).put(
-                "variables",
-                JSONObject()
-                    .put("tm", System.currentTimeMillis() / 1_000L)
-                    .put("page", 1)
-                    .put("perPage", 50)
-            ).toString(),
-            referer = "https://anilist.co/graphiql",
-            origin = "https://anilist.co"
+        val response = postGraphQl(
+            query,
+            JSONObject()
+                .put("tm", System.currentTimeMillis() / 1_000L)
+                .put("page", 1)
+                .put("perPage", 50)
         )
         val schedules = response.optJSONObject("data")?.optJSONObject("Page")
             ?.optJSONArray("airingSchedules") ?: return emptyList()
@@ -48,7 +184,7 @@ internal class AniListCatalogApi(private val client: AniListGraphQlClient) {
             val anime = media.toAniListTvAnime("extraLarge", normalizeTvShort = true, source = source)
                 ?: return@mapNotNull null
             media.optInt("popularity") to anime
-        }.sortedByDescending { it.first }.map { it.second }
+        }.sortedByDescending { it.first }.map { it.second }.distinctBy { it.id }
     }
 
     suspend fun fetchTvRanking(trending: Boolean, source: CatalogSource): List<Anime> {
@@ -68,14 +204,9 @@ internal class AniListCatalogApi(private val client: AniListGraphQlClient) {
               }
             }
         """.trimIndent()
-        val response = client.requestJson(
-            "https://graphql.anilist.co",
-            body = JSONObject().put("query", query).put(
-                "variables",
-                JSONObject().put("page", 1).put("perPage", 50)
-            ).toString(),
-            referer = "https://anilist.co/graphiql",
-            origin = "https://anilist.co"
+        val response = postGraphQl(
+            query,
+            JSONObject().put("page", 1).put("perPage", 50)
         )
         val media = response.optJSONObject("data")?.optJSONObject("Page")
             ?.optJSONArray("media") ?: return emptyList()
@@ -84,6 +215,294 @@ internal class AniListCatalogApi(private val client: AniListGraphQlClient) {
         }
     }
 
+    suspend fun fetchTrending(
+        highResolutionImages: Boolean,
+        source: CatalogSource
+    ): List<Anime> {
+        val query = """
+            query {
+              Page(page: 1, perPage: 12) {
+                media(type: ANIME, sort: TRENDING_DESC, isAdult: false) {
+                  id idMal title { romaji english native }
+                  coverImage { large extraLarge } bannerImage description genres
+                  trailer { id site thumbnail }
+                  seasonYear averageScore episodes nextAiringEpisode { episode } format status duration
+                }
+              }
+            }
+        """.trimIndent()
+        val response = postGraphQl(query)
+        val media = response.optJSONObject("data")
+            ?.optJSONObject("Page")?.optJSONArray("media") ?: return emptyList()
+        return parseTrendingMedia(media, highResolutionImages, source)
+    }
+
+    suspend fun search(
+        filters: SearchFilters,
+        page: Int,
+        source: CatalogSource
+    ): SearchPage {
+        val safePage = page.coerceAtLeast(1)
+        val genres = filters.genres.mapNotNull(::aniListGenreName).distinct()
+        val formats = filters.types.mapNotNull(::aniListFormatName).distinct()
+        val rawSeason = filters.season?.trim()?.uppercase(Locale.ROOT)
+        val isUpcomingSeason = rawSeason == "UPCOMING"
+        val validSeason = rawSeason?.takeIf { it in VALID_SEASONS }
+        val statuses = buildList {
+            filters.status.mapNotNull(::aniListStatusName).forEach(::add)
+            if (isUpcomingSeason) add("NOT_YET_RELEASED")
+        }.distinct()
+        val sort = aniListSortName(filters.sort, isUpcomingSeason)
+        val searchText = filters.query.trim().takeIf { it.isNotBlank() }
+
+        val varDecls = mutableListOf("${'$'}page: Int!", "${'$'}perPage: Int!")
+        val args = mutableListOf("sort: $sort", "isAdult: false", "type: ANIME")
+        val variables = JSONObject()
+            .put("page", safePage)
+            .put("perPage", 12)
+
+        if (searchText != null) {
+            varDecls += "${'$'}search: String"
+            args += "search: ${'$'}search"
+            variables.put("search", searchText)
+        }
+        if (genres.isNotEmpty()) {
+            varDecls += "${'$'}genres: [String]"
+            args += "genre_in: ${'$'}genres"
+            variables.put("genres", JSONArray(genres))
+        }
+        if (formats.isNotEmpty()) {
+            varDecls += "${'$'}formats: [MediaFormat]"
+            args += "format_in: ${'$'}formats"
+            variables.put("formats", JSONArray(formats))
+        }
+        if (filters.year != null) {
+            varDecls += "${'$'}year: Int"
+            args += "seasonYear: ${'$'}year"
+            variables.put("year", filters.year)
+        }
+        if (validSeason != null) {
+            varDecls += "${'$'}season: MediaSeason"
+            args += "season: ${'$'}season"
+            variables.put("season", validSeason)
+        }
+        if (statuses.isNotEmpty()) {
+            varDecls += "${'$'}statuses: [MediaStatus]"
+            args += "status_in: ${'$'}statuses"
+            variables.put("statuses", JSONArray(statuses))
+        }
+        if (isUpcomingSeason) {
+            varDecls += "${'$'}startDate: FuzzyDateInt"
+            args += "startDate_greater: ${'$'}startDate"
+            variables.put("startDate", currentFuzzyDateInt())
+        }
+
+        val query = """
+            query(${varDecls.joinToString(", ")}) {
+              Page(page: ${'$'}page, perPage: ${'$'}perPage) {
+                pageInfo { hasNextPage }
+                media(${args.joinToString(", ")}) {
+                  id idMal
+                  title { english romaji native }
+                  coverImage { large extraLarge medium }
+                  startDate { year month day }
+                  description genres status duration format season seasonYear
+                  isAdult averageScore episodes
+                  nextAiringEpisode { episode }
+                }
+              }
+            }
+        """.trimIndent()
+        val response = postGraphQl(query, variables)
+        val pageData = response.optJSONObject("data")?.optJSONObject("Page")
+            ?: error("AniList did not return a search page")
+        val media = pageData.optJSONArray("media") ?: JSONArray()
+        val results = media.toHomeAnimeList(highResolutionImages = false, source = source, includeDescription = true)
+        return SearchPage(
+            results = results,
+            page = page,
+            hasNextPage = pageData.optJSONObject("pageInfo")?.optBoolean("hasNextPage")
+                ?: (results.size >= 12)
+        )
+    }
+
+    private suspend fun fetchRecentReleases(
+        highResolutionImages: Boolean,
+        source: CatalogSource
+    ): List<Anime> {
+        val query = """
+            query(${'$'}tm: Int) {
+              Page(page: 1, perPage: 50) {
+                airingSchedules(airingAt_greater: 0, airingAt_lesser: ${'$'}tm, sort: TIME_DESC, notYetAired: false) {
+                  episode
+                  media {
+                    id idMal type countryOfOrigin
+                    title { romaji english native }
+                    coverImage { large extraLarge medium }
+                    startDate { year month day }
+                    status duration format seasonYear season isAdult averageScore episodes
+                    nextAiringEpisode { episode }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val response = postGraphQl(
+            query,
+            JSONObject().put("tm", System.currentTimeMillis() / 1_000L)
+        )
+        val schedules = response.optJSONObject("data")?.optJSONObject("Page")
+            ?.optJSONArray("airingSchedules") ?: return emptyList()
+        return parseRecentSchedules(schedules, highResolutionImages, source)
+    }
+
+    private suspend fun fetchHomeMediaSection(
+        sort: String,
+        extraArgs: String,
+        highResolutionImages: Boolean,
+        source: CatalogSource
+    ): List<Anime> {
+        val query = """
+            query {
+              Page(page: 1, perPage: 20) {
+                media(sort: $sort, isAdult: false, type: ANIME, $extraArgs) {
+                  id idMal
+                  title { romaji english native }
+                  coverImage { large extraLarge medium }
+                  startDate { year month day }
+                  status duration format seasonYear season isAdult averageScore episodes
+                  nextAiringEpisode { episode }
+                }
+              }
+            }
+        """.trimIndent()
+        val response = postGraphQl(query)
+        val media = response.optJSONObject("data")?.optJSONObject("Page")
+            ?.optJSONArray("media") ?: return emptyList()
+        return media.toHomeAnimeList(highResolutionImages, source)
+    }
+
+    private suspend fun postGraphQl(query: String, variables: JSONObject? = null): JSONObject {
+        val payload = JSONObject().put("query", query)
+        if (variables != null) payload.put("variables", variables)
+        val body = payload.toString()
+        for (attempt in 0..2) {
+            try {
+                return client.requestJson(
+                    ANILIST_ENDPOINT,
+                    body = body,
+                    referer = ANILIST_REFERER,
+                    origin = ANILIST_ORIGIN
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (attempt == 2) throw error
+                val msg = error.message.orEmpty()
+                val retryDelayMs = when {
+                    "HTTP 429" in msg -> (attempt + 1) * 1_200L
+                    "HTTP 5" in msg -> (attempt + 1) * 300L
+                    else -> throw error
+                }
+                delay(retryDelayMs)
+            }
+        }
+        error("AniList request failed")
+    }
+
+    private fun parseRecentSchedules(
+        schedules: JSONArray,
+        highResolutionImages: Boolean,
+        source: CatalogSource
+    ): List<Anime> {
+        val strict = ArrayList<Anime>()
+        val relaxed = ArrayList<Anime>()
+        for (index in 0 until schedules.length()) {
+            val entry = schedules.optJSONObject(index) ?: continue
+            val media = entry.optJSONObject("media") ?: continue
+            if (media.optBoolean("isAdult")) continue
+            val type = media.optNonBlank("type")
+            if (type != null && !type.equals("ANIME", ignoreCase = true)) continue
+            val country = media.optNonBlank("countryOfOrigin")
+            if (country != null && !country.equals("JP", ignoreCase = true)) continue
+            val airedEp = entry.optInt("episode").takeIf { it > 0 }
+            val anime = media.toAniListHomeAnime(
+                highResolutionImages = highResolutionImages,
+                source = source,
+                fallbackAiredEpisode = airedEp
+            ) ?: continue
+            relaxed += anime
+            val format = media.optNonBlank("format")
+            val episodes = media.optInt("episodes")
+            if (!format.equals("TV_SHORT", ignoreCase = true) &&
+                !format.equals("ONA", ignoreCase = true) &&
+                episodes > 0
+            ) {
+                strict += anime
+            }
+        }
+        val strictDistinct = strict.distinctBy { it.id }
+        return if (strictDistinct.size >= 6) strictDistinct else relaxed.distinctBy { it.id }
+    }
+
+    private fun parseTrendingMedia(
+        media: JSONArray,
+        highResolutionImages: Boolean,
+        source: CatalogSource
+    ): List<Anime> = (0 until media.length()).mapNotNull { index ->
+        val item = media.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optInt("id").takeIf { it > 0 }?.toString() ?: return@mapNotNull null
+        val titles = item.optJSONObject("title")
+        val title = titles?.optNonBlank("english")
+            ?: titles?.optNonBlank("romaji")
+            ?: titles?.optNonBlank("native")
+            ?: id
+        val cover = item.optJSONObject("coverImage")
+        val trailer = item.optJSONObject("trailer")
+            ?.takeIf { it.optNonBlank("site").equals("youtube", ignoreCase = true) }
+        val banner = item.optNonBlank("bannerImage")
+        if (banner == null && trailer == null) return@mapNotNull null
+        val trailerId = trailer?.optNonBlank("id")
+        val nextAiredEpisode = item.optJSONObject("nextAiringEpisode")
+            ?.optInt("episode")?.minus(1)?.takeIf { it > 0 }
+        val poster = if (highResolutionImages) {
+            cover?.optNonBlank("extraLarge") ?: cover?.optNonBlank("large")
+        } else {
+            cover?.optNonBlank("large") ?: cover?.optNonBlank("extraLarge")
+        }
+        Anime(
+            id = "anilist:$id|${Uri.encode(title)}",
+            title = title,
+            originalTitle = titles?.optNonBlank("romaji"),
+            posterUrl = poster,
+            bannerUrl = banner ?: trailer?.optNonBlank("thumbnail"),
+            trailerId = trailerId,
+            synopsis = item.optNonBlank("description"),
+            genres = item.optJSONArray("genres").toSourceStringList(),
+            year = item.optInt("seasonYear").takeIf { it > 0 },
+            score = item.optInt("averageScore").takeIf { it > 0 }?.div(10f),
+            status = item.optNonBlank("status"),
+            duration = item.optInt("duration").takeIf { it > 0 }?.let { "${it}MIN" },
+            episodeCount = nextAiredEpisode ?: item.optInt("episodes").takeIf { it > 0 },
+            format = item.optNonBlank("format"),
+            malId = item.optInt("idMal").takeIf { it > 0 }?.toString(),
+            aniListId = id,
+            sourceIndex = source.index
+        )
+    }
+
+    private fun JSONArray.toHomeAnimeList(
+        highResolutionImages: Boolean,
+        source: CatalogSource,
+        includeDescription: Boolean = false
+    ): List<Anime> = (0 until length()).mapNotNull { index ->
+        optJSONObject(index)?.toAniListHomeAnime(
+            highResolutionImages = highResolutionImages,
+            source = source,
+            includeDescription = includeDescription
+        )
+    }.distinctBy { it.id }
+
     private fun JSONObject.toAniListTvAnime(
         coverSize: String,
         normalizeTvShort: Boolean,
@@ -91,15 +510,12 @@ internal class AniListCatalogApi(private val client: AniListGraphQlClient) {
     ): Anime? {
         val id = optInt("id").takeIf { it > 0 }?.toString() ?: return null
         val titles = optJSONObject("title")
-        val englishTitle = titles?.takeUnless { it.isNull("english") }?.optString("english").orEmpty()
-        val romajiTitle = titles?.takeUnless { it.isNull("romaji") }?.optString("romaji").orEmpty()
-        val title = englishTitle
-            .ifBlank { romajiTitle }
-            .ifBlank { return null }
+        val englishTitle = titles?.optNonBlank("english").orEmpty()
+        val romajiTitle = titles?.optNonBlank("romaji").orEmpty()
+        val title = englishTitle.ifBlank { romajiTitle }.ifBlank { return null }
         val cover = optJSONObject("coverImage")
-        val poster = cover?.takeUnless { it.isNull(coverSize) }?.optString(coverSize).orEmpty()
-            .takeIf { it.isNotBlank() } ?: return null
-        val format = if (isNull("format")) "" else optString("format").takeIf { it.isNotBlank() }.orEmpty()
+        val poster = cover?.optNonBlank(coverSize) ?: return null
+        val format = optNonBlank("format").orEmpty()
         val displayFormat = if (normalizeTvShort && format.equals("TV_SHORT", ignoreCase = true)) "TV" else format
         val episodes = optInt("episodes").takeIf { it > 0 }
         val score = optInt("averageScore").takeIf { it > 0 }
@@ -122,161 +538,70 @@ internal class AniListCatalogApi(private val client: AniListGraphQlClient) {
         )
     }
 
-    suspend fun fetchTrending(
+    private fun JSONObject.toAniListHomeAnime(
         highResolutionImages: Boolean,
-        source: CatalogSource
-    ): List<Anime> {
-        val query = """
-            query {
-              Page(page: 1, perPage: 12) {
-                media(type: ANIME, sort: TRENDING_DESC, isAdult: false) {
-                  id idMal title { romaji english native }
-                  coverImage { large extraLarge } bannerImage description genres
-                  trailer { id site thumbnail }
-                  seasonYear averageScore episodes nextAiringEpisode { episode } format status duration
-                }
-              }
-            }
-        """.trimIndent()
-        val response = client.requestJson(
-            "https://graphql.anilist.co",
-            body = JSONObject().put("query", query).toString(),
-            referer = "https://anilist.co/graphiql",
-            origin = "https://anilist.co"
-        )
-        val media = response.optJSONObject("data")
-            ?.optJSONObject("Page")?.optJSONArray("media") ?: JSONArray()
-        return (0 until media.length()).mapNotNull { index ->
-            val item = media.optJSONObject(index) ?: return@mapNotNull null
-            val id = item.optInt("id").takeIf { it > 0 }?.toString() ?: return@mapNotNull null
-            val titles = item.optJSONObject("title")
-            val title = titles?.optString("english").orEmpty()
-                .ifBlank { titles?.optString("romaji").orEmpty() }
-                .ifBlank { titles?.optString("native").orEmpty() }
-                .ifBlank { id }
-            val cover = item.optJSONObject("coverImage")
-            val trailer = item.optJSONObject("trailer")
-                ?.takeIf { it.optString("site").equals("youtube", ignoreCase = true) }
-            val banner = item.optString("bannerImage").takeIf { it.isNotBlank() }
-            if (banner == null && trailer == null) return@mapNotNull null
-            val trailerId = trailer?.optString("id")?.takeIf { it.isNotBlank() }
-            val nextAiredEpisode = item.optJSONObject("nextAiringEpisode")
-                ?.optInt("episode")?.minus(1)?.takeIf { it > 0 }
-            val poster = if (highResolutionImages) cover?.optString("extraLarge").orEmpty()
-            else cover?.optString("large").orEmpty()
-            Anime(
-                id = "anilist:" + id + "|" + Uri.encode(title),
-                title = title,
-                originalTitle = titles?.optString("romaji")?.takeIf { it.isNotBlank() },
-                posterUrl = poster.ifBlank { cover?.optString("large").orEmpty() }
-                    .takeIf { it.isNotBlank() },
-                bannerUrl = banner ?: trailer?.optString("thumbnail")?.takeIf { it.isNotBlank() },
-                trailerId = trailerId,
-                synopsis = item.optString("description").takeIf { it.isNotBlank() },
-                genres = item.optJSONArray("genres").toSourceStringList(),
-                year = item.optInt("seasonYear").takeIf { it > 0 },
-                score = item.optInt("averageScore").takeIf { it > 0 }?.div(10f),
-                status = item.optString("status").takeIf { it.isNotBlank() },
-                duration = item.optInt("duration").takeIf { it > 0 }?.let { "${it}MIN" },
-                episodeCount = nextAiredEpisode ?: item.optInt("episodes").takeIf { it > 0 },
-                format = item.optString("format").takeIf { it.isNotBlank() },
-                malId = item.optInt("idMal").takeIf { it > 0 }?.toString(),
-                aniListId = id,
-                sourceIndex = source.index
-            )
-        }
-    }
-
-    suspend fun search(
-        filters: SearchFilters,
-        page: Int,
-        source: CatalogSource
-    ): SearchPage {
-        val query = """
-            query(${ '$' }page: Int!, ${ '$' }perPage: Int!, ${ '$' }search: String, ${ '$' }genres: [String], ${ '$' }formats: [MediaFormat], ${ '$' }year: Int, ${ '$' }season: MediaSeason) {
-              Page(page: ${ '$' }page, perPage: ${ '$' }perPage) {
-                pageInfo { hasNextPage }
-                media(
-                  sort: SEARCH_MATCH,
-                  isAdult: false,
-                  type: ANIME,
-                  search: ${ '$' }search,
-                  genre_in: ${ '$' }genres,
-                  format_in: ${ '$' }formats,
-                  seasonYear: ${ '$' }year,
-                  season: ${ '$' }season
-                ) {
-                  id idMal
-                  title { english romaji native }
-                  coverImage { large medium }
-                  description genres status duration format season seasonYear
-                  isAdult averageScore episodes
-                }
-              }
-            }
-        """.trimIndent()
-        val genres = filters.genres.mapNotNull(::aniListGenreName).distinct()
-        val formats = filters.types.mapNotNull(::aniListFormatName).distinct()
-        val body = JSONObject().put("query", query).put(
-            "variables",
-            JSONObject()
-                .put("page", page.coerceAtLeast(1))
-                .put("perPage", 12)
-                .put("search", filters.query.trim().takeIf { it.isNotBlank() } ?: JSONObject.NULL)
-                .put("genres", genres.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
-                .put("formats", formats.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
-                .put("year", filters.year ?: JSONObject.NULL)
-                .put("season", filters.season?.uppercase(Locale.ROOT) ?: JSONObject.NULL)
-        ).toString()
-        val response = client.requestJson(
-            "https://graphql.anilist.co",
-            body = body,
-            referer = "https://anilist.co/graphiql",
-            origin = "https://anilist.co"
-        )
-        val pageData = response.optJSONObject("data")?.optJSONObject("Page")
-            ?: error("AniList did not return a search page")
-        val media = pageData.optJSONArray("media") ?: JSONArray()
-        val results = (0 until media.length()).mapNotNull { index ->
-            media.optJSONObject(index)?.toAniListSearchAnime(source)
-        }
-        return SearchPage(
-            results = results,
-            page = page,
-            hasNextPage = pageData.optJSONObject("pageInfo")?.optBoolean("hasNextPage")
-                ?: (results.size >= 12)
-        )
-    }
-
-    private fun JSONObject.toAniListSearchAnime(source: CatalogSource): Anime? {
+        source: CatalogSource,
+        fallbackAiredEpisode: Int? = null,
+        includeDescription: Boolean = false
+    ): Anime? {
         val id = optInt("id").takeIf { it > 0 }?.toString() ?: return null
         val titles = optJSONObject("title")
-        val english = titles?.optString("english")?.takeIf { it.isNotBlank() }
-        val romaji = titles?.optString("romaji")?.takeIf { it.isNotBlank() }
-        val native = titles?.optString("native")?.takeIf { it.isNotBlank() }
+        val english = titles?.optNonBlank("english")
+        val romaji = titles?.optNonBlank("romaji")
+        val native = titles?.optNonBlank("native")
         val title = english ?: romaji ?: native ?: return null
         val cover = optJSONObject("coverImage")
-        val poster = cover?.optString("large")?.takeIf { it.isNotBlank() }
-            ?: cover?.optString("medium")?.takeIf { it.isNotBlank() }
+        val poster = if (highResolutionImages) {
+            cover?.optNonBlank("extraLarge") ?: cover?.optNonBlank("large") ?: cover?.optNonBlank("medium")
+        } else {
+            cover?.optNonBlank("large") ?: cover?.optNonBlank("extraLarge") ?: cover?.optNonBlank("medium")
+        }
+        val nextAiringEpisode = optJSONObject("nextAiringEpisode")?.optInt("episode")?.takeIf { it > 0 }
+            ?: fallbackAiredEpisode?.takeIf { it > 0 }?.plus(1)
+        val startYear = optJSONObject("startDate")?.optInt("year")?.takeIf { it > 0 }
         return Anime(
             id = "anilist:$id|${Uri.encode(title)}",
             title = title,
             originalTitle = romaji ?: native,
             titleAliases = listOfNotNull(english, romaji, native).distinct(),
             posterUrl = poster,
-            synopsis = optString("description").takeIf { it.isNotBlank() && it != "null" },
-            genres = optJSONArray("genres").toSourceStringList(),
-            year = optInt("seasonYear").takeIf { it > 0 },
+            synopsis = if (includeDescription) optNonBlank("description") else null,
+            genres = if (includeDescription) optJSONArray("genres").toSourceStringList() else emptyList(),
+            year = optInt("seasonYear").takeIf { it > 0 } ?: startYear,
             score = optInt("averageScore").takeIf { it > 0 }?.div(10f),
-            status = optString("status").takeIf { it.isNotBlank() && it != "null" },
+            status = optNonBlank("status"),
             duration = optInt("duration").takeIf { it > 0 }?.let { "${it}MIN" },
             episodeCount = optInt("episodes").takeIf { it > 0 },
-            format = optString("format").takeIf { it.isNotBlank() && it != "null" },
+            format = optNonBlank("format"),
             adult = optBoolean("isAdult"),
             malId = optInt("idMal").takeIf { it > 0 }?.toString(),
             aniListId = id,
-            sourceIndex = source.index
+            sourceIndex = source.index,
+            nextAiringEpisode = nextAiringEpisode
         )
+    }
+
+    private fun JSONObject.optNonBlank(key: String): String? =
+        if (isNull(key)) null else optString(key).takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+
+    private fun currentFuzzyDateInt(): Int {
+        val cal = Calendar.getInstance()
+        return cal.get(Calendar.YEAR) * 10_000 +
+            (cal.get(Calendar.MONTH) + 1) * 100 +
+            cal.get(Calendar.DAY_OF_MONTH)
+    }
+
+    private fun aniListSortName(sort: String, upcoming: Boolean): String = when (sort.lowercase(Locale.ROOT)) {
+        "score", "score_desc", "top" -> "SCORE_DESC"
+        "popularity", "popularity_desc", "popular" -> "POPULARITY_DESC"
+        "trending", "trending_day", "trending_desc" -> "TRENDING_DESC"
+        "upcoming", "start_date" -> "START_DATE"
+        else -> if (upcoming) "START_DATE" else "SEARCH_MATCH"
+    }
+
+    private fun aniListStatusName(status: String): String? = when (status.trim().uppercase(Locale.ROOT)) {
+        "FINISHED", "RELEASING", "NOT_YET_RELEASED", "CANCELLED", "HIATUS" -> status.trim().uppercase(Locale.ROOT)
+        else -> null
     }
 
     private fun aniListGenreName(genre: String): String? = when (genre.lowercase(Locale.ROOT)) {
@@ -313,4 +638,10 @@ internal class AniListCatalogApi(private val client: AniListGraphQlClient) {
         else -> null
     }
 
+    private companion object {
+        const val ANILIST_ENDPOINT = "https://graphql.anilist.co"
+        const val ANILIST_REFERER = "https://anilist.co/graphiql"
+        const val ANILIST_ORIGIN = "https://anilist.co"
+        val VALID_SEASONS = setOf("WINTER", "SPRING", "SUMMER", "FALL")
+    }
 }

@@ -417,23 +417,21 @@ internal fun HomeScreen(
                     val shelf = feed.sections.firstOrNull { it.id == pref.id }
                     val title = shelf?.title ?: homeSectionTitle(pref.id, sourceName)
                     val items = shelf?.items.orEmpty()
-                    if (shelf != null || loading) {
-                        item(key = "home_shelf_${pref.id}") {
-                            Box(modifier = Modifier.zIndex(if (shelfOverlap > 0.dp) 2f else 1f).overlapTopBy(shelfOverlap)) {
-                                HomeStandardShelf(
-                                    title = title,
-                                    animes = items,
-                                    loading = loading,
-                                    horizontalInset = horizontalInset,
-                                    cardDims = cardDims,
-                                    largeUi = effectiveLargeUi,
-                                    maskEnabled = maskEnabled,
-                                    onAnimeSelected = onAnimeSelected
-                                )
-                            }
+                    item(key = "home_shelf_${pref.id}") {
+                        Box(modifier = Modifier.zIndex(if (shelfOverlap > 0.dp) 2f else 1f).overlapTopBy(shelfOverlap)) {
+                            HomeStandardShelf(
+                                title = title,
+                                animes = items,
+                                loading = loading,
+                                horizontalInset = horizontalInset,
+                                cardDims = cardDims,
+                                largeUi = effectiveLargeUi,
+                                maskEnabled = maskEnabled,
+                                onAnimeSelected = onAnimeSelected
+                            )
                         }
-                        firstShelfAfterFeatured = false
                     }
+                    firstShelfAfterFeatured = false
                 }
             }
 
@@ -965,6 +963,9 @@ private fun HomeTabbedAniListShelf(
 ) {
     val rowState = rememberLazyListState()
     var contentActive by remember { mutableStateOf(false) }
+    LaunchedEffect(selectedTabId) {
+        rowState.scrollToItem(0)
+    }
     val tabs = remember(yearLabel) {
         listOf(
             "altop" to "Top Anime",

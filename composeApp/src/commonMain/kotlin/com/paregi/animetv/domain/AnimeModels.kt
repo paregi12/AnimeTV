@@ -26,6 +26,56 @@ data class Anime(
     val nextAiringEpisode: Int? = null
 )
 
+fun normalizeAgeRating(raw: String?): String? {
+    val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val head = trimmed.substringBefore(" - ").substringBefore(" (").trim()
+    val compact = head.uppercase().replace("-", "").replace("_", "").replace(" ", "")
+    return when (compact) {
+        "G", "GALLAGES" -> "G"
+        "PG", "PGCHILDREN" -> "PG"
+        "PG13", "PG13TEENS13OROLDER", "PG13TEENS13ANDOLDER" -> "PG-13"
+        "R", "R17", "R17+", "17+" -> "R"
+        "R+", "R+MILDNUDITY", "R+PROFANITY&MILDNUDITY", "18+" -> "R+"
+        "RX", "RXHENTAI", "RXMOREADULTAUDIENCE" -> "Rx"
+        "NONE", "NA", "N/A", "NULL", "UNKNOWN", "UNRATED" -> null
+        else -> {
+            val upper = trimmed.uppercase()
+            when {
+                upper.startsWith("RX") && (upper.length == 2 || !upper[2].isLetterOrDigit()) -> "Rx"
+                upper.startsWith("R+") && (upper.length == 2 || !upper[2].isLetter()) -> "R+"
+                upper.startsWith("PG-13") || upper.startsWith("PG 13") || upper.startsWith("PG13") -> "PG-13"
+                upper.startsWith("PG") && (upper.length == 2 || !upper[2].isLetterOrDigit()) -> "PG"
+                upper.startsWith("G") && (upper.length == 1 || !upper[1].isLetterOrDigit()) -> "G"
+                upper.startsWith("R") && (upper.length == 1 || !upper[1].isLetterOrDigit()) -> "R"
+                else -> trimmed
+            }
+        }
+    }
+}
+
+fun ageRatingLevel(raw: String?): Int? = when (normalizeAgeRating(raw)) {
+    "G" -> 0
+    "PG" -> 1
+    "PG-13" -> 2
+    "R" -> 3
+    "R+" -> 4
+    "Rx" -> 5
+    else -> null
+}
+
+fun isAdultAgeRating(raw: String?): Boolean = (ageRatingLevel(raw) ?: -1) >= 4
+
+fun Anime.isAllowedForParentalRating(parentalRating: Int): Boolean {
+    if (parentalRating >= 6) return true
+    val level = ageRatingLevel(rating)
+    if (level != null && level > parentalRating) return false
+    return parentalRating >= 4 || (
+        !adult &&
+            !title.contains("censor", ignoreCase = true) &&
+            originalTitle?.contains("censor", ignoreCase = true) != true
+        )
+}
+
 data class Episode(
     val id: String,
     val animeId: String,

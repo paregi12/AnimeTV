@@ -18,6 +18,7 @@ import com.paregi.androidtv.animetvjmto.R
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.HomeFeed
+import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.TvIntegrationRepository
 import com.paregi.animetv.domain.TvLaunchRequest
 import kotlinx.coroutines.Dispatchers
@@ -44,7 +45,7 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
             channelMutex.withLock {
                 val recent = feed.sections.firstOrNull { it.id == "recent" }?.items.orEmpty()
                 val trending = (feed.featured + feed.sections.firstOrNull { it.id == "trending" }?.items.orEmpty())
-                    .distinctBy { it.id }
+                    .distinctBy { it.id to it.sourceIndex }
                 val popular = feed.sections.firstOrNull { it.id == "popular" }?.items.orEmpty()
                 listOf(
                     ChannelFeed("Recent", "paregi_recent", recent),
@@ -68,7 +69,7 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
         if (positionMs < 2_000 || durationMs <= positionMs || durationMs - positionMs <= 5_000) return
         withContext(Dispatchers.IO) {
             watchNextMutex.withLock {
-                val itemKey = anime.id + "|" + episode.id
+                val itemKey = "${anime.sourceIndex}|${anime.id}|${episode.id}"
                 val now = System.currentTimeMillis()
                 if (!force && itemKey == lastWatchNextKey && now - lastWatchNextWriteAt < WATCH_NEXT_UPDATE_INTERVAL_MS) {
                     return@withLock
@@ -268,7 +269,11 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
         rating = optString("rating").takeIf { it.isNotBlank() },
         malId = optString("malId").takeIf { it.isNotBlank() },
         aniListId = optString("aniListId").takeIf { it.isNotBlank() },
-        sourceIndex = optInt("sourceIndex", 9)
+        sourceIndex = if (has("sourceIndex") && !isNull("sourceIndex")) {
+            optInt("sourceIndex", SourceCatalog.GOTAKU_INDEX)
+        } else {
+            SourceCatalog.GOTAKU_INDEX
+        }
     )
 
     private data class ChannelFeed(val name: String, val providerId: String, val items: List<Anime>)
