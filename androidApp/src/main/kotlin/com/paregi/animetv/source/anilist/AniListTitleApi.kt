@@ -35,7 +35,7 @@ internal class AniListTitleApi(private val client: AniListGraphQlClient) {
             .mapNotNull(::normalizeAnimeTitle)
             .toSet()
 
-        var lastError: Exception? = null
+        var lastError: Throwable? = null
         var mediaItems: List<JSONObject> = emptyList()
 
         if (aniListId != null) {
