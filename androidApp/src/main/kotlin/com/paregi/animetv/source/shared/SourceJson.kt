@@ -1,8 +1,5 @@
 package com.paregi.animetv.source.shared
 
-import com.paregi.animetv.source.*
-
-
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -34,4 +31,15 @@ internal fun String.toSubtitleLanguageTag(): String = when (trim().lowercase(Loc
     "korean" -> "ko"
     "unknown", "" -> "und"
     else -> trim()
+}
+
+internal fun JSONObject.optSourceFlag(key: String): Boolean {
+    if (isNull(key)) return false
+    val value = opt(key) ?: return false
+    return when (value) {
+        is Boolean -> value
+        is Number -> value.toInt() != 0
+        is String -> value.equals("true", ignoreCase = true) || value == "1"
+        else -> false
+    }
 }

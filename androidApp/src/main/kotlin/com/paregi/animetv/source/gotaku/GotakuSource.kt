@@ -6,6 +6,7 @@ import com.paregi.animetv.domain.SourceCatalog
 import com.paregi.animetv.domain.SubtitleTrack
 import com.paregi.animetv.domain.isAdultAgeRating
 import com.paregi.animetv.domain.normalizeAgeRating
+import com.paregi.animetv.source.shared.optSourceFlag
 import com.paregi.animetv.source.shared.toSourceGenreList
 import com.paregi.animetv.source.shared.toSourceStringList
 import com.paregi.animetv.source.shared.toSubtitleLanguageTag
@@ -53,7 +54,7 @@ internal object GotakuSource {
             rating = rating,
             episodeCount = episodes?.optPositiveInt("total"),
             format = json.optText("format"),
-            adult = json.optFlag("is_adult") || isAdultAgeRating(rating),
+            adult = json.optSourceFlag("is_adult") || isAdultAgeRating(rating),
             latestSubEpisode = episodes?.optInt("latest_sub") ?: 0,
             latestDubEpisode = episodes?.optInt("latest_dub") ?: 0,
             malId = links?.optText("mal")?.trimEnd('/')?.substringAfterLast('/')?.takeIf(String::isNotBlank),
@@ -160,20 +161,10 @@ internal object GotakuSource {
                 posterUrl = item.optText("poster_url"),
                 rating = rating,
                 format = item.optText("format"),
-                adult = item.optFlag("is_adult") || isAdultAgeRating(rating),
+                adult = item.optSourceFlag("is_adult") || isAdultAgeRating(rating),
                 sourceIndex = SourceCatalog.GOTAKU_INDEX
             )
         }.distinctBy { it.id }
-    }
-
-    private fun JSONObject.optFlag(key: String): Boolean {
-        if (isNull(key)) return false
-        return when (val value = opt(key)) {
-            is Boolean -> value
-            is Number -> value.toInt() != 0
-            is String -> value.equals("true", ignoreCase = true) || value == "1"
-            else -> false
-        }
     }
 
     private fun JSONObject.optText(key: String): String? =
