@@ -458,15 +458,25 @@ class AndroidAccountRepository(
     }
 
     private fun fetchAniListMedia(id: Int?, idMal: Long?, token: String?): JSONObject? {
+        val validMalId = idMal?.takeIf { it in 1L..Int.MAX_VALUE }?.toInt()
+        val decls = mutableListOf<String>()
+        val args = mutableListOf("type:ANIME")
+        val variables = JSONObject()
+        if (id != null && id > 0) {
+            decls += "${'$'}id:Int"
+            args += "id:${'$'}id"
+            variables.put("id", id)
+        } else if (validMalId != null) {
+            decls += "${'$'}idMal:Int"
+            args += "idMal:${'$'}idMal"
+            variables.put("idMal", validMalId)
+        } else {
+            return null
+        }
         val body = JSONObject().put(
             "query",
-            "query(\$id:Int,\$idMal:Int){Media(id:\$id,idMal:\$idMal,type:ANIME){id idMal mediaListEntry{id progress status}}}"
-        ).put(
-            "variables",
-            JSONObject()
-                .put("id", id ?: JSONObject.NULL)
-                .put("idMal", idMal?.takeIf { it <= Int.MAX_VALUE }?.toInt() ?: JSONObject.NULL)
-        ).toString()
+            "query(${decls.joinToString(",")}){Media(${args.joinToString(",")}){id idMal mediaListEntry{id progress status}}}"
+        ).put("variables", variables).toString()
         return aniListRequest(body, token)
             .optJSONObject("data")?.optJSONObject("Media")
     }
@@ -477,6 +487,11 @@ class AndroidAccountRepository(
             runCatching { fetchAniListMedia(it, null, token) }.getOrNull()
         }
         if (byAniListId != null) return byAniListId
+        val malId = anime.malId?.toLongOrNull()
+        val byMalId = malId?.let {
+            runCatching { fetchAniListMedia(null, it, token) }.getOrNull()
+        }
+        if (byMalId != null) return byMalId
         return runCatching { searchAniListMediaByTitle(anime.title, token) }.getOrNull()
     }
 
