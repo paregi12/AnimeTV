@@ -34,6 +34,7 @@ internal class ReAnimeHlsProxy(
                 connection = upstreamReAnime(fetchUrl)
                 val status = connection.responseCode
                 if (status !in 200..299) {
+                    Log.w(TAG, "Playlist upstream HTTP $status: $fetchUrl")
                     return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
                 }
                 text = connection.inputStream?.use { it.readBytes().toString(StandardCharsets.UTF_8) }
@@ -63,15 +64,18 @@ internal class ReAnimeHlsProxy(
         response(out, 200, "OK", "application/vnd.apple.mpegurl", rewritten)
     }
 
+    fun isManifestRequest(url: String): Boolean = isPlaylistUrl(url)
+
     private fun rewriteReAnimeManifest(text: String, parentUrl: String, wPayload: String): String {
         val parent = URL(parentUrl)
+        val master = text.contains("#EXT-X-STREAM-INF")
         return text.lineSequence().joinToString("\n", postfix = "\n") { line ->
             val trimmed = line.trim()
             when {
                 trimmed.isEmpty() -> line
                 !trimmed.startsWith("#") -> {
                     val resolved = ensureReAnimeToken(URL(parent, trimmed).toString(), parentUrl)
-                    reAnimeProxyUrl(resolved, wPayload, isPlaylistUrl(resolved))
+                    reAnimeProxyUrl(resolved, wPayload, master || isPlaylistUrl(resolved))
                 }
                 else -> {
                     val cleanedLine = if (trimmed.startsWith("#EXT-X-STREAM-INF")) fixBandwidth(line) else line
@@ -87,7 +91,7 @@ internal class ReAnimeHlsProxy(
                             } else {
                                 val resolved = ensureReAnimeToken(URL(parent, rawUri).toString(), parentUrl)
                                 val playlist = !isKeyLine && (forcePlaylist || isPlaylistUrl(resolved))
-                                "URI=\"" + reAnimeProxyUrl(resolved, wPayload, playlist) + "\""
+                                "URI=\"" + reAnimeProxyUrl(resolved, wPayload, playlist, plain = isKeyLine) + "\""
                             }
                         }
                     } else {
@@ -106,10 +110,16 @@ internal class ReAnimeHlsProxy(
         return BANDWIDTH_REGEX.replaceFirst(line, "BANDWIDTH=$fixed")
     }
 
-    private fun reAnimeProxyUrl(url: String, wPayload: String, playlist: Boolean): String {
+    private fun reAnimeProxyUrl(
+        url: String,
+        wPayload: String,
+        playlist: Boolean,
+        plain: Boolean = false
+    ): String {
         val query = StringBuilder("url=").append(URLEncoder.encode(url, "UTF-8"))
             .append("&re=1")
         if (playlist) query.append("&m3u8=1")
+        if (plain) query.append("&plain=1")
         if (wPayload.isNotBlank()) query.append("&wp=").append(URLEncoder.encode(wPayload, "UTF-8"))
         return "http://127.0.0.1:" + port() + "/proxy?" + query
     }
@@ -122,9 +132,15 @@ internal class ReAnimeHlsProxy(
                 (lower.contains("flixcloud.cc") && !lower.contains("audio.m3u8") && !lower.contains("video.m3u8")))
     }
 
-    private fun isPlaylistUrl(url: String): Boolean {
+    private fun isPlaylistUrl(url: String, depth: Int = 0): Boolean {
         val path = runCatching { URL(url).path.lowercase(Locale.ROOT) }.getOrDefault(url.lowercase(Locale.ROOT))
-        return path.endsWith(".m3u8") || path.contains("playlist") || isMasterPlaylist(url)
+        if (path.endsWith(".m3u8") || path.contains("playlist") || isMasterPlaylist(url)) return true
+        // Proxy-wrapped manifests (e.g. enc-dec.app/api/parse-flixcloud?url=...) carry the real playlist path in ?url=.
+        if (depth < 2) {
+            val nested = runCatching { Uri.parse(url).getQueryParameter("url") }.getOrNull()
+            if (!nested.isNullOrBlank()) return isPlaylistUrl(nested, depth + 1)
+        }
+        return false
     }
 
     private fun ensureReAnimeToken(url: String, parentUrl: String): String = runCatching {
@@ -142,20 +158,22 @@ internal class ReAnimeHlsProxy(
         url
     }.getOrDefault(url)
 
-    fun serveSegment(out: OutputStream, url: String, rangeStart: Long) {
+    fun serveSegment(out: OutputStream, url: String, rangeStart: Long, plain: Boolean = false) {
         var headersWritten = false
         var connection: AndroidNetworkResponse? = null
         try {
-            connection = upstreamReAnime(url, rangeStart)
+            val upstreamRange = if (plain) rangeStart else 0L
+            connection = upstreamReAnime(url, upstreamRange)
             val status = connection.responseCode
             if (status !in 200..299) {
+                Log.w(TAG, "Segment upstream HTTP $status: $url")
                 return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
             }
             val input = connection.inputStream
                 ?: return response(out, 502, "Bad Gateway", "text/plain", ByteArray(0))
             val stream = BufferedInputStream(input)
             var headerBytes = 0
-            if (rangeStart == 0L) {
+            if (!plain) {
                 stream.mark(16)
                 val probe = ByteArray(13)
                 val read = stream.read(probe)
@@ -165,14 +183,16 @@ internal class ReAnimeHlsProxy(
             val contentLength = connection.getHeaderFieldLong("Content-Length", -1)
             val outLength = if (contentLength >= 0) (contentLength - headerBytes).coerceAtLeast(0) else -1L
             val headers = StringBuilder("HTTP/1.1 ")
-                .append(if (status == 206) "206 Partial Content" else "200 OK").append("\r\n")
+                .append(if (status == 206 && upstreamRange > 0L) "206 Partial Content" else "200 OK").append("\r\n")
                 .append("Content-Type: ").append(
                     if (headerBytes > 0) "video/mp2t"
                     else connection.getHeaderField("Content-Type") ?: "application/octet-stream"
                 ).append("\r\n")
-                .append("Accept-Ranges: bytes\r\n")
+            if (plain) headers.append("Accept-Ranges: bytes\r\n")
             if (outLength >= 0) headers.append("Content-Length: ").append(outLength).append("\r\n")
-            connection.getHeaderField("Content-Range")?.let { headers.append("Content-Range: ").append(it).append("\r\n") }
+            if (plain) {
+                connection.getHeaderField("Content-Range")?.let { headers.append("Content-Range: ").append(it).append("\r\n") }
+            }
             headers.append("Access-Control-Allow-Origin: *\r\n\r\n")
             out.write(headers.toString().toByteArray(StandardCharsets.UTF_8))
             headersWritten = true
@@ -187,7 +207,7 @@ internal class ReAnimeHlsProxy(
             while (true) {
                 val count = stream.read(buffer)
                 if (count < 0) break
-                if (headerBytes > 0 && mask.isNotEmpty()) {
+                if (!plain && headerBytes > 0 && mask.isNotEmpty()) {
                     repeat(count) { index ->
                         buffer[index] = (buffer[index].toInt() xor mask[maskIndex++ % mask.size].toInt()).toByte()
                     }

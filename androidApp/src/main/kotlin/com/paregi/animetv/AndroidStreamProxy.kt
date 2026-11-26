@@ -109,15 +109,23 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                     }
                 }
                 val local = Uri.parse("http://127.0.0.1" + parts[1])
-                val upstreamUrl = local.getQueryParameter("url") ?: return badRequest(client.getOutputStream())
+                val upstreamUrl = local.getQueryParameter("url") ?: run {
+                    Log.w(TAG, "Missing url query in proxy request: ${parts[1]}")
+                    return badRequest(client.getOutputStream())
+                }
                 if (!upstreamUrl.startsWith("http://") && !upstreamUrl.startsWith("https://")) {
+                    Log.w(TAG, "Unsupported upstream scheme in proxy request: ${parts[1]}")
                     return badRequest(client.getOutputStream())
                 }
                 val key = local.getQueryParameter("key")
                 val segmentBytes = local.getQueryParameter("sb")?.toIntOrNull() ?: 0
                 val referer = local.getQueryParameter("ref")
                 when {
-                    local.getQueryParameter("re") == "1" && local.getQueryParameter("m3u8") == "1" ->
+                    local.getQueryParameter("re") == "1" && (
+                        local.getQueryParameter("m3u8") == "1" ||
+                            parts[1].startsWith("/manifest") ||
+                            reAnimeProxy.isManifestRequest(upstreamUrl)
+                        ) ->
                         reAnimeProxy.servePlaylist(
                             client.getOutputStream(),
                             upstreamUrl,
@@ -125,7 +133,12 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                             root = parts[1].startsWith("/manifest")
                         )
                     local.getQueryParameter("re") == "1" ->
-                        reAnimeProxy.serveSegment(client.getOutputStream(), upstreamUrl, rangeStart)
+                        reAnimeProxy.serveSegment(
+                            client.getOutputStream(),
+                            upstreamUrl,
+                            rangeStart,
+                            plain = local.getQueryParameter("plain") == "1"
+                        )
                     local.getQueryParameter("sub") == "1" ->
                         serveSubtitle(client.getOutputStream(), upstreamUrl, referer)
                     local.getQueryParameter("m3u8") == "1" ->
@@ -168,6 +181,7 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                 connection = upstream(url, referer = referer)
                 val status = connection.responseCode
                 if (status !in 200..299) {
+                    Log.w(TAG, "Playlist upstream HTTP $status: $url")
                     return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
                 }
                 body = connection.inputStream?.use { it.readBytes() }
@@ -249,25 +263,28 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         segmentBytes: Int,
         referer: String?
     ): String {
-        val match = URI_REGEX.find(line) ?: return line
-        val rawUri = match.groupValues[1]
-        if (rawUri.isEmpty()) return line
-        val resolved = URL(parent, rawUri).toString()
-        val replacement = when {
-            line.startsWith("#EXT-X-KEY") || line.startsWith("#EXT-X-SESSION-KEY") ->
-                proxyUrl(resolved, null, 0, playlist = false, plain = true, referer = referer)
-            line.startsWith("#EXT-X-MEDIA") ->
-                if (line.contains("TYPE=SUBTITLES")) {
-                    proxyUrl(resolved, key = null, segmentBytes = 0, playlist = true, referer = referer)
-                } else {
-                    proxyUrl(resolved, key, segmentBytes, playlist = true, referer = referer)
+        return URI_REGEX.replace(line) { match ->
+            val rawUri = match.groupValues[1]
+            if (rawUri.isEmpty()) {
+                match.value
+            } else {
+                val resolved = URL(parent, rawUri).toString()
+                val replacement = when {
+                    line.startsWith("#EXT-X-KEY") || line.startsWith("#EXT-X-SESSION-KEY") ->
+                        proxyUrl(resolved, null, 0, playlist = false, plain = true, referer = referer)
+                    line.startsWith("#EXT-X-MEDIA") ->
+                        if (line.contains("TYPE=SUBTITLES")) {
+                            proxyUrl(resolved, key = null, segmentBytes = 0, playlist = true, referer = referer)
+                        } else {
+                            proxyUrl(resolved, key, segmentBytes, playlist = true, referer = referer)
+                        }
+                    line.startsWith("#EXT-X-I-FRAME-STREAM-INF") ->
+                        proxyUrl(resolved, key, segmentBytes, playlist = true, referer = referer)
+                    else -> proxyUrl(resolved, key, segmentBytes, playlist = false, referer = referer)
                 }
-            line.startsWith("#EXT-X-I-FRAME-STREAM-INF") ->
-                proxyUrl(resolved, key, segmentBytes, playlist = true, referer = referer)
-            else -> proxyUrl(resolved, key, segmentBytes, playlist = false, referer = referer)
+                "URI=\"$replacement\""
+            }
         }
-        // Lambda replacement keeps $ characters in upstream URLs literal.
-        return URI_REGEX.replace(line) { "URI=\"$replacement\"" }
     }
 
     private fun proxyUrl(
@@ -300,7 +317,10 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         val connection = upstream(url, rangeStart, referer)
         try {
             val status = connection.responseCode
-            if (status !in 200..299) return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
+            if (status !in 200..299) {
+                Log.w(TAG, "Segment upstream HTTP $status: $url")
+                return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
+            }
             val input = connection.inputStream
                 ?: return response(out, 502, "Bad Gateway", "text/plain", ByteArray(0))
             val stream = BufferedInputStream(input)
@@ -322,7 +342,7 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                     if (!looksLikeMedia(sample)) {
                         var fullPath = fullPathCounter
                         if (fullPath == null && sample.size >= 189) {
-                            fullPath = listOf(true, false).firstOrNull {
+                            fullPath = listOf(false, true).firstOrNull {
                                 looksLikeMedia(decryptPreview(sample, url, keyBytes, it, segmentBytes))
                             }
                             if (fullPath != null) {
@@ -330,10 +350,10 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                                 Log.i(TAG, "Counter interpretation: ${if (fullPath) "full URL" else "path only"}")
                             }
                         }
-                        cipher = segmentCipher(keyBytes, url, fullPath ?: true, actualStart)
+                        cipher = segmentCipher(keyBytes, url, fullPath ?: false, actualStart)
                     }
                 } else {
-                    cipher = segmentCipher(keyBytes, url, fullPathCounter ?: true, actualStart)
+                    cipher = segmentCipher(keyBytes, url, fullPathCounter ?: false, actualStart)
                 }
             }
             val length = connection.getHeaderFieldLong("Content-Length", -1)
@@ -373,7 +393,10 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         val connection = upstream(url, rangeStart, referer)
         try {
             val status = connection.responseCode
-            if (status !in 200..299) return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
+            if (status !in 200..299) {
+                Log.w(TAG, "Passthrough upstream HTTP $status: $url")
+                return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
+            }
             val input = connection.inputStream
                 ?: return response(out, 502, "Bad Gateway", "text/plain", ByteArray(0))
             val length = connection.getHeaderFieldLong("Content-Length", -1)

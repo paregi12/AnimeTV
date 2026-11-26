@@ -14,7 +14,7 @@ import javax.crypto.spec.SecretKeySpec
 
 /** Android implementation of the current Gotaku API and manifest envelope. */
 internal object AndroidGotakuCrypto {
-    const val DEFAULT_API_VERSION = "10"
+    const val DEFAULT_API_VERSION = "11"
     const val DEFAULT_HKDF_INFO = "api-seal|v1"
     private const val MAX_INFLATED_BYTES = 4 * 1024 * 1024
 
@@ -24,11 +24,17 @@ internal object AndroidGotakuCrypto {
         0xA1.toByte(), 0xCF.toByte(), 0x04, 0x9D.toByte(), 0x6D, 0x6A, 0x82.toByte(), 0x05,
         0x39, 0xB0.toByte(), 0x9B.toByte(), 0x37, 0x12, 0x94.toByte(), 0x50, 0x80.toByte()
     )
-    val DEFAULT_API_SEED = byteArrayOf(
+    private val apiSeedV10 = byteArrayOf(
         0x1E, 0x63, 0xCE.toByte(), 0xEC.toByte(), 0xB0.toByte(), 0x1A, 0xE4.toByte(), 0x93.toByte(),
         0x37, 0x23, 0x98.toByte(), 0x7B, 0x06, 0x11, 0x7E, 0xB3.toByte(),
         0x28, 0xB5.toByte(), 0xC5.toByte(), 0xD2.toByte(), 0xC2.toByte(), 0x5A, 0xE8.toByte(), 0x23,
         0xF7.toByte(), 0x14, 0x82.toByte(), 0x2B, 0x47, 0x75, 0x7B, 0x52
+    )
+    val DEFAULT_API_SEED = byteArrayOf(
+        0xF5.toByte(), 0x0C, 0x25, 0xCD.toByte(), 0xC4.toByte(), 0xFB.toByte(), 0x97.toByte(), 0x4C,
+        0x90.toByte(), 0xAA.toByte(), 0xCE.toByte(), 0x76, 0x84.toByte(), 0x38, 0x8E.toByte(), 0x5A,
+        0x64, 0x52, 0x11, 0x17, 0x87.toByte(), 0x7B, 0xAB.toByte(), 0x8A.toByte(),
+        0x34, 0x2D, 0xFF.toByte(), 0x0F, 0x36, 0x90.toByte(), 0x29, 0x07
     )
     private val manifestSeed = "458e5403c40a73332706df406193dd6b040a2ea97a6bb59b52b294a61006e6ef"
         .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -44,7 +50,7 @@ internal object AndroidGotakuCrypto {
         val isDefaultSeed = apiSeed.contentEquals(DEFAULT_API_SEED)
         fun matchesVersion(firstByte: Byte): Boolean {
             val v = firstByte.toInt() and 0xFF
-            return v == versionInt || (isDefaultSeed && v == 8)
+            return v == versionInt || (isDefaultSeed && (v == 8 || v == 10))
         }
         val blob = if (matchesVersion(body[0])) {
             body
@@ -53,7 +59,11 @@ internal object AndroidGotakuCrypto {
         }
         if (blob.size <= 29 || !matchesVersion(blob[0])) return null
         val blobVersion = blob[0].toInt() and 0xFF
-        val seed = if (isDefaultSeed && blobVersion == 8) apiSeedV8 else apiSeed
+        val seed = when {
+            isDefaultSeed && blobVersion == 8 -> apiSeedV8
+            isDefaultSeed && blobVersion == 10 -> apiSeedV10
+            else -> apiSeed
+        }
         val iv = blob.copyOfRange(1, 13)
         val key = hkdf(seed, ByteArray(0), hkdfInfo.toByteArray(StandardCharsets.UTF_8), 32) ?: return null
         val compressed = gcm(Cipher.DECRYPT_MODE, key, iv, blob.copyOfRange(13, blob.size)) ?: return null
