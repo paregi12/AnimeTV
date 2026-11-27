@@ -1453,8 +1453,8 @@ fun AnimeTvApp(
                                 val platformContext = LocalPlatformContext.current
                                 val capW = if (portraitLayout) 1080 else 1920
                                 val capH = if (portraitLayout) 1920 else 1080
-                                val viewportW = with(density) { maxWidth.roundToPx().coerceIn(1, capW) }
-                                val viewportH = with(density) { maxHeight.roundToPx().coerceIn(1, capH) }
+                                val viewportW = with(density) { tokens.screenWidth.roundToPx().coerceIn(1, capW) }
+                                val viewportH = with(density) { tokens.screenHeight.roundToPx().coerceIn(1, capH) }
                                 val localWallpaper = remember(appSettings.wallpaperUrl) {
                                     curatedWallpapers.firstOrNull { it.source == appSettings.wallpaperUrl }
                                 }
