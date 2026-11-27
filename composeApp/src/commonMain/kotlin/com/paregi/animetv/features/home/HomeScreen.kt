@@ -98,6 +98,7 @@ import com.paregi.animetv.core.theme.LocalIconFont
 import com.paregi.animetv.core.theme.LocalImageCdn
 import com.paregi.animetv.core.theme.LocalJapaneseTitles
 import com.paregi.animetv.core.theme.LocalPerformanceEffects
+import com.paregi.animetv.core.theme.performanceEffectDisabled
 import com.paregi.animetv.core.theme.fsSp
 import com.paregi.animetv.core.ui.AnimeTvInlineTabs
 import com.paregi.animetv.core.ui.AnimeTvShelfPlaceholder
@@ -143,7 +144,7 @@ internal fun HomeScreen(
     val colors = LocalAnimeTvColors.current
     val density = LocalDensity.current
     val playClickSound = LocalNavigationSound.current
-    val maskEnabled = !LocalPerformanceEffects.current.getOrElse(3) { false }
+    val maskEnabled = !LocalPerformanceEffects.current.performanceEffectDisabled(3)
 
     val featuredCount = feed.featured.size
     var currentSlideIndex by remember(featuredCount) { mutableIntStateOf(0) }
@@ -571,8 +572,8 @@ private fun FeaturedHero(
 ) {
     val tokens = LocalAnimeTvTokens.current
     val performanceEffects = LocalPerformanceEffects.current
-    val maskEnabled = !performanceEffects.getOrElse(3) { false }
-    val textShadowDisabled = performanceEffects.getOrElse(4) { false }
+    val maskEnabled = !performanceEffects.performanceEffectDisabled(3)
+    val textShadowDisabled = performanceEffects.performanceEffectDisabled(4)
     val density = LocalDensity.current
     val platformContext = LocalPlatformContext.current
     val imageCdn = LocalImageCdn.current
@@ -870,6 +871,7 @@ private fun HeroWatchNowButton(active: Boolean) {
 }
 
 private val HERO_DURATION_DIGITS_REGEX = Regex("\\d+")
+private val YEAR_FOUR_DIGITS_REGEX = Regex("\\d{4}")
 
 private data class HeroMetaText(val text: String, val color: Color)
 
@@ -1089,6 +1091,6 @@ private fun HomeTabbedAniListShelf(
 
 private fun currentYearFallback(): String {
     val firstDate = platformScheduleDays().firstOrNull()?.dateLabel.orEmpty()
-    val match = HERO_DURATION_DIGITS_REGEX.find(firstDate)?.value
+    val match = YEAR_FOUR_DIGITS_REGEX.find(firstDate)?.value
     return match ?: "Year"
 }

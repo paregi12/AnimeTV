@@ -119,7 +119,11 @@ internal val Purple: Color @Composable get() = LocalAnimeTvColors.current.primar
 internal val PurpleLight: Color @Composable get() = LocalAnimeTvColors.current.accent1
 internal val TextPrimary: Color @Composable get() = Color.White
 internal val TextSecondary: Color @Composable get() = Color(0xFFAAAAAA)
-internal val LocalPerformanceEffects = compositionLocalOf { listOf(true, false, true, true, false) }
+internal val DEFAULT_PERFORMANCE_EFFECTS = listOf(true, false, true, true, false)
+internal val LocalPerformanceEffects = compositionLocalOf { DEFAULT_PERFORMANCE_EFFECTS }
+
+internal fun List<Boolean>.performanceEffectDisabled(index: Int): Boolean =
+    getOrElse(index) { DEFAULT_PERFORMANCE_EFFECTS.getOrElse(index) { false } }
 internal val LocalJapaneseTitles = compositionLocalOf { false }
 internal val LocalImageCdn = compositionLocalOf { true }
 internal val LocalIconFont = compositionLocalOf<FontFamily> { FontFamily.Default }

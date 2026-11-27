@@ -68,7 +68,9 @@ import com.paregi.animetv.core.theme.LocalAnimeTvColors
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
 import com.paregi.animetv.core.theme.LocalAppToast
 import com.paregi.animetv.core.theme.LocalIconFont
+import com.paregi.animetv.core.theme.DEFAULT_PERFORMANCE_EFFECTS
 import com.paregi.animetv.core.theme.LocalPerformanceEffects
+import com.paregi.animetv.core.theme.performanceEffectDisabled
 import com.paregi.animetv.core.theme.animeTvThemeColorsFor
 import com.paregi.animetv.core.theme.fsSp
 import com.paregi.animetv.core.ui.AboutPopupDialog
@@ -147,7 +149,6 @@ private val PERFORMANCE_ICONS = listOf(
     IconGlyphs.Gradient,
     IconGlyphs.TextFormat
 )
-private val PERFORMANCE_DEFAULTS = listOf(true, false, true, true, false)
 private val CACHE_SIZES_MB = listOf(5, 10, 20, 30, 50, 80, 100, 120, 150)
 
 private enum class ValuePickerType {
@@ -329,7 +330,7 @@ internal fun SettingsScreen(
 
     val performanceFlags = remember(settings.performanceEffects) {
         List(PERFORMANCE_FULL_NAMES.size) { index ->
-            settings.performanceEffects.getOrElse(index) { PERFORMANCE_DEFAULTS[index] }
+            settings.performanceEffects.getOrElse(index) { DEFAULT_PERFORMANCE_EFFECTS[index] }
         }
     }
     val performanceSummary = remember(performanceFlags) {
@@ -1252,7 +1253,7 @@ private fun DiagnosticLogsDialog(
 ) {
     val tokens = LocalAnimeTvTokens.current
     val playClickSound = LocalNavigationSound.current
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.performanceEffectDisabled(2)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val closeFocusRequester = remember { FocusRequester() }

@@ -63,6 +63,7 @@ import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.theme.LocalAnimeTvColors
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
 import com.paregi.animetv.core.theme.LocalPerformanceEffects
+import com.paregi.animetv.core.theme.performanceEffectDisabled
 import com.paregi.animetv.core.theme.fsSp
 import com.paregi.animetv.core.ui.AboutPopupDialog
 import com.paregi.animetv.core.ui.ConfirmDialog
@@ -246,7 +247,7 @@ private fun MalPasswordLoginDialog(
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
     val playClickSound = LocalNavigationSound.current
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.performanceEffectDisabled(2)
 
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }

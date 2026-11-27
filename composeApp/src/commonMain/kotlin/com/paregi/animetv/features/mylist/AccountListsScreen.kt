@@ -41,6 +41,7 @@ import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
 import com.paregi.animetv.core.theme.LocalIconFont
 import com.paregi.animetv.core.theme.LocalPerformanceEffects
+import com.paregi.animetv.core.theme.performanceEffectDisabled
 import com.paregi.animetv.core.theme.fsSp
 import com.paregi.animetv.core.ui.AnimeTvInlineTabs
 import com.paregi.animetv.core.ui.AnimeTvShelfPlaceholder
@@ -202,7 +203,7 @@ private fun UnifiedMyListScreen(
 
     val tokens = LocalAnimeTvTokens.current
     val density = LocalDensity.current
-    val maskEnabled = !LocalPerformanceEffects.current.getOrElse(3) { false }
+    val maskEnabled = !LocalPerformanceEffects.current.performanceEffectDisabled(3)
 
     var clearHistoryStage by remember { mutableIntStateOf(0) }
     var malTabStatus by remember { mutableStateOf("watching") }

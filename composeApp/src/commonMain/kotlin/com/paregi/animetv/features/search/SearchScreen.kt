@@ -86,6 +86,7 @@ import com.paregi.animetv.core.theme.LocalAnimeTvColors
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
 import com.paregi.animetv.core.theme.LocalIconFont
 import com.paregi.animetv.core.theme.LocalPerformanceEffects
+import com.paregi.animetv.core.theme.performanceEffectDisabled
 import com.paregi.animetv.core.theme.blendColors
 import com.paregi.animetv.core.theme.fsSp
 import com.paregi.animetv.core.ui.ConfirmDialog
@@ -131,8 +132,8 @@ internal fun SearchScreen(
     val portrait = tokens.portrait
     val isTouch = tokens.isTouch
     val effectiveLargeUi = (largeUi || tokens.largeUi) && !portrait
-    val maskDisabled = performanceEffects.getOrElse(3) { false }
-    val textShadowDisabled = performanceEffects.getOrElse(4) { false }
+    val maskDisabled = performanceEffects.performanceEffectDisabled(3)
+    val textShadowDisabled = performanceEffects.performanceEffectDisabled(4)
 
     var history by remember { mutableStateOf(emptyList<String>()) }
     var clearHistoryConfirmation by remember { mutableStateOf(false) }

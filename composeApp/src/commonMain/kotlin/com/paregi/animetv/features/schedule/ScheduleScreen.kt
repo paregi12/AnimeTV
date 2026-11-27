@@ -26,6 +26,7 @@ import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.theme.LocalAnimeTvColors
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
 import com.paregi.animetv.core.theme.LocalPerformanceEffects
+import com.paregi.animetv.core.theme.performanceEffectDisabled
 import com.paregi.animetv.core.theme.fsSp
 import com.paregi.animetv.core.ui.AnimeTvSpinner
 import com.paregi.animetv.core.ui.AnimeTvTitledShelf
@@ -58,7 +59,7 @@ internal fun ScheduleScreen(
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
     val density = LocalDensity.current
-    val maskEnabled = !LocalPerformanceEffects.current.getOrElse(3) { false }
+    val maskEnabled = !LocalPerformanceEffects.current.performanceEffectDisabled(3)
     val scheduleDays = remember { platformScheduleDays() }
 
     val entriesByOffset = remember(entries) {

@@ -75,6 +75,7 @@ import com.paregi.animetv.core.theme.LocalAnimeTvColors
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
 import com.paregi.animetv.core.theme.LocalIconFont
 import com.paregi.animetv.core.theme.LocalPerformanceEffects
+import com.paregi.animetv.core.theme.performanceEffectDisabled
 import com.paregi.animetv.core.theme.PurpleLight
 import com.paregi.animetv.core.theme.TextSecondary
 import com.paregi.animetv.core.theme.fsSp
@@ -280,7 +281,7 @@ private fun ProfileChooserContent(
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
     val playClickSound = LocalNavigationSound.current
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.performanceEffectDisabled(2)
     val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
     val isLowRam = platformIsLowRamDevice()
