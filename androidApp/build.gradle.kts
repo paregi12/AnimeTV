@@ -80,4 +80,5 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.dnsoverhttps)
     implementation(libs.play.services.cronet)
+    implementation(libs.kotlin.stdlib.jdk7)
 }

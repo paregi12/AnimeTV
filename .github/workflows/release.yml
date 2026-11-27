@@ -112,9 +112,7 @@ jobs:
           chmod +x ./gradlew
 
       - name: Build Release APK
-        run: |
-          rm -rf "$HOME/.gradle/.tmp"
-          ./gradlew :androidApp:assembleRelease --stacktrace
+        run: ./gradlew :androidApp:assembleRelease --stacktrace
 
       - name: Package Release APK
         run: |
