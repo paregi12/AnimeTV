@@ -12,3 +12,6 @@ local.properties
 keystore/
 *.keystore
 *.jks
+release-artifacts/
+__pycache__/
+*.pyc

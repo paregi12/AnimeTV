@@ -1,0 +1,168 @@
+name: Build & Publish Release APK
+
+on:
+  push:
+    branches: [ kmp ]
+  workflow_dispatch:
+    inputs:
+      custom_version:
+        description: 'Custom version tag (leave empty for auto-bump, e.g. v1.0.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build_release:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, 'push build') || contains(github.event.head_commit.message, 'Push build') || contains(github.event.head_commit.message, 'Push Build') || contains(github.event.head_commit.message, 'PUSH BUILD') || contains(github.event.head_commit.message, 'push-build') || contains(github.event.head_commit.message, 'Push-Build') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Release Version
+        id: versioning
+        run: |
+          git fetch --tags --force || true
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          EXPLICIT_VER=$(echo "$COMMIT_MSG" | grep -ioP "push[- ]build[:\s]+\K(kmp-)?v?[0-9]+(\.[0-9]+)+" | head -n 1 || true)
+
+          if [ -n "${{ inputs.custom_version }}" ]; then
+            RAW_VER="${{ inputs.custom_version }}"
+          elif [ -n "$EXPLICIT_VER" ]; then
+            RAW_VER="$EXPLICIT_VER"
+            echo "Found explicit version in commit message: $RAW_VER"
+          else
+            LATEST_TAG=$(git tag -l "kmp-v*" --sort=-v:refname | head -n 1)
+            if [ -z "$LATEST_TAG" ]; then
+              RAW_VER="1.0.0"
+            else
+              VER="${LATEST_TAG#kmp-v}"
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$VER"
+              MAJOR=${MAJOR:-1}
+              MINOR=${MINOR:-0}
+              PATCH=${PATCH:-0}
+
+              PATCH=$((PATCH + 1))
+              if [ "$PATCH" -ge 10 ]; then
+                PATCH=0
+                MINOR=$((MINOR + 1))
+                if [ "$MINOR" -ge 10 ]; then
+                  MINOR=0
+                  MAJOR=$((MAJOR + 1))
+                fi
+              fi
+              RAW_VER="${MAJOR}.${MINOR}.${PATCH}"
+            fi
+          fi
+
+          CLEAN_VER="${RAW_VER#kmp-}"
+          CLEAN_VER="${CLEAN_VER#v}"
+          CLEAN_VER="${CLEAN_VER#V}"
+          VER_TAG="v${CLEAN_VER}"
+          NEW_TAG="kmp-${VER_TAG}"
+
+          echo "Target Release Version: $NEW_TAG ($VER_TAG)"
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+          echo "VER_TAG=$VER_TAG" >> $GITHUB_ENV
+          echo "CLEAN_VER=$CLEAN_VER" >> $GITHUB_ENV
+          echo "APP_VERSION_NAME=$CLEAN_VER" >> $GITHUB_ENV
+          IFS='.' read -r MAJ MIN PAT <<< "$CLEAN_VER"
+          VCODE=$(( (${MAJ:-1} * 10000) + (${MIN:-0} * 100) + ${PAT:-0} ))
+          echo "APP_VERSION_CODE=$VCODE" >> $GITHUB_ENV
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare Signing Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          mkdir -p keystore
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Using release keystore from secrets.KEYSTORE_BASE64"
+            echo "$KEYSTORE_BASE64" | base64 -d > keystore/release.keystore
+            echo "KEYSTORE_FILE=$GITHUB_WORKSPACE/keystore/release.keystore" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+          else
+            echo "No secrets.KEYSTORE_BASE64 found. Creating a release keystore..."
+            keytool -genkey -v -keystore keystore/release.keystore -alias animetv -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=AnimeTV Release,O=AnimeTV,C=US"
+            echo "KEYSTORE_FILE=$GITHUB_WORKSPACE/keystore/release.keystore" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_ALIAS=animetv" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
+          fi
+          if [ ! -f keystore/debug.keystore ]; then
+            keytool -genkey -v -keystore keystore/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          chmod +x ./gradlew
+
+      - name: Build Release APK
+        run: ./gradlew :androidApp:assembleRelease --stacktrace
+
+      - name: Package Release APK
+        run: |
+          APK_FILE=$(find androidApp/build/outputs/apk/release -name "*.apk" ! -name "*-unsigned.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            APK_FILE=$(find androidApp/build/outputs/apk/release -name "*.apk" | head -n 1)
+          fi
+          if [ -z "$APK_FILE" ]; then
+            echo "Error: Release APK not found!"
+            exit 1
+          fi
+          mkdir -p release-artifacts
+          cp "$APK_FILE" "release-artifacts/animetv-${VER_TAG}.apk"
+          echo "Package created: release-artifacts/animetv-${VER_TAG}.apk"
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: animetv-${{ env.VER_TAG }}.apk
+          path: release-artifacts/animetv-*.apk
+          retention-days: 30
+
+      - name: Generate Release Notes
+        run: python3 scripts/generate_release_notes.py
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${NEW_TAG}" >/dev/null 2>&1; then
+            echo "Release ${NEW_TAG} already exists, updating asset and notes..."
+            gh release upload "${NEW_TAG}" \
+              "release-artifacts/animetv-${VER_TAG}.apk" \
+              --clobber
+            gh release edit "${NEW_TAG}" \
+              --notes-file "release-artifacts/release_notes.md" \
+              --prerelease
+          else
+            gh release create "${NEW_TAG}" \
+              "release-artifacts/animetv-${VER_TAG}.apk" \
+              --title "AnimeTV KMP ${VER_TAG}" \
+              --notes-file "release-artifacts/release_notes.md" \
+              --prerelease
+          fi
+
+      - name: Update and Commit server.json
+        run: |
+          python3 scripts/update_server_json.py
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add server.json
+          git commit -m "Update server.json to ${NEW_TAG}" || true
+          git push origin kmp || true

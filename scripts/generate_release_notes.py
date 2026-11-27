@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(__file__))
+from update_server_json import get_changelog
+
+
+def main():
+    clean_ver = os.environ.get("CLEAN_VER", "1.0.0")
+    ver_tag = os.environ.get("VER_TAG", f"v{clean_ver}")
+    notes = get_changelog(clean_ver)
+
+    content = f"""### AnimeTV KMP {ver_tag}
+
+#### Changelog:
+{notes}
+
+---
+- **Downloader Code:** `1600676`
+"""
+    out_dir = "release-artifacts"
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "release_notes.md")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(content.strip())
+    print(f"Generated {out_path}:\n{content.strip()}")
+
+
+if __name__ == "__main__":
+    main()

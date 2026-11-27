@@ -17,7 +17,7 @@
     <application
         android:allowBackup="true"
         android:hardwareAccelerated="true"
-        android:label="AnimeTV"
+        android:label="@string/app_name"
         android:largeHeap="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.AnimeTVJMTO"
