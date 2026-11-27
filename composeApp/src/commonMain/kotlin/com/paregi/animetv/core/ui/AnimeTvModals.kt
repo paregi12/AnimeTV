@@ -43,11 +43,13 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -105,6 +107,7 @@ import com.paregi.animetv.core.theme.LocalAnimeTvTokens
 import com.paregi.animetv.core.theme.LocalIconFont
 import com.paregi.animetv.core.theme.LocalPerformanceEffects
 import com.paregi.animetv.core.theme.fsSp
+import com.paregi.animetv.domain.AppUpdateInfo
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformImagePainter
@@ -809,6 +812,137 @@ fun ConfirmDialog(
 }
 
 @Composable
+fun AppUpdateDialog(
+    update: AppUpdateInfo,
+    onUpdateNow: () -> Unit,
+    onLater: () -> Unit,
+    onDontRemind: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val playClickSound = LocalNavigationSound.current
+    val updateNowRequester = remember { FocusRequester() }
+    val laterRequester = remember { FocusRequester() }
+    val dontRemindRequester = remember { FocusRequester() }
+    val changelogScroll = rememberScrollState()
+    val secondaryActions = listOf(
+        Triple("Later", laterRequester, onLater),
+        Triple("Don't Remind Me", dontRemindRequester, onDontRemind)
+    )
+
+    LaunchedEffect(Unit) {
+        yield()
+        runCatching { updateNowRequester.requestFocus() }
+    }
+
+    AnimeTvModalScrim(onDismiss = onDismiss) { animProgress, tokens, _ ->
+        val baseWidth = if (tokens.portrait) tokens.vh * 40f else tokens.vw * 48f
+        val dialogWidth = baseWidth.coerceAtMost(tokens.screenWidth * 0.90f)
+
+        Column(
+            modifier = Modifier
+                .modalWindowSurface(
+                    width = dialogWidth,
+                    cornerRadius = tokens.u * 0.5f,
+                    animProgress = animProgress,
+                    minScale = 0.8f,
+                    backgroundColor = Color(0xFF222222),
+                    shadowEnabled = !shadowsDisabled,
+                    shadowElevation = tokens.u * 0.6f
+                )
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && (event.key == Key.Back || event.key == Key.Escape)) {
+                        playClickSound()
+                        onDismiss()
+                        true
+                    } else false
+                }
+        ) {
+            ModalHeaderBar(
+                title = "Update Available - Version ${update.versionName}",
+                titleIcon = IconGlyphs.Update
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = tokens.vh * 42f)
+                    .verticalScroll(changelogScroll)
+                    .padding(start = tokens.u * 1.5f, end = tokens.u * 1.5f, top = tokens.u * 1.5f),
+                verticalArrangement = Arrangement.spacedBy(tokens.u * 0.6f)
+            ) {
+                Text(
+                    text = "Download Size: ${update.sizeLabel}",
+                    color = Color.White,
+                    fontSize = fsSp(tokens.fs15),
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Changelogs:",
+                    color = Color.White,
+                    fontSize = fsSp(tokens.fs15),
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = update.changelog,
+                    color = Color(0xFFCCCCCC),
+                    fontSize = fsSp(tokens.fs14),
+                    lineHeight = fsSp(tokens.fs14) * 1.4f
+                )
+            }
+
+            if (tokens.portrait) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(tokens.u * 1f),
+                    verticalArrangement = Arrangement.spacedBy(tokens.u * 0.8f)
+                ) {
+                    DialogActionButton(
+                        label = "Update Now",
+                        focusRequester = updateNowRequester,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onUpdateNow
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.8f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        secondaryActions.forEach { (label, requester, action) ->
+                            DialogActionButton(
+                                label = label,
+                                focusRequester = requester,
+                                modifier = Modifier.weight(1f),
+                                onClick = action
+                            )
+                        }
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(tokens.u * 1f),
+                    horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.8f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    (listOf(Triple("Update Now", updateNowRequester, onUpdateNow)) + secondaryActions)
+                        .forEach { (label, requester, action) ->
+                            DialogActionButton(
+                                label = label,
+                                focusRequester = requester,
+                                modifier = Modifier.weight(1f),
+                                onClick = action
+                            )
+                        }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun TextPromptDialog(
     title: String,
     initialValue: String = "",
@@ -945,8 +1079,9 @@ fun TextPromptDialog(
 @Composable
 private fun DialogActionButton(
     label: String,
-    width: Dp,
+    width: Dp? = null,
     focusRequester: FocusRequester,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val tokens = LocalAnimeTvTokens.current
@@ -962,8 +1097,8 @@ private fun DialogActionButton(
     }
 
     Box(
-        modifier = Modifier
-            .width(width)
+        modifier = modifier
+            .then(if (width != null) Modifier.width(width) else Modifier)
             .clip(RoundedCornerShape(tokens.u * 0.6f))
             .background(bgColor)
             .hoverable(interactionSource = interactionSource)

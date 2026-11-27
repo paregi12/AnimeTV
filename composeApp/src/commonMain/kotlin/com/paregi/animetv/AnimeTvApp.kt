@@ -80,6 +80,7 @@ import com.paregi.animetv.core.theme.badgeThemeColorsFor
 import com.paregi.animetv.core.theme.colorSchemeForTheme
 import com.paregi.animetv.core.theme.rememberAnimeTvTokens
 import com.paregi.animetv.core.ui.AppToastOverlay
+import com.paregi.animetv.core.ui.AppUpdateDialog
 import com.paregi.animetv.core.ui.CardStylePreferences
 import com.paregi.animetv.core.ui.ConfirmDialog
 import com.paregi.animetv.core.ui.ListOrderDialog
@@ -98,6 +99,10 @@ import com.paregi.animetv.domain.AnimeDetails
 import com.paregi.animetv.domain.AnimeRepository
 import com.paregi.animetv.domain.AnimeTrackingState
 import com.paregi.animetv.domain.AppSettings
+import com.paregi.animetv.domain.AppUpdateCheckResult
+import com.paregi.animetv.domain.AppUpdateDownloadResult
+import com.paregi.animetv.domain.AppUpdateInfo
+import com.paregi.animetv.domain.AppUpdateRepository
 import com.paregi.animetv.domain.DebugLogRepository
 import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.HomeFeed
@@ -150,6 +155,7 @@ fun AnimeTvApp(
     tvIntegrationRepository: TvIntegrationRepository,
     translationRepository: TranslationRepository,
     debugLogRepository: DebugLogRepository,
+    appUpdateRepository: AppUpdateRepository = object : AppUpdateRepository {},
     onExitApplication: () -> Unit
 ) {
     var profileDirectory by remember { mutableStateOf(ProfileDirectory(emptyList())) }
@@ -269,6 +275,57 @@ fun AnimeTvApp(
     }
 
     val coroutineScope = rememberCoroutineScope()
+    var pendingAppUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var checkingForUpdate by remember { mutableStateOf(false) }
+    var startupUpdateChecked by remember(appUpdateRepository) { mutableStateOf(false) }
+
+    LaunchedEffect(appUpdateRepository, profileLoading, settingsReady) {
+        if (startupUpdateChecked || profileLoading) return@LaunchedEffect
+        if (activeProfile != null && !settingsReady) return@LaunchedEffect
+        startupUpdateChecked = true
+        when (val result = appUpdateRepository.checkForUpdate(cleanDownloadedApk = true)) {
+            is AppUpdateCheckResult.Available -> {
+                if (result.autoRemindDisabled) {
+                    showToast("Update version ${result.update.versionName} is available...")
+                } else {
+                    pendingAppUpdate = result.update
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    fun checkForAppUpdates() {
+        if (checkingForUpdate) return
+        checkingForUpdate = true
+        showToast("Checking for updates...")
+        coroutineScope.launch {
+            try {
+                when (val result = appUpdateRepository.checkForUpdate(cleanDownloadedApk = true)) {
+                    is AppUpdateCheckResult.Available -> pendingAppUpdate = result.update
+                    AppUpdateCheckResult.UpToDate -> showToast("AnimeTV already up to date...")
+                    is AppUpdateCheckResult.Error -> showToast(result.message)
+                }
+            } finally {
+                checkingForUpdate = false
+            }
+        }
+    }
+
+    fun downloadAppUpdate(update: AppUpdateInfo) {
+        pendingAppUpdate = null
+        showToast("Downloading Update...")
+        coroutineScope.launch {
+            when (val result = appUpdateRepository.downloadAndInstall(update)) {
+                is AppUpdateDownloadResult.Downloaded ->
+                    showToast("Update has been downloaded (${result.sizeLabel})")
+                AppUpdateDownloadResult.AlreadyInProgress ->
+                    showToast("Update already in progress")
+                is AppUpdateDownloadResult.Error ->
+                    showToast("Download Update Failed: ${result.message}")
+            }
+        }
+    }
 
     fun selectMainSection(next: Section) {
         if (next == Section.Home || next == Section.MyList || next == Section.Schedule) {
@@ -1177,6 +1234,7 @@ fun AnimeTvApp(
 
     fun handleApplicationBack() {
         when {
+            pendingAppUpdate != null -> pendingAppUpdate = null
             clearHistoryStage > 0 -> clearHistoryStage = 0
             homeLayoutDialogOpen -> homeLayoutDialogOpen = false
             myListLayoutDialogOpen -> myListLayoutDialogOpen = false
@@ -1972,7 +2030,11 @@ fun AnimeTvApp(
                                                         settingsOpen = true
                                                     },
                                                     isAdminProfile = activeProfile?.prefix.isNullOrEmpty(),
-                                                    onReloadNeeded = { settingsReloadPending = true }
+                                                    onReloadNeeded = { settingsReloadPending = true },
+                                                    currentVersionName = remember(appUpdateRepository) {
+                                                        appUpdateRepository.currentVersionName()
+                                                    },
+                                                    onCheckForUpdate = ::checkForAppUpdates
                                                 )
                                             }
 
@@ -2417,7 +2479,11 @@ fun AnimeTvApp(
                                             forceLinearLayout = true,
                                             onClose = ::closeSettings,
                                             isAdminProfile = activeProfile?.prefix.isNullOrEmpty(),
-                                            onReloadNeeded = { settingsReloadPending = true }
+                                            onReloadNeeded = { settingsReloadPending = true },
+                                            currentVersionName = remember(appUpdateRepository) {
+                                                appUpdateRepository.currentVersionName()
+                                            },
+                                            onCheckForUpdate = ::checkForAppUpdates
                                         )
                                     }
                                 }
@@ -2744,6 +2810,25 @@ fun AnimeTvApp(
                                         onDismiss = { clearHistoryStage = 0 }
                                     )
                                 }
+                            }
+
+                            pendingAppUpdate?.let { update ->
+                                AppUpdateDialog(
+                                    update = update,
+                                    onUpdateNow = {
+                                        appUpdateRepository.setAutoUpdateDisabled(false)
+                                        downloadAppUpdate(update)
+                                    },
+                                    onLater = {
+                                        appUpdateRepository.setAutoUpdateDisabled(false)
+                                        pendingAppUpdate = null
+                                    },
+                                    onDontRemind = {
+                                        appUpdateRepository.setAutoUpdateDisabled(true)
+                                        pendingAppUpdate = null
+                                    },
+                                    onDismiss = { pendingAppUpdate = null }
+                                )
                             }
 
                             AppToastOverlay(appToastMessage)

@@ -49,7 +49,9 @@ internal fun SectionScreen(
     onRefreshHome: () -> Unit = {},
     onAboutFooterClick: (() -> Unit)? = null,
     isAdminProfile: Boolean = true,
-    onReloadNeeded: () -> Unit = {}
+    onReloadNeeded: () -> Unit = {},
+    currentVersionName: String = "",
+    onCheckForUpdate: () -> Unit = {}
 ) {
     when (section) {
         Section.Home -> {
@@ -135,7 +137,9 @@ internal fun SectionScreen(
             repository,
             tvLayout = tvLayout,
             isAdminProfile = isAdminProfile,
-            onReloadNeeded = onReloadNeeded
+            onReloadNeeded = onReloadNeeded,
+            currentVersionName = currentVersionName,
+            onCheckForUpdate = onCheckForUpdate
         )
     }
 }

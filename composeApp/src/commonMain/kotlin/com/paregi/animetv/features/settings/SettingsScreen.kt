@@ -140,7 +140,9 @@ internal fun SettingsScreen(
     forceLinearLayout: Boolean = false,
     onClose: (() -> Unit)? = null,
     isAdminProfile: Boolean = true,
-    onReloadNeeded: () -> Unit = {}
+    onReloadNeeded: () -> Unit = {},
+    currentVersionName: String = "",
+    onCheckForUpdate: () -> Unit = {}
 ) {
     val tokens = LocalAnimeTvTokens.current
     val showToast = LocalAppToast.current
@@ -813,9 +815,11 @@ internal fun SettingsScreen(
             if (isAdminProfile) {
                 item {
                     SettingValueRow(
-                        item = SettingValue("Check for Update", "") {
-                            showToast("AnimeTV KMP is up to date")
-                        },
+                        item = SettingValue(
+                            label = "Check for Update",
+                            value = currentVersionName.takeIf { it.isNotBlank() }?.let { "v$it" }.orEmpty(),
+                            onClick = onCheckForUpdate
+                        ),
                         modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 7 }
                     )
                 }

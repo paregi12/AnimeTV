@@ -3,8 +3,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val resolvedVersionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 666
-val resolvedVersionName = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "6.6.7-KMP"
+val resolvedVersionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 10000
+val resolvedVersionName = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "1.0.0"
 
 android {
     namespace = "com.paregi.androidtv.animetvjmto"

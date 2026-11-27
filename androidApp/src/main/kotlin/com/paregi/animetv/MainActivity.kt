@@ -21,6 +21,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var tvIntegrationRepository: AndroidTvIntegrationRepository
     private lateinit var translationRepository: AndroidTranslationRepository
     private lateinit var debugLogRepository: AndroidDebugLogRepository
+    private lateinit var appUpdateRepository: AndroidAppUpdateRepository
     private lateinit var streamProxy: AndroidStreamProxy
     private lateinit var networkStack: AndroidNetworkStack
     private lateinit var profileNamespace: ProfileNamespace
@@ -44,6 +45,7 @@ class MainActivity : ComponentActivity() {
         searchHistoryRepository = AndroidSearchHistoryRepository(applicationContext, profileNamespace)
         accountRepository = AndroidAccountRepository(applicationContext, networkStack, profileNamespace)
         tvIntegrationRepository = AndroidTvIntegrationRepository(applicationContext)
+        appUpdateRepository = AndroidAppUpdateRepository(applicationContext, networkStack, this)
         tvIntegrationRepository.handleLaunchIntent(intent)
         TvChannelRefreshJobService.refreshNow(applicationContext)
         setContent {
@@ -57,6 +59,7 @@ class MainActivity : ComponentActivity() {
                 tvIntegrationRepository,
                 translationRepository,
                 debugLogRepository,
+                appUpdateRepository,
                 onExitApplication = { finish() }
             )
         }
