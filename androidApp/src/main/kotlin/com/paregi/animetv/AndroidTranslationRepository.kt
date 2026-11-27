@@ -331,7 +331,7 @@ class AndroidTranslationRepository(
         const val MAX_SUBTITLE_CACHE_AGE_MS = 7L * 24 * 60 * 60 * 1000
         val HEX_DIGITS = "0123456789abcdef".toCharArray()
         val BLANK_LINE_REGEX = Regex("\n[ \t]*\n+")
-        val ASS_TAG_REGEX = Regex("\\{[^}]*}|\\\\[Nn]")
+        val ASS_TAG_REGEX = Regex("\\{[^}]*\\}|\\\\[Nn]")
         val RESULT_CONTAINER_REGEX = Regex(
             "<div[^>]*class=[\"'][^\"']*result-container[^\"']*[\"'][^>]*>(.*?)</div>",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
