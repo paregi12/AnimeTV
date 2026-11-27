@@ -26,16 +26,20 @@ import com.paregi.animetv.core.theme.fsSp
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 
+private val ChipInactiveBg = Color(0x59A0A5A7)
+private val ChipMutedLabel = Color.White.copy(alpha = 0.78f)
+
 @Composable
 internal fun FilterChip(label: String, value: String, selected: Boolean = false, onClick: () -> Unit) {
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
     var focused by remember { mutableStateOf(false) }
 
-    val chipBackground = if (focused || selected) colors.primary1 else Color(0x59A0A5A7)
+    val chipBackground = if (focused || selected) colors.primary1 else ChipInactiveBg
+    val chipShape = remember(tokens.u) { RoundedCornerShape(tokens.u * 0.2f) }
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(tokens.u * 0.2f))
+            .clip(chipShape)
             .background(chipBackground)
             .onFocusChanged { focused = it.isFocused }
             .navigationClickable(onClick = onClick)
@@ -55,7 +59,7 @@ internal fun FilterChip(label: String, value: String, selected: Boolean = false,
         if (label.isNotBlank()) {
             Text(
                 text = label,
-                color = if (value.isNotBlank() && !selected) Color.White.copy(alpha = 0.78f) else Color.White,
+                color = if (value.isNotBlank() && !selected) ChipMutedLabel else Color.White,
                 fontSize = fsSp(tokens.fs12)
             )
         }

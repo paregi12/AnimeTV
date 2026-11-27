@@ -11,6 +11,8 @@ import com.paregi.animetv.source.CatalogSource
 import com.paregi.animetv.source.shared.SourceRequestJson
 import com.paregi.animetv.source.shared.SourceRequestText
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URL
@@ -32,6 +34,7 @@ internal class ReAnimePlaybackResolver(
     )
 
     private val metaCache = LruCache<String, AnimeMeta>(64)
+    private val maskCache = LruCache<String, ByteArray>(16)
 
     suspend fun resolvePlayback(
         episodeId: String,
@@ -39,7 +42,7 @@ internal class ReAnimePlaybackResolver(
         mirrorIndex: Int,
         requestedStreamType: PlaybackStreamType? = null,
         source: CatalogSource
-    ): PlaybackChoice {
+    ): PlaybackChoice = coroutineScope {
         val parts = episodeId.split('|')
         val animeId = parts.getOrNull(0).orEmpty()
         val episodeNumber = parts.getOrNull(1).orEmpty()
@@ -90,7 +93,7 @@ internal class ReAnimePlaybackResolver(
             origin = FLIXCLOUD_ORIGIN,
             source = source
         )
-        extractXorMask(html, embedUrl, source)?.let(streamProxy::updateReAnimeMask)
+        val maskDeferred = async { extractXorMask(html, embedUrl, source) }
 
         val rawEmbed = EMBED_DATA_REGEX.find(html)?.groupValues?.get(1)
             ?: error("FlixCloud embed data was not found")
@@ -148,7 +151,8 @@ internal class ReAnimePlaybackResolver(
         val streamUrl = streamResult.optString("stream").takeIf { it.isNotBlank() }
             ?: error("FlixCloud did not return a stream URL")
         val wPayload = streamResult.optJSONObject("context")?.optString("w_payload").orEmpty()
-        return PlaybackChoice(
+        maskDeferred.await()?.let(streamProxy::updateReAnimeMask)
+        PlaybackChoice(
             url = streamProxy.createReAnimePlaylistUrl(streamUrl, wPayload),
             headers = mapOf("Referer" to FLIXCLOUD_REFERER),
             subtitles = subtitles,
@@ -269,28 +273,41 @@ internal class ReAnimePlaybackResolver(
 
     private suspend fun extractXorMask(html: String, embedUrl: String, source: CatalogSource): ByteArray? {
         HLS_SCRIPT_REGEX.find(html)?.groupValues?.get(1)?.let { scriptPath ->
-            val script = fetchScript(embedUrl, scriptPath, source)
-            if (script != null) {
-                XOR_MASK_REGEX.find(script)?.groupValues?.get(1)?.split(',')
-                    ?.mapNotNull { it.trim().toIntOrNull()?.toByte() }
-                    ?.toByteArray()
-                    ?.takeIf { it.size == MASK_SIZE }
-                    ?.let { return it }
-                parseLegacyMask(script)?.let { return it }
+            val scriptUrl = runCatching { URL(URL(embedUrl), scriptPath).toString() }.getOrNull()
+            if (scriptUrl != null) {
+                maskCache.get(scriptUrl)?.let { return it }
+                val script = fetchScript(scriptUrl, source)
+                if (script != null) {
+                    val parsed = XOR_MASK_REGEX.find(script)?.groupValues?.get(1)?.split(',')
+                        ?.mapNotNull { it.trim().toIntOrNull()?.toByte() }
+                        ?.toByteArray()
+                        ?.takeIf { it.size == MASK_SIZE }
+                        ?: parseLegacyMask(script)
+                    if (parsed != null) {
+                        maskCache.put(scriptUrl, parsed)
+                        return parsed
+                    }
+                }
             }
         }
         LEGACY_PLAYER_SCRIPT_REGEX.find(html)?.value?.let { scriptPath ->
-            val script = fetchScript(embedUrl, scriptPath, source)
-            if (script != null) {
-                parseLegacyMask(script)?.let { return it }
+            val scriptUrl = runCatching { URL(URL(embedUrl), scriptPath).toString() }.getOrNull()
+            if (scriptUrl != null) {
+                maskCache.get(scriptUrl)?.let { return it }
+                val script = fetchScript(scriptUrl, source)
+                if (script != null) {
+                    parseLegacyMask(script)?.let {
+                        maskCache.put(scriptUrl, it)
+                        return it
+                    }
+                }
             }
         }
         return null
     }
 
-    private suspend fun fetchScript(embedUrl: String, scriptPath: String, source: CatalogSource): String? =
+    private suspend fun fetchScript(scriptUrl: String, source: CatalogSource): String? =
         try {
-            val scriptUrl = URL(URL(embedUrl), scriptPath).toString()
             request(scriptUrl, referer = FLIXCLOUD_REFERER, origin = FLIXCLOUD_ORIGIN, source = source)
         } catch (cancelled: CancellationException) {
             throw cancelled

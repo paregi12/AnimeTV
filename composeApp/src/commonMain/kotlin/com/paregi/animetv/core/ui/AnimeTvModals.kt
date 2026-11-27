@@ -3,7 +3,6 @@ package com.paregi.animetv.core.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -53,7 +52,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -64,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -81,6 +83,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -98,6 +101,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
+import coil3.size.Precision
 import com.paregi.animetv.LocalNavigationSound
 import com.paregi.animetv.core.theme.AnimeTvThemeColors
 import com.paregi.animetv.core.theme.AnimeTvTokens
@@ -113,8 +119,12 @@ import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformImagePainter
 import kotlinx.coroutines.yield
 
+private val DIALOG_BR_REGEX = Regex("(?i)<br\\s*/?>")
+private val DIALOG_C_TAG_REGEX = Regex("(?i)<c>.*?</c>")
+
 enum class ListOrderMode { LIST, MENU, MULTI, THEME, ORDER }
 
+@Immutable
 data class ListOrderItem(
     val id: String,
     val title: String,
@@ -132,6 +142,7 @@ data class ListOrderItem(
     val disablingIds: List<String> = emptyList()
 )
 
+@Immutable
 data class ImgPickerItem(
     val id: String,
     val title: String,
@@ -144,16 +155,23 @@ data class ImgPickerItem(
 @Composable
 private fun AnimeTvModalScrim(
     onDismiss: () -> Unit,
-    content: @Composable (animProgress: Float, tokens: AnimeTvTokens, colors: AnimeTvThemeColors) -> Unit
+    content: @Composable (animProgress: State<Float>, tokens: AnimeTvTokens, colors: AnimeTvThemeColors) -> Unit
 ) {
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { visible = true }
-    val animProgress by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
-    )
+    val animEnabled = tokens.tim3s > 0
+    var visible by remember { mutableStateOf(!animEnabled) }
+    if (animEnabled) {
+        LaunchedEffect(Unit) { visible = true }
+    }
+    val animProgress = if (animEnabled) {
+        animateFloatAsState(
+            targetValue = if (visible) 1f else 0f,
+            animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
+        )
+    } else {
+        remember { mutableFloatStateOf(1f) }
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -161,7 +179,9 @@ private fun AnimeTvModalScrim(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.7f * animProgress))
+                .drawBehind {
+                    drawRect(Color.Black, alpha = 0.7f * animProgress.value)
+                }
                 .pointerInput(onDismiss) {
                     detectTapGestures { onDismiss() }
                 },
@@ -175,7 +195,7 @@ private fun AnimeTvModalScrim(
 private fun Modifier.modalWindowSurface(
     width: Dp,
     cornerRadius: Dp,
-    animProgress: Float,
+    animProgress: State<Float>,
     minScale: Float,
     backgroundColor: Color,
     shadowEnabled: Boolean,
@@ -183,10 +203,11 @@ private fun Modifier.modalWindowSurface(
 ): Modifier = this
     .width(width)
     .graphicsLayer {
-        val s = minScale + (1f - minScale) * animProgress
+        val p = animProgress.value
+        val s = minScale + (1f - minScale) * p
         scaleX = s
         scaleY = s
-        alpha = animProgress
+        alpha = p
     }
     .then(
         if (shadowEnabled) Modifier.shadow(shadowElevation, RoundedCornerShape(cornerRadius), clip = false)
@@ -249,7 +270,7 @@ fun ListOrderDialog(
     bottomClearance: Dp = 0.dp
 ) {
     val playClickSound = LocalNavigationSound.current
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { true }
 
     var workingItems by remember(items) { mutableStateOf(items) }
     val hasDistinctIds = remember(workingItems) {
@@ -510,12 +531,25 @@ fun ListOrderDialog(
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier.size(tokens.u * 3f).clip(CircleShape)
                                         )
-                                        !item.avatarUrl.isNullOrBlank() -> AsyncImage(
-                                            model = item.avatarUrl,
-                                            contentDescription = item.title,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.size(tokens.u * 3f).clip(CircleShape)
-                                        )
+                                        !item.avatarUrl.isNullOrBlank() -> {
+                                            val platformContext = LocalPlatformContext.current
+                                            val density = LocalDensity.current
+                                            val avatarSize = tokens.u * 3f
+                                            val avatarPx = with(density) { avatarSize.roundToPx().coerceAtLeast(1) }
+                                            val avatarRequest = remember(platformContext, item.avatarUrl, avatarPx) {
+                                                ImageRequest.Builder(platformContext)
+                                                    .data(item.avatarUrl)
+                                                    .size(avatarPx, avatarPx)
+                                                    .precision(Precision.INEXACT)
+                                                    .build()
+                                            }
+                                            AsyncImage(
+                                                model = avatarRequest,
+                                                contentDescription = item.title,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.size(avatarSize).clip(CircleShape)
+                                            )
+                                        }
                                         else -> Text(
                                             text = item.icon ?: IconGlyphs.ArrowRight,
                                             fontFamily = LocalIconFont.current,
@@ -686,11 +720,12 @@ internal fun AnimeTvSwitch(
 ) {
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
+    val density = LocalDensity.current
     val trackWidth = tokens.u * 4f
     val trackHeight = tokens.u * 2f
     val thumbSize = tokens.u * 1.6f
-    val thumbOffsetX by animateDpAsState(
-        targetValue = if (checked) tokens.u * 2.1f else tokens.u * 0.2f,
+    val thumbOffsetPx = animateFloatAsState(
+        targetValue = with(density) { (if (checked) tokens.u * 2.1f else tokens.u * 0.2f).toPx() },
         animationSpec = tween(durationMillis = tokens.tim2s, easing = tokens.easing)
     )
     val trackColor = when {
@@ -708,7 +743,8 @@ internal fun AnimeTvSwitch(
     ) {
         Box(
             modifier = Modifier
-                .offset(x = thumbOffsetX, y = tokens.u * 0.2f)
+                .offset(y = tokens.u * 0.2f)
+                .graphicsLayer { translationX = thumbOffsetPx.value }
                 .size(thumbSize)
                 .clip(CircleShape)
                 .background(thumbColor),
@@ -735,7 +771,7 @@ fun ConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { true }
     val playClickSound = LocalNavigationSound.current
     val yesRequester = remember { FocusRequester() }
     val noRequester = remember { FocusRequester() }
@@ -773,7 +809,10 @@ fun ConfirmDialog(
                 ModalHeaderBar(title = title, titleIcon = titleIcon)
             }
 
-            val parsedMessage = parseDialogMarkup(message, headingSize = fsSp(tokens.fs20))
+            val headingSize = fsSp(tokens.fs20)
+            val parsedMessage = remember(message, headingSize) {
+                parseDialogMarkup(message, headingSize = headingSize)
+            }
             Text(
                 text = parsedMessage,
                 color = Color(0xFFAAAAAA),
@@ -819,16 +858,21 @@ fun AppUpdateDialog(
     onDontRemind: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { true }
     val playClickSound = LocalNavigationSound.current
     val updateNowRequester = remember { FocusRequester() }
     val laterRequester = remember { FocusRequester() }
     val dontRemindRequester = remember { FocusRequester() }
     val changelogScroll = rememberScrollState()
-    val secondaryActions = listOf(
-        Triple("Later", laterRequester, onLater),
-        Triple("Don't Remind Me", dontRemindRequester, onDontRemind)
-    )
+    val secondaryActions = remember(laterRequester, dontRemindRequester, onLater, onDontRemind) {
+        listOf(
+            Triple("Later", laterRequester, onLater),
+            Triple("Don't Remind Me", dontRemindRequester, onDontRemind)
+        )
+    }
+    val allActions = remember(updateNowRequester, onUpdateNow, secondaryActions) {
+        listOf(Triple("Update Now", updateNowRequester, onUpdateNow)) + secondaryActions
+    }
 
     LaunchedEffect(Unit) {
         yield()
@@ -927,8 +971,7 @@ fun AppUpdateDialog(
                     horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.8f),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    (listOf(Triple("Update Now", updateNowRequester, onUpdateNow)) + secondaryActions)
-                        .forEach { (label, requester, action) ->
+                    allActions.forEach { (label, requester, action) ->
                             DialogActionButton(
                                 label = label,
                                 focusRequester = requester,
@@ -954,7 +997,7 @@ fun TextPromptDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { true }
     val playClickSound = LocalNavigationSound.current
     var value by remember(initialValue, isPin) {
         mutableStateOf(
@@ -998,8 +1041,12 @@ fun TextPromptDialog(
             ModalHeaderBar(title = title)
 
             if (placeholder.isNotBlank()) {
+                val headingSize = fsSp(tokens.fs20)
+                val parsedPlaceholder = remember(placeholder, headingSize) {
+                    parseDialogMarkup(placeholder, headingSize = headingSize)
+                }
                 Text(
-                    text = parseDialogMarkup(placeholder, headingSize = fsSp(tokens.fs20)),
+                    text = parsedPlaceholder,
                     color = Color(0xFFAAAAAA),
                     fontSize = fsSp(tokens.fs15),
                     lineHeight = fsSp(tokens.fs15) * 1.4f,
@@ -1131,17 +1178,18 @@ fun AboutPopupDialog(
     onDismiss: () -> Unit
 ) {
     if (!visible) return
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { true }
 
     AnimeTvModalScrim(onDismiss = onDismiss) { animProgress, tokens, colors ->
-        val cardScale = 0.5f + 0.5f * animProgress
         Column(
             modifier = Modifier
                 .widthIn(min = tokens.u * 15f)
                 .graphicsLayer {
+                    val p = animProgress.value
+                    val cardScale = 0.5f + 0.5f * p
                     scaleX = cardScale
                     scaleY = cardScale
-                    alpha = animProgress
+                    alpha = p
                 }
                 .then(
                     if (!shadowsDisabled) {
@@ -1180,13 +1228,24 @@ fun AboutPopupDialog(
                     qrContent()
                 }
             } else if (!qrImageUrl.isNullOrBlank()) {
+                val platformContext = LocalPlatformContext.current
+                val density = LocalDensity.current
+                val qrSize = tokens.u * 20f
+                val qrPx = with(density) { qrSize.roundToPx().coerceAtLeast(1) }
+                val qrRequest = remember(platformContext, qrImageUrl, qrPx) {
+                    ImageRequest.Builder(platformContext)
+                        .data(qrImageUrl)
+                        .size(qrPx, qrPx)
+                        .precision(Precision.INEXACT)
+                        .build()
+                }
                 AsyncImage(
-                    model = qrImageUrl,
+                    model = qrRequest,
                     contentDescription = caption,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .padding(bottom = tokens.u * 1f)
-                        .size(tokens.u * 20f)
+                        .size(qrSize)
                 )
             }
             if (!caption.isNullOrBlank()) {
@@ -1209,7 +1268,7 @@ fun ImgPickerDialog(
     onSelect: (ImgPickerItem) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { true }
     val playClickSound = LocalNavigationSound.current
     val initialIndex = remember(items) {
         items.indexOfFirst { it.selected }.let { if (it >= 0) it else 0 }
@@ -1230,6 +1289,11 @@ fun ImgPickerDialog(
         val baseWidth = if (tokens.portrait) tokens.vw * 84f else tokens.vw * 43f
         val dialogWidth = baseWidth.coerceAtMost(tokens.screenWidth * 0.94f)
         val gridMaxHeight = if (tokens.portrait) tokens.vw * 64f else tokens.vw * 33f
+        val platformContext = LocalPlatformContext.current
+        val density = LocalDensity.current
+        val cellPx = with(density) {
+            ((dialogWidth - tokens.vw * 0.5f) / 4f).roundToPx().coerceAtLeast(1)
+        }
 
         Column(
             modifier = Modifier
@@ -1306,12 +1370,21 @@ fun ImgPickerDialog(
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
-                                !item.imageUrl.isNullOrBlank() -> AsyncImage(
-                                    model = item.imageUrl,
-                                    contentDescription = item.title,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                !item.imageUrl.isNullOrBlank() -> {
+                                    val cellRequest = remember(platformContext, item.imageUrl, cellPx) {
+                                        ImageRequest.Builder(platformContext)
+                                            .data(item.imageUrl)
+                                            .size(cellPx, cellPx)
+                                            .precision(Precision.INEXACT)
+                                            .build()
+                                    }
+                                    AsyncImage(
+                                        model = cellRequest,
+                                        contentDescription = item.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                                 else -> Box(
                                     modifier = Modifier.fillMaxSize().background(Color(0xFF222222)),
                                     contentAlignment = Alignment.Center
@@ -1387,29 +1460,39 @@ fun AnimeTvSpinner(
     strokeWidth: Dp = size * 0.1f,
     color: Color = LocalAnimeTvColors.current.primary2
 ) {
-    val transition = rememberInfiniteTransition(label = "z-loader")
-    // Outer ring replicates .z-loader's net -270deg per 2.5s (-1080deg over 10s).
-    val outerAngle by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = -1080f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 10000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "z-loader-outer"
-    )
-    // Inner arc replicates z-loader-innerani oscillating 90deg <-> 270deg every 0.5s.
-    val innerOffset by transition.animateFloat(
-        initialValue = 90f,
-        targetValue = 270f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 500, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "z-loader-inner"
-    )
+    val animEnabled = LocalAnimeTvTokens.current.tim10s > 0
+    val outerAngleState: State<Float>
+    val innerOffsetState: State<Float>
+    if (animEnabled) {
+        val transition = rememberInfiniteTransition(label = "z-loader")
+        // Outer ring replicates .z-loader's net -270deg per 2.5s (-1080deg over 10s).
+        outerAngleState = transition.animateFloat(
+            initialValue = 0f,
+            targetValue = -1080f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 10000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "z-loader-outer"
+        )
+        // Inner arc replicates z-loader-innerani oscillating 90deg <-> 270deg every 0.5s.
+        innerOffsetState = transition.animateFloat(
+            initialValue = 90f,
+            targetValue = 270f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 500, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "z-loader-inner"
+        )
+    } else {
+        outerAngleState = remember { mutableFloatStateOf(0f) }
+        innerOffsetState = remember { mutableFloatStateOf(180f) }
+    }
 
     Canvas(modifier = Modifier.size(size)) {
+        val outerAngle = outerAngleState.value
+        val innerOffset = innerOffsetState.value
         val strokePx = strokeWidth.toPx()
         val inset = strokePx / 2f
         val arcSize = androidx.compose.ui.geometry.Size(
@@ -1442,8 +1525,8 @@ fun AnimeTvSpinner(
 
 private fun parseDialogMarkup(raw: String, headingSize: TextUnit): AnnotatedString {
     val normalized = raw
-        .replace(Regex("(?i)<br\\s*/?>"), "\n")
-        .replace(Regex("(?i)<c>.*?</c>"), "")
+        .replace(DIALOG_BR_REGEX, "\n")
+        .replace(DIALOG_C_TAG_REGEX, "")
     return buildAnnotatedString {
         var i = 0
         while (i < normalized.length) {

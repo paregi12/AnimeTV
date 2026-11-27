@@ -181,35 +181,56 @@ internal fun AniListInfoDialog(
                     )
                 }
                 else -> {
-                    val primaryTitle = if (japaneseTitles) {
-                        info.titleRomaji ?: info.titleEnglish ?: info.titleNative.orEmpty()
-                    } else {
-                        info.titleEnglish ?: info.titleRomaji ?: info.titleNative.orEmpty()
+                    val primaryTitle = remember(info, japaneseTitles) {
+                        if (japaneseTitles) {
+                            info.titleRomaji ?: info.titleEnglish ?: info.titleNative.orEmpty()
+                        } else {
+                            info.titleEnglish ?: info.titleRomaji ?: info.titleNative.orEmpty()
+                        }
                     }
-                    val otherTitle = if (japaneseTitles) {
-                        info.titleEnglish ?: info.titleRomaji
-                    } else {
-                        info.titleRomaji ?: info.titleEnglish
+                    val otherTitle = remember(info, japaneseTitles) {
+                        if (japaneseTitles) {
+                            info.titleEnglish ?: info.titleRomaji
+                        } else {
+                            info.titleRomaji ?: info.titleEnglish
+                        }
                     }
-                    val bannerUrl = info.bannerUrl?.takeIf { it.isNotBlank() }
-                        ?: info.trailerId?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
-                    val aniListStatusText = tracking.aniList.status
-                        ?.replace('_', ' ')
-                        ?.lowercase()
-                        ?.replaceFirstChar { it.uppercase() }
-                        ?: "Not on your list"
-                    val formattedSource = info.source
-                        ?.replace('_', ' ')
-                        ?.lowercase()
-                        ?.replaceFirstChar { it.uppercase() }
-                        ?: "-"
-                    val formattedSeason = info.season
-                        ?.lowercase()
-                        ?.replaceFirstChar { it.uppercase() }
-                        ?: "-"
-                    val genresValue = info.genres.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: "-"
-                    val synonymsValue = info.synonyms.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: "-"
-                    val studiosValue = info.studios.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: "-"
+                    val bannerUrl = remember(info.bannerUrl, info.trailerId) {
+                        info.bannerUrl?.takeIf { it.isNotBlank() }
+                            ?: info.trailerId?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
+                    }
+                    val aniListStatusText = remember(tracking.aniList.status) {
+                        tracking.aniList.status
+                            ?.replace('_', ' ')
+                            ?.lowercase()
+                            ?.replaceFirstChar { it.uppercase() }
+                            ?: "Not on your list"
+                    }
+                    val formattedSource = remember(info.source) {
+                        info.source
+                            ?.replace('_', ' ')
+                            ?.lowercase()
+                            ?.replaceFirstChar { it.uppercase() }
+                            ?: "-"
+                    }
+                    val formattedSeason = remember(info.season) {
+                        info.season
+                            ?.lowercase()
+                            ?.replaceFirstChar { it.uppercase() }
+                            ?: "-"
+                    }
+                    val genresValue = remember(info.genres) {
+                        info.genres.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: "-"
+                    }
+                    val synonymsValue = remember(info.synonyms) {
+                        info.synonyms.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: "-"
+                    }
+                    val studiosValue = remember(info.studios) {
+                        info.studios.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: "-"
+                    }
+                    val displayDescription = remember(info.description) {
+                        info.description?.takeIf { it.isNotBlank() }?.let(::displayAnimeSynopsis)
+                    }
 
                     if (portrait) {
                         Box(
@@ -337,9 +358,9 @@ internal fun AniListInfoDialog(
 
                                 AniListInfoboxRow(info = info, textShadow = titleShadow)
 
-                                info.description?.takeIf { it.isNotBlank() }?.let { description ->
+                                info.description?.takeIf { it.isNotBlank() }?.let { _ ->
                                     Text(
-                                        text = displayAnimeSynopsis(description),
+                                        text = displayDescription.orEmpty(),
                                         color = Color.White,
                                         fontSize = fsSp(tokens.fs13),
                                         lineHeight = fsSp(tokens.fs13) * 1.2f,
@@ -458,9 +479,9 @@ internal fun AniListInfoDialog(
 
                                     AniListInfoboxRow(info = info, textShadow = null)
 
-                                    info.description?.takeIf { it.isNotBlank() }?.let { description ->
+                                    info.description?.takeIf { it.isNotBlank() }?.let { _ ->
                                         Text(
-                                            text = displayAnimeSynopsis(description),
+                                            text = displayDescription.orEmpty(),
                                             color = Color.White,
                                             fontSize = fsSp(tokens.fs13),
                                             lineHeight = fsSp(tokens.fs13) * 1.25f,
@@ -603,44 +624,31 @@ internal fun AniListInfoDialog(
     statusProvider?.let { provider ->
         val providerName = if (provider == AccountProvider.ANILIST) "AniList" else "MAL"
         val state = if (provider == AccountProvider.ANILIST) tracking.aniList else tracking.mal
-        val statusOptions = if (provider == AccountProvider.ANILIST) {
-            listOf(
-                "CURRENT" to "Current",
-                "PLANNING" to "Planning",
-                "COMPLETED" to "Completed",
-                "DROPPED" to "Dropped",
-                "PAUSED" to "Paused",
-                "REPEATING" to "Repeating"
-            )
-        } else {
-            listOf(
-                "watching" to "Watching",
-                "completed" to "Completed",
-                "on_hold" to "On Hold",
-                "dropped" to "Dropped",
-                "plan_to_watch" to "Plan to Watch"
-            )
+        val statusOptions = if (provider == AccountProvider.ANILIST) ANILIST_STATUS_OPTIONS else MAL_STATUS_OPTIONS
+        val selectedIndex = remember(statusOptions, state.status) {
+            statusOptions.indexOfFirst { it.first.equals(state.status, ignoreCase = true) }
         }
-        val selectedIndex = statusOptions.indexOfFirst { it.first.equals(state.status, ignoreCase = true) }
         val currentLabel = statusOptions.getOrNull(selectedIndex)?.second
-        val dialogItems = buildList {
-            statusOptions.forEach { (status, label) ->
-                add(
-                    ListOrderItem(
-                        id = status,
-                        title = "Add to $label",
-                        selected = status.equals(state.status, ignoreCase = true)
+        val dialogItems = remember(statusOptions, state.status, state.isTracked, currentLabel) {
+            buildList {
+                statusOptions.forEach { (status, label) ->
+                    add(
+                        ListOrderItem(
+                            id = status,
+                            title = "Add to $label",
+                            selected = status.equals(state.status, ignoreCase = true)
+                        )
                     )
-                )
-            }
-            if (state.isTracked && currentLabel != null) {
-                add(
-                    ListOrderItem(
-                        id = "__remove__",
-                        title = "Remove from $currentLabel",
-                        icon = IconGlyphs.DeleteForever
+                }
+                if (state.isTracked && currentLabel != null) {
+                    add(
+                        ListOrderItem(
+                            id = "__remove__",
+                            title = "Remove from $currentLabel",
+                            icon = IconGlyphs.DeleteForever
+                        )
                     )
-                )
+                }
             }
         }
 
@@ -678,96 +686,56 @@ internal fun AniListInfoDialog(
     }
 }
 
+private val ANILIST_STATUS_OPTIONS = listOf(
+    "CURRENT" to "Current",
+    "PLANNING" to "Planning",
+    "COMPLETED" to "Completed",
+    "DROPPED" to "Dropped",
+    "PAUSED" to "Paused",
+    "REPEATING" to "Repeating"
+)
+
+private val MAL_STATUS_OPTIONS = listOf(
+    "watching" to "Watching",
+    "completed" to "Completed",
+    "on_hold" to "On Hold",
+    "dropped" to "Dropped",
+    "plan_to_watch" to "Plan to Watch"
+)
+
+private sealed interface InfoboxChip {
+    data class Score(val value: Int) : InfoboxChip
+    data object Adult : InfoboxChip
+    data class Label(val text: String, val color: Color) : InfoboxChip
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AniListInfoboxRow(info: AniListAnimeInfo, textShadow: Shadow?) {
     val tokens = LocalAnimeTvTokens.current
-    val items = buildList<@Composable () -> Unit> {
-        info.score?.let { score ->
-            add {
-                Box {
-                    Text(
-                        text = "★★★★★",
-                        color = Color(0xFF666666),
-                        fontSize = fsSp(tokens.fs13),
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                    Text(
-                        text = "★★★★★",
-                        color = Color(0xFFFFD76A),
-                        fontSize = fsSp(tokens.fs13),
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.drawWithContent {
-                            clipRect(right = size.width * (score.coerceIn(0, 100) / 100f)) {
-                                this@drawWithContent.drawContent()
-                            }
-                        }
-                    )
-                }
+    val items = remember(info) {
+        buildList {
+            info.score?.let { add(InfoboxChip.Score(it)) }
+            if (info.adult) add(InfoboxChip.Adult)
+            val fmtYear = listOfNotNull(
+                info.format?.replace("TV_SHORT", "TV")?.takeIf { it.isNotBlank() },
+                info.year?.toString()
+            ).joinToString(" · ")
+            if (fmtYear.isNotBlank()) add(InfoboxChip.Label(fmtYear, Color.White))
+            info.status?.takeIf { it.isNotBlank() }?.let { st ->
+                add(InfoboxChip.Label(st.replace('_', ' '), Color(0xFF11AA11)))
             }
-        }
-        if (info.adult) {
-            add {
-                Text(
-                    text = "18+",
-                    color = Color(0xFFFF3333),
-                    fontSize = fsSp(tokens.fs13),
-                    style = TextStyle(shadow = textShadow)
-                )
+            info.durationMinutes?.let { dur ->
+                add(InfoboxChip.Label("$dur min", Color(0xFF66BBDD)))
             }
-        }
-        val fmtYear = listOfNotNull(
-            info.format?.replace("TV_SHORT", "TV")?.takeIf { it.isNotBlank() },
-            info.year?.toString()
-        ).joinToString(" · ")
-        if (fmtYear.isNotBlank()) {
-            add {
-                Text(
-                    text = fmtYear,
-                    color = Color.White,
-                    fontSize = fsSp(tokens.fs13),
-                    style = TextStyle(shadow = textShadow)
-                )
+            val airedEp = info.nextAiringEpisode?.minus(1)?.takeIf { it > 0 }
+            val episodeText = when {
+                airedEp != null && info.episodeCount != null -> "$airedEp of ${info.episodeCount} Episodes"
+                airedEp != null -> "$airedEp Episodes"
+                info.episodeCount != null -> "${info.episodeCount} Episodes"
+                else -> null
             }
-        }
-        info.status?.takeIf { it.isNotBlank() }?.let { st ->
-            add {
-                Text(
-                    text = st.replace('_', ' '),
-                    color = Color(0xFF11AA11),
-                    fontSize = fsSp(tokens.fs13),
-                    style = TextStyle(shadow = textShadow)
-                )
-            }
-        }
-        info.durationMinutes?.let { dur ->
-            add {
-                Text(
-                    text = "$dur min",
-                    color = Color(0xFF66BBDD),
-                    fontSize = fsSp(tokens.fs13),
-                    style = TextStyle(shadow = textShadow)
-                )
-            }
-        }
-        val airedEp = info.nextAiringEpisode?.minus(1)?.takeIf { it > 0 }
-        val episodeText = when {
-            airedEp != null && info.episodeCount != null -> "$airedEp of ${info.episodeCount} Episodes"
-            airedEp != null -> "$airedEp Episodes"
-            info.episodeCount != null -> "${info.episodeCount} Episodes"
-            else -> null
-        }
-        episodeText?.let { epTxt ->
-            add {
-                Text(
-                    text = epTxt,
-                    color = Color.White,
-                    fontSize = fsSp(tokens.fs13),
-                    style = TextStyle(shadow = textShadow)
-                )
-            }
+            episodeText?.let { epTxt -> add(InfoboxChip.Label(epTxt, Color.White)) }
         }
     }
 
@@ -778,7 +746,7 @@ private fun AniListInfoboxRow(info: AniListAnimeInfo, textShadow: Shadow?) {
                 .padding(top = tokens.u * 0.5f, bottom = tokens.u * 1.5f),
             verticalArrangement = Arrangement.spacedBy(tokens.u * 0.35f)
         ) {
-            items.forEachIndexed { index, renderItem ->
+            items.forEachIndexed { index, item ->
                 Row(
                     modifier = Modifier.height(IntrinsicSize.Min),
                     verticalAlignment = Alignment.CenterVertically
@@ -792,7 +760,47 @@ private fun AniListInfoboxRow(info: AniListAnimeInfo, textShadow: Shadow?) {
                                 .background(Color.White.copy(alpha = 0.2f))
                         )
                     }
-                    renderItem()
+                    when (item) {
+                        is InfoboxChip.Score -> {
+                            Box {
+                                Text(
+                                    text = "★★★★★",
+                                    color = Color(0xFF666666),
+                                    fontSize = fsSp(tokens.fs13),
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                                Text(
+                                    text = "★★★★★",
+                                    color = Color(0xFFFFD76A),
+                                    fontSize = fsSp(tokens.fs13),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.drawWithContent {
+                                        clipRect(right = size.width * (item.value.coerceIn(0, 100) / 100f)) {
+                                            this@drawWithContent.drawContent()
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        InfoboxChip.Adult -> {
+                            Text(
+                                text = "18+",
+                                color = Color(0xFFFF3333),
+                                fontSize = fsSp(tokens.fs13),
+                                style = TextStyle(shadow = textShadow)
+                            )
+                        }
+                        is InfoboxChip.Label -> {
+                            Text(
+                                text = item.text,
+                                color = item.color,
+                                fontSize = fsSp(tokens.fs13),
+                                style = TextStyle(shadow = textShadow)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -907,6 +915,11 @@ private fun AniListKeyValCell(
 
 private val ReviewWhitespaceRegex = Regex("\\s+")
 
+private data class NormalizedReviewEntry(
+    val summary: String,
+    val score: Int?
+)
+
 @Composable
 private fun AniListReviewsBlock(reviews: List<AniListReview>) {
     val tokens = LocalAnimeTvTokens.current
@@ -939,6 +952,14 @@ private fun AniListReviewsBlock(reviews: List<AniListReview>) {
                 append("/100")
             }
         }
+        val normalizedReviews = remember(reviews) {
+            reviews.map { review ->
+                NormalizedReviewEntry(
+                    summary = review.summary.replace(ReviewWhitespaceRegex, " ").trim(),
+                    score = review.score
+                )
+            }
+        }
         val badgeMinWidth = remember(
             scoreFontSize,
             suffixFontSize,
@@ -969,8 +990,7 @@ private fun AniListReviewsBlock(reviews: List<AniListReview>) {
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = tokens.u * 0.2f)
             )
-            reviews.forEach { review ->
-                val summaryText = review.summary.replace(ReviewWhitespaceRegex, " ").trim()
+            normalizedReviews.forEach { review ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -987,7 +1007,7 @@ private fun AniListReviewsBlock(reviews: List<AniListReview>) {
                             .alignByBaseline()
                     )
                     Text(
-                        text = summaryText,
+                        text = review.summary,
                         color = Color.White,
                         fontSize = scoreFontSize,
                         lineHeight = scoreFontSize * 1.4f,
@@ -996,6 +1016,9 @@ private fun AniListReviewsBlock(reviews: List<AniListReview>) {
                             .alignByBaseline()
                     )
                     review.score?.let { score ->
+                        val scoreLabel = remember(score, scoreFontSize, suffixFontSize) {
+                            buildScoreLabel(score.toString())
+                        }
                         Spacer(Modifier.width(tokens.u * 1f))
                         Box(
                             modifier = Modifier
@@ -1006,7 +1029,7 @@ private fun AniListReviewsBlock(reviews: List<AniListReview>) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = buildScoreLabel(score.toString()),
+                                text = scoreLabel,
                                 color = Color.White,
                                 fontSize = scoreFontSize,
                                 lineHeight = scoreFontSize * 1.2f,

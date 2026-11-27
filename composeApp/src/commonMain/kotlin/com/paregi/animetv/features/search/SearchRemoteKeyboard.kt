@@ -40,28 +40,37 @@ internal object SearchRemotePadPrefs {
     var muted: Boolean by mutableStateOf(false)
 }
 
+private val KEYBOARD_ROWS = listOf(
+    listOf("Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"),
+    listOf("A", "S", "D", "F", "G", "H", "J", "K", "L", "'"),
+    listOf("Z", "X", "C", "V", "B", "N", "M", ",", ".", "backspace"),
+    listOf("clear", "space", "search")
+)
+
+private val KEYPAD_ROWS = listOf(
+    listOf("7", "8", "9"),
+    listOf("4", "5", "6"),
+    listOf("1", "2", "3"),
+    listOf("0", "?", "mute")
+)
+
+private val ICON_KEYS = setOf("backspace", "clear", "space", "search")
+
 @Composable
 internal fun SearchKeyboardTools(
-    query: String,
-    onRemoteQueryChange: (String) -> Unit,
+    onKeyAction: (String) -> Unit,
     onSearch: () -> Unit,
     muted: Boolean,
     initialFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier
 ) {
     val tokens = LocalAnimeTvTokens.current
-    val rows = listOf(
-        listOf("Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"),
-        listOf("A", "S", "D", "F", "G", "H", "J", "K", "L", "'"),
-        listOf("Z", "X", "C", "V", "B", "N", "M", ",", ".", "backspace"),
-        listOf("clear", "space", "search")
-    )
     val gap = tokens.vw * 0.5f
     val keyWidth = tokens.vw * 4f
     val keyHeight = tokens.vw * 3.4f
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(gap)) {
-        rows.forEachIndexed { rowIndex, row ->
+        KEYBOARD_ROWS.forEachIndexed { rowIndex, row ->
             Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                 row.forEachIndexed { colIndex, key ->
                     val width = when (key) {
@@ -69,7 +78,7 @@ internal fun SearchKeyboardTools(
                         "space" -> tokens.vw * 26.5f
                         else -> keyWidth
                     }
-                    val isIcon = key in setOf("backspace", "clear", "space", "search")
+                    val isIcon = key in ICON_KEYS
                     val label = when (key) {
                         "backspace" -> IconGlyphs.Backspace
                         "clear" -> IconGlyphs.Cancel
@@ -90,13 +99,7 @@ internal fun SearchKeyboardTools(
                         focusRequester = initialFocusRequester.takeIf { rowIndex == 1 && colIndex == 0 },
                         modifier = Modifier.width(width).height(keyHeight),
                         onClick = {
-                            when (key) {
-                                "backspace" -> onRemoteQueryChange(query.dropLast(1))
-                                "clear" -> onRemoteQueryChange("")
-                                "space" -> onRemoteQueryChange(query + " ")
-                                "search" -> onSearch()
-                                else -> onRemoteQueryChange(query + key.lowercase())
-                            }
+                            if (key == "search") onSearch() else onKeyAction(key)
                         }
                     )
                 }
@@ -107,25 +110,18 @@ internal fun SearchKeyboardTools(
 
 @Composable
 internal fun SearchKeypadTools(
-    query: String,
-    onRemoteQueryChange: (String) -> Unit,
+    onKeyAction: (String) -> Unit,
     muted: Boolean,
     onToggleMute: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tokens = LocalAnimeTvTokens.current
-    val rows = listOf(
-        listOf("7", "8", "9"),
-        listOf("4", "5", "6"),
-        listOf("1", "2", "3"),
-        listOf("0", "?", "mute")
-    )
     val gap = tokens.vw * 0.5f
     val keyWidth = tokens.vw * 4f
     val keyHeight = tokens.vw * 3.4f
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(gap)) {
-        rows.forEach { row ->
+        KEYPAD_ROWS.forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                 row.forEach { key ->
                     val isMute = key == "mute"
@@ -139,7 +135,7 @@ internal fun SearchKeypadTools(
                         playSoundOnClickEvenIfMuted = isMute,
                         modifier = Modifier.width(keyWidth).height(keyHeight),
                         onClick = {
-                            if (isMute) onToggleMute() else onRemoteQueryChange(query + key)
+                            if (isMute) onToggleMute() else onKeyAction(key)
                         }
                     )
                 }

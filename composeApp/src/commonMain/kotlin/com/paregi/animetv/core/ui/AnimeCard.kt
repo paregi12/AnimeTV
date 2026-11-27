@@ -1,6 +1,5 @@
 package com.paregi.animetv.core.ui
 
-import androidx.compose.animation.animateColor
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -9,6 +8,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.hoverable
@@ -36,8 +36,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -65,6 +67,9 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
+import coil3.size.Precision
 import com.paregi.animetv.core.theme.BadgeThemeColors
 import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.theme.LocalAnimeTvColors
@@ -80,6 +85,7 @@ import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformImagePainter
 
+@Immutable
 data class CardStylePreferences(
     val cardSize: Int = 0,
     val cardRadius: Int = 0,
@@ -89,6 +95,7 @@ data class CardStylePreferences(
 
 internal val LocalCardStyle = compositionLocalOf { CardStylePreferences() }
 
+@Immutable
 internal data class CardDimensions(
     val cardWidth: Dp,
     val cardHeight: Dp,
@@ -127,6 +134,7 @@ internal fun calculateCardDimensions(
     )
 }
 
+@Immutable
 private data class BadgeSegment(
     val text: String,
     val background: Color,
@@ -165,6 +173,9 @@ internal fun FocusCard(
     val performanceEffects = LocalPerformanceEffects.current
     val cardStyle = LocalCardStyle.current
     val density = LocalDensity.current
+    val platformContext = LocalPlatformContext.current
+    val imageCdn = LocalImageCdn.current
+    val japaneseTitles = LocalJapaneseTitles.current
 
     var focused by remember { mutableStateOf(false) }
     val interactionSource = remember { MutableInteractionSource() }
@@ -177,7 +188,7 @@ internal fun FocusCard(
     val shadowsDisabled = performanceEffects.getOrElse(2) { true }
     val textShadowDisabled = performanceEffects.getOrElse(4) { false }
 
-    val animScale by animateFloatAsState(
+    val animScaleState = animateFloatAsState(
         targetValue = if (focused && scaleEnabled) {
             if (isLargeLandscape) 1.03f else 1.06f
         } else 1f,
@@ -212,8 +223,8 @@ internal fun FocusCard(
         )
     }
 
-    val posterShape = RoundedCornerShape((u * 0.3f).coerceAtLeast(1.dp))
-    val backplateShape = RoundedCornerShape((u * 0.5f).coerceAtLeast(1.dp))
+    val posterShape = remember(u) { RoundedCornerShape((u * 0.3f).coerceAtLeast(1.dp)) }
+    val backplateShape = remember(u) { RoundedCornerShape((u * 0.5f).coerceAtLeast(1.dp)) }
     val badgeFontSize = fsSp(tokens.fs8)
     val badgeLineHeight = badgeFontSize * 1.4f
     val badgeCornerRadius = (u * 0.3f).coerceAtLeast(1.dp)
@@ -226,14 +237,78 @@ internal fun FocusCard(
     val titleTop = posterInsetY + posterHeight + u * 0.3f
     val titleHeight = (cardHeight - titleTop).coerceAtLeast(0.dp)
 
+    val displayTitle = remember(anime.title, anime.originalTitle, japaneseTitles) {
+        displayAnimeTitle(anime, japaneseTitles)
+    }
+    val posterUrl = remember(anime.posterUrl, imageCdn) {
+        imageCdnUrl(anime.posterUrl, imageCdn)
+    }
+    val posterWidthPx = with(density) { posterWidth.roundToPx().coerceAtLeast(1) }
+    val posterHeightPx = with(density) { posterHeight.roundToPx().coerceAtLeast(1) }
+    val posterRequest = remember(platformContext, posterUrl, posterWidthPx, posterHeightPx) {
+        posterUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            ImageRequest.Builder(platformContext)
+                .data(url)
+                .size(posterWidthPx, posterHeightPx)
+                .precision(Precision.INEXACT)
+                .build()
+        }
+    }
+    var showFallback by remember(posterUrl) { mutableStateOf(posterUrl.isNullOrBlank()) }
+
+    val glassMode = cardStyle.badgeStyle != 0
+    val topSegments = remember(
+        badges,
+        posterCornerLabel,
+        effectiveBadgeMode,
+        glassMode,
+        colors.primaryBg,
+        colors.primary1,
+        colors.primary2
+    ) {
+        buildTopBadgeSegments(
+            badges = badges,
+            posterCornerLabel = posterCornerLabel,
+            badgeMode = effectiveBadgeMode,
+            glassMode = glassMode,
+            primaryBg = colors.primaryBg,
+            primary1 = colors.primary1,
+            primary2 = colors.primary2
+        )
+    }
+    val bottomSegments = remember(
+        badges,
+        posterBottomLabel,
+        posterBottomIcon,
+        posterBottomAired,
+        effectiveBadgeMode,
+        effectiveShowBottomBadges,
+        glassMode,
+        colors.primaryBg,
+        colors.primary2
+    ) {
+        buildBottomBadgeSegments(
+            badges = badges,
+            posterBottomLabel = posterBottomLabel,
+            posterBottomIcon = posterBottomIcon,
+            posterBottomAired = posterBottomAired,
+            badgeMode = effectiveBadgeMode,
+            showBottomBadges = effectiveShowBottomBadges,
+            glassMode = glassMode,
+            primaryBg = colors.primaryBg,
+            primary2 = colors.primary2
+        )
+    }
+
     Box(
         modifier = Modifier
             .width(cardWidth)
             .height(cardHeight)
             .zIndex(if (isActive) 2f else 0f)
             .graphicsLayer {
-                scaleX = animScale
-                scaleY = animScale
+                val s = animScaleState.value
+                scaleX = s
+                scaleY = s
             }
             .hoverable(interactionSource = interactionSource)
             .onFocusChanged { state ->
@@ -269,7 +344,6 @@ internal fun FocusCard(
             )
         }
 
-        val fallbackPainter = platformImagePainter("noimg")
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -279,28 +353,29 @@ internal fun FocusCard(
                 .clip(posterShape)
                 .background(Color.Black)
         ) {
-            AsyncImage(
-                model = imageCdnUrl(anime.posterUrl, LocalImageCdn.current),
-                contentDescription = displayAnimeTitle(anime, LocalJapaneseTitles.current),
-                contentScale = ContentScale.Crop,
-                error = fallbackPainter,
-                fallback = fallbackPainter,
-                modifier = Modifier.fillMaxSize()
-            )
+            if (posterRequest != null && !showFallback) {
+                AsyncImage(
+                    model = posterRequest,
+                    contentDescription = displayTitle,
+                    contentScale = ContentScale.Crop,
+                    onSuccess = { showFallback = false },
+                    onError = { showFallback = true },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            if (showFallback) {
+                Image(
+                    painter = platformImagePainter("noimg"),
+                    contentDescription = displayTitle,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
 
-            val topSegments = buildTopBadgeSegments(
-                badges = badges,
-                posterCornerLabel = posterCornerLabel,
-                badgeMode = effectiveBadgeMode,
-                glassMode = cardStyle.badgeStyle != 0,
-                primaryBg = colors.primaryBg,
-                primary1 = colors.primary1,
-                primary2 = colors.primary2
-            )
             if (topSegments.isNotEmpty()) {
                 SegmentedBadgePill(
                     segments = topSegments,
-                    glassMode = cardStyle.badgeStyle != 0,
+                    glassMode = glassMode,
                     fontSize = badgeFontSize,
                     lineHeight = badgeLineHeight,
                     cornerRadius = badgeCornerRadius,
@@ -316,7 +391,9 @@ internal fun FocusCard(
 
             if (effectiveBadgeMode == CardBadgeMode.AniListMyList && badges.hasNextAired) {
                 val borderWidth = (u * 0.15f).coerceAtLeast(1.dp)
-                val nextPillShape = RoundedCornerShape(topEnd = u * 0.5f, bottomEnd = u * 0.5f)
+                val nextPillShape = remember(u) {
+                    RoundedCornerShape(topEnd = u * 0.5f, bottomEnd = u * 0.5f)
+                }
                 val nextPillTop = posterHeight - (if (isLargeLandscape || tokens.portrait) u * 3.5f else u * 2.5f)
                 Box(
                     modifier = Modifier
@@ -344,22 +421,11 @@ internal fun FocusCard(
                 }
             }
 
-            val bottomSegments = buildBottomBadgeSegments(
-                badges = badges,
-                posterBottomLabel = posterBottomLabel,
-                posterBottomIcon = posterBottomIcon,
-                posterBottomAired = posterBottomAired,
-                badgeMode = effectiveBadgeMode,
-                showBottomBadges = effectiveShowBottomBadges,
-                glassMode = cardStyle.badgeStyle != 0,
-                primaryBg = colors.primaryBg,
-                primary2 = colors.primary2
-            )
             if (bottomSegments.isNotEmpty()) {
                 val bottomInset = if (isLargeLandscape || tokens.portrait) u * 0.5f else u * 0.3f
                 SegmentedBadgePill(
                     segments = bottomSegments,
-                    glassMode = cardStyle.badgeStyle != 0,
+                    glassMode = glassMode,
                     fontSize = badgeFontSize,
                     lineHeight = badgeLineHeight,
                     cornerRadius = badgeCornerRadius,
@@ -374,20 +440,23 @@ internal fun FocusCard(
             }
 
             if (showPlayingRibbon) {
-                val playingTransition = rememberInfiniteTransition(label = "playing-blink")
-                val playingColor by playingTransition.animateColor(
-                    initialValue = Color.White,
-                    targetValue = Color(0xFF33FF33),
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(
-                            durationMillis = (tokens.tim10s / 2).coerceAtLeast(300),
-                            easing = LinearEasing
+                val ribbonShape = remember(u) { RoundedCornerShape(u * 0.4f) }
+                val animEnabled = tokens.tim10s > 0
+                val playingPulse = if (animEnabled) {
+                    val playingTransition = rememberInfiniteTransition(label = "playing-blink")
+                    playingTransition.animateFloat(
+                        initialValue = 0f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(
+                                durationMillis = (tokens.tim10s / 2).coerceAtLeast(300),
+                                easing = LinearEasing
+                            ),
+                            repeatMode = RepeatMode.Reverse
                         ),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "playing-color"
-                )
-                val ribbonShape = RoundedCornerShape(u * 0.4f)
+                        label = "playing-color"
+                    )
+                } else null
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopStart)
@@ -401,16 +470,26 @@ internal fun FocusCard(
                 ) {
                     Text(
                         text = "PLAYING",
-                        color = if (tokens.tim10s == 0) Color.White else playingColor,
+                        color = Color.White,
                         fontSize = fsSp(tokens.fs10),
                         fontWeight = FontWeight.Bold,
                         maxLines = 1
                     )
+                    if (playingPulse != null) {
+                        Text(
+                            text = "PLAYING",
+                            color = Color(0xFF33FF33),
+                            fontSize = fsSp(tokens.fs10),
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            modifier = Modifier.graphicsLayer { alpha = playingPulse.value }
+                        )
+                    }
                 }
             }
 
             badges.progressPercent?.let { pct ->
-                val trackShape = RoundedCornerShape((u * 0.2f).coerceAtLeast(1.dp))
+                val trackShape = remember(u) { RoundedCornerShape((u * 0.2f).coerceAtLeast(1.dp)) }
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
@@ -431,13 +510,15 @@ internal fun FocusCard(
         }
 
         val textColor = if (isActive) Color.White else Color.White.copy(alpha = 0.5f)
-        val shadow = if (!textShadowDisabled) {
-            val blurPx = with(density) { (u * 0.2f).toPx() }
-            val offsetPx = with(density) { (u * 0.1f).toPx() }
-            Shadow(Color.Black, Offset(0f, offsetPx), blurPx)
-        } else null
+        val shadow = remember(textShadowDisabled, u, density) {
+            if (!textShadowDisabled) {
+                val blurPx = with(density) { (u * 0.2f).toPx() }
+                val offsetPx = with(density) { (u * 0.1f).toPx() }
+                Shadow(Color.Black, Offset(0f, offsetPx), blurPx)
+            } else null
+        }
         Text(
-            text = displayAnimeTitle(anime, LocalJapaneseTitles.current),
+            text = displayTitle,
             color = textColor,
             fontSize = cardTitleSize,
             fontWeight = FontWeight.Normal,
@@ -761,9 +842,11 @@ internal fun animeTvTextShadow(
     if (textShadowDisabled) return null
     val tokens = LocalAnimeTvTokens.current
     val density = LocalDensity.current
-    val blurPx = with(density) { (tokens.u * blurMultiplier).toPx() }
-    val offPx = with(density) { (tokens.u * offsetMultiplier).toPx() }
-    return Shadow(Color.Black, Offset(0f, offPx), blurPx)
+    return remember(tokens.u, blurMultiplier, offsetMultiplier, density) {
+        val blurPx = with(density) { (tokens.u * blurMultiplier).toPx() }
+        val offPx = with(density) { (tokens.u * offsetMultiplier).toPx() }
+        Shadow(Color.Black, Offset(0f, offPx), blurPx)
+    }
 }
 
 @Composable
@@ -797,9 +880,10 @@ internal fun AnimeTvShelfPlaceholder(
     modifier: Modifier = Modifier
 ) {
     val tokens = LocalAnimeTvTokens.current
-    val textColor = if (loading) {
+    val animEnabled = loading && tokens.tim10s > 0
+    val alphaState = if (animEnabled) {
         val infiniteTransition = rememberInfiniteTransition(label = "loading_text")
-        val alpha by infiniteTransition.animateFloat(
+        infiniteTransition.animateFloat(
             initialValue = 0.4f,
             targetValue = 0.8f,
             animationSpec = infiniteRepeatable(
@@ -808,9 +892,8 @@ internal fun AnimeTvShelfPlaceholder(
             ),
             label = "loading_alpha"
         )
-        Color.White.copy(alpha = alpha)
     } else {
-        Color.White.copy(alpha = 0.5f)
+        remember(loading) { mutableFloatStateOf(if (loading) 0.7f else 0.5f) }
     }
     Box(
         modifier = modifier
@@ -820,9 +903,10 @@ internal fun AnimeTvShelfPlaceholder(
     ) {
         Text(
             text = if (loading) "Loading data..." else emptyText,
-            color = textColor,
+            color = Color.White,
             fontSize = fsSp(tokens.fs20),
-            textAlign = TextAlign.Center
+            textAlign = TextAlign.Center,
+            modifier = Modifier.graphicsLayer { alpha = alphaState.value }
         )
     }
 }
@@ -907,7 +991,7 @@ internal fun AnimeTvInlineTabs(
 ) {
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
-    val maskEnabled = !LocalPerformanceEffects.current.getOrElse(3) { false }
+    val maskEnabled = !LocalPerformanceEffects.current.getOrElse(3) { true }
     val rowState = rememberLazyListState()
     var anyTabFocused by remember { mutableStateOf(false) }
 

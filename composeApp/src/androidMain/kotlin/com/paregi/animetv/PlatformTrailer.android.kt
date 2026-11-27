@@ -20,11 +20,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -161,6 +166,10 @@ private const val TRAILER_OBSERVER_JS = """
       if (p && p.catch) p.catch(function() {});
     } else if (cmd === 'mute') {
       v.muted = !v.muted;
+    } else if (cmd === 'mute-on') {
+      v.muted = true;
+    } else if (cmd === 'mute-off') {
+      v.muted = false;
     }
   };
   window.__animetvShowError = showError;
@@ -213,6 +222,9 @@ private const val TRAILER_OBSERVER_JS = """
 
   function initVid() {
     vid.loop = true;
+    if (typeof window.__animetvDesiredMuted === 'boolean') {
+      vid.muted = window.__animetvDesiredMuted;
+    }
     if (!vid.__animetvListeners) {
       vid.__animetvListeners = true;
       vid.addEventListener('play', function() {
@@ -324,11 +336,14 @@ actual fun PlatformTrailer(
     hideUntilPlaying: Boolean
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val latestCallback by rememberUpdatedState(onPlaybackState)
     val latestHideUntilPlaying by rememberUpdatedState(hideUntilPlaying)
-    val destroyed = remember(youtubeId, muted) { AtomicBoolean(false) }
+    val destroyed = remember(youtubeId) { AtomicBoolean(false) }
+    val pausedByLifecycle = remember(youtubeId) { AtomicBoolean(false) }
+    val initialMuted = remember(youtubeId) { muted }
 
-    val webView = remember(youtubeId, muted) {
+    val webView = remember(youtubeId) {
         WebView(context).apply {
             isClickable = false
             isLongClickable = false
@@ -392,14 +407,19 @@ actual fun PlatformTrailer(
             )
 
             var mainFrameFailed = false
+            var injectedUrl: String? = null
 
             fun handleMainFrameFailure(targetView: WebView?) {
                 if (destroyed.get()) return
                 mainFrameFailed = true
-                targetView?.evaluateJavascript(
-                    "$TRAILER_OBSERVER_JS\nwindow.__animetvShowError && window.__animetvShowError();",
-                    null
-                )
+                val targetUrl = targetView?.url
+                val script = if (targetUrl != null && injectedUrl == targetUrl) {
+                    "window.__animetvShowError && window.__animetvShowError();"
+                } else {
+                    injectedUrl = targetUrl
+                    "$TRAILER_OBSERVER_JS\nwindow.__animetvShowError && window.__animetvShowError();"
+                }
+                targetView?.evaluateJavascript(script, null)
                 applyState("yt-error")
             }
 
@@ -461,17 +481,24 @@ actual fun PlatformTrailer(
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                     super.onPageStarted(view, url, favicon)
                     if (!destroyed.get() && url != null && url != "about:blank") {
-                        view?.evaluateJavascript(TRAILER_OBSERVER_JS, null)
+                        injectedUrl = null
                     }
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     if (!destroyed.get() && url != null && url != "about:blank") {
-                        val script = if (mainFrameFailed) {
-                            "$TRAILER_OBSERVER_JS\nwindow.__animetvShowError && window.__animetvShowError();"
-                        } else {
-                            TRAILER_OBSERVER_JS
+                        val script = when {
+                            injectedUrl != url -> {
+                                injectedUrl = url
+                                if (mainFrameFailed) {
+                                    "$TRAILER_OBSERVER_JS\nwindow.__animetvShowError && window.__animetvShowError();"
+                                } else {
+                                    TRAILER_OBSERVER_JS
+                                }
+                            }
+                            mainFrameFailed -> "window.__animetvShowError && window.__animetvShowError();"
+                            else -> "window.__animetvCheckTrailer && window.__animetvCheckTrailer();"
                         }
                         view?.evaluateJavascript(script, null)
                     }
@@ -502,8 +529,16 @@ actual fun PlatformTrailer(
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                     super.onProgressChanged(view, newProgress)
-                    if (newProgress >= 20 && !destroyed.get() && view?.url != "about:blank") {
-                        view?.evaluateJavascript(TRAILER_OBSERVER_JS, null)
+                    val currentUrl = view?.url
+                    if (
+                        newProgress >= 20 &&
+                        !destroyed.get() &&
+                        currentUrl != null &&
+                        currentUrl != "about:blank" &&
+                        injectedUrl != currentUrl
+                    ) {
+                        injectedUrl = currentUrl
+                        view.evaluateJavascript(TRAILER_OBSERVER_JS, null)
                     }
                 }
 
@@ -516,7 +551,7 @@ actual fun PlatformTrailer(
             }
 
             val videoId = Uri.encode(youtubeId)
-            val muteFlag = if (muted) 1 else 0
+            val muteFlag = if (initialMuted) 1 else 0
             val origin = Uri.encode(TRAILER_ORIGIN)
             loadUrl(
                 "https://www.youtube-nocookie.com/embed/$videoId" +
@@ -527,10 +562,46 @@ actual fun PlatformTrailer(
         }
     }
 
+    var appliedMuted by remember(webView) { mutableStateOf(initialMuted) }
+    LaunchedEffect(webView, muted) {
+        if (!destroyed.get() && muted != appliedMuted) {
+            appliedMuted = muted
+            val jsCmd = if (muted) "'mute-on'" else "'mute-off'"
+            webView.evaluateJavascript(
+                "window.__animetvDesiredMuted=$muted;window.__animetvTrailerCmd&&window.__animetvTrailerCmd($jsCmd);",
+                null
+            )
+        }
+    }
+
     LaunchedEffect(webView, hideUntilPlaying) {
         if (!destroyed.get() && !hideUntilPlaying) {
             webView.setBackgroundColor(Color.BLACK)
             webView.alpha = 1f
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, webView) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (destroyed.get()) return@LifecycleEventObserver
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> {
+                    pausedByLifecycle.set(true)
+                    webView.onPause()
+                    webView.pauseTimers()
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    if (pausedByLifecycle.compareAndSet(true, false)) {
+                        webView.onResume()
+                        webView.resumeTimers()
+                    }
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -556,7 +627,12 @@ actual fun PlatformTrailer(
     DisposableEffect(webView) {
         onDispose {
             destroyed.set(true)
+            if (pausedByLifecycle.compareAndSet(true, false)) {
+                webView.resumeTimers()
+            }
+            (webView.parent as? ViewGroup)?.removeView(webView)
             webView.removeJavascriptInterface(TRAILER_BRIDGE_NAME)
+            webView.onPause()
             webView.stopLoading()
             webView.loadUrl("about:blank")
             webView.destroy()

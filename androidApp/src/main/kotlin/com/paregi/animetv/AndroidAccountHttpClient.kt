@@ -76,13 +76,14 @@ internal class AndroidAccountHttpClient(private val networkStack: AndroidNetwork
 
     private fun readResponse(response: AndroidNetworkResponse): String {
         val status = response.responseCode
-        val stream = if (status in 200..299) response.inputStream else response.errorStream
-        val body = stream?.use { it.readBytes().toString(StandardCharsets.UTF_8) }.orEmpty()
         check(status in 200..299) { "Account service request failed with HTTP $status" }
-        return body
+        return response.inputStream?.use {
+            it.readBoundedBytes(MAX_RESPONSE_BYTES).toString(StandardCharsets.UTF_8)
+        }.orEmpty()
     }
 
     private companion object {
         const val USER_AGENT = "AnimeTV KMP/6.6.7 (Android)"
+        const val MAX_RESPONSE_BYTES = 16 * 1024 * 1024
     }
 }

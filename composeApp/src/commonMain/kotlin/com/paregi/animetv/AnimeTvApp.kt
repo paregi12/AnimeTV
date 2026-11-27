@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -51,9 +52,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.compose.setSingletonImageLoaderFactory
+import coil3.request.ImageRequest
+import coil3.size.Precision
 import com.paregi.animetv.app.ApplicationExitConfirmationDialog
 import com.paregi.animetv.app.PlaybackCloseConfirmationDialog
 import com.paregi.animetv.app.SectionScreen
@@ -158,6 +162,8 @@ fun AnimeTvApp(
     appUpdateRepository: AppUpdateRepository = object : AppUpdateRepository {},
     onExitApplication: () -> Unit
 ) {
+    setSingletonImageLoaderFactory { context -> buildPlatformImageLoader(context) }
+
     var profileDirectory by remember { mutableStateOf(ProfileDirectory(emptyList())) }
     var activeProfile by remember { mutableStateOf<UserProfile?>(null) }
     var savedActiveProfilePrefix by rememberSaveable { mutableStateOf<String?>(null) }
@@ -174,7 +180,7 @@ fun AnimeTvApp(
     var mainSection by rememberSaveable { mutableStateOf(Section.Home) }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var settingsReloadPending by remember { mutableStateOf(false) }
-    val scrollOffsets = remember { mutableStateMapOf<Section, Dp>() }
+    val scrolledSections = remember { mutableStateMapOf<Section, Boolean>() }
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var pendingSearchFilter by remember { mutableStateOf<Pair<Int, String>?>(null) }
@@ -239,8 +245,7 @@ fun AnimeTvApp(
     var playbackSpeed by remember { mutableStateOf(1f) }
     var playbackStreamOverride by remember { mutableStateOf<PlaybackStreamType?>(null) }
     var playbackMirrorOverride by remember { mutableStateOf<Int?>(null) }
-    var playbackPositionMs by rememberSaveable(selectedEpisode?.id) { mutableStateOf<Long?>(null) }
-    var playbackDurationMs by rememberSaveable(selectedEpisode?.id) { mutableStateOf<Long?>(null) }
+    val livePlaybackPosition = rememberSaveable(selectedEpisode?.id) { LongArray(2) { -1L } }
     var playbackError by remember { mutableStateOf<String?>(null) }
     var tvResumePosition by rememberSaveable(stateSaver = episodePositionSaver) {
         mutableStateOf<Pair<String, Long>?>(null)
@@ -330,7 +335,7 @@ fun AnimeTvApp(
     fun selectMainSection(next: Section) {
         if (next == Section.Home || next == Section.MyList || next == Section.Schedule) {
             if (mainSection != next) {
-                scrollOffsets[next] = 0.dp
+                scrolledSections[next] = false
             }
             mainSection = next
         }
@@ -438,7 +443,7 @@ fun AnimeTvApp(
         if (!preserveNavigation) {
             section = Section.Home
             mainSection = Section.Home
-            scrollOffsets.clear()
+            scrolledSections.clear()
             selectedAnime = null
             selectedEpisode = null
             searchQuery = ""
@@ -1083,14 +1088,16 @@ fun AnimeTvApp(
         }
     }
 
-    val onSettingsChange: (AppSettings) -> Unit = { newSettings ->
-        loginScreenStyle = newSettings.loginScreenStyle.coerceIn(0, 2)
-        coroutineScope.launch {
-            val domain = newSettings.sourceDomains[newSettings.selectedSource]
-            val availableSource = animeRepository.selectSource(newSettings.selectedSource, domain)
-            val adjusted = newSettings.copy(selectedSource = availableSource)
-            settingsRepository.updateSettings(adjusted)
-            appSettings = adjusted
+    val onSettingsChange: (AppSettings) -> Unit = remember(animeRepository, settingsRepository) {
+        { newSettings ->
+            loginScreenStyle = newSettings.loginScreenStyle.coerceIn(0, 2)
+            coroutineScope.launch {
+                val domain = newSettings.sourceDomains[newSettings.selectedSource]
+                val availableSource = animeRepository.selectSource(newSettings.selectedSource, domain)
+                val adjusted = newSettings.copy(selectedSource = availableSource)
+                settingsRepository.updateSettings(adjusted)
+                appSettings = adjusted
+            }
         }
     }
 
@@ -1164,8 +1171,8 @@ fun AnimeTvApp(
     fun saveActiveContinueWatching() {
         val anime = selectedAnime
         val episode = selectedEpisode
-        val position = playbackPositionMs
-        val duration = playbackDurationMs
+        val position = livePlaybackPosition[0].takeIf { it >= 0L }
+        val duration = livePlaybackPosition[1].takeIf { it >= 0L }
         if (anime != null && episode != null && position != null && duration != null) {
             coroutineScope.launch {
                 tvIntegrationRepository.updateContinueWatching(
@@ -1182,6 +1189,8 @@ fun AnimeTvApp(
     fun leavePlayback() {
         saveActiveContinueWatching()
         closePlayerPreview()
+        livePlaybackPosition[0] = -1L
+        livePlaybackPosition[1] = -1L
         selectedEpisode = null
         playbackChoice = null
         playbackStreamOverride = null
@@ -1363,26 +1372,38 @@ fun AnimeTvApp(
 
     val appFont = platformFontFamily(icon = false)
     val iconFont = platformFontFamily(icon = true)
+    val colorScheme = remember(visibleTheme, chooserVisible) {
+        colorSchemeForTheme(visibleTheme, loginScreen = chooserVisible)
+    }
+    val typography = remember(appFont) { appTypography(appFont) }
+    val baseTextStyle = LocalTextStyle.current
+    val appTextStyle = remember(baseTextStyle, appFont) {
+        baseTextStyle.copy(fontFamily = appFont)
+    }
+    val clickSound = rememberPlatformClickSound(appSettings.navigationSound)
+    val cardStyle = remember(visibleTheme) {
+        CardStylePreferences(
+            cardSize = 0,
+            cardRadius = 0,
+            badgeStyle = 0,
+            badgeColors = badgeThemeColorsFor(visibleTheme)
+        )
+    }
 
     MaterialTheme(
-        colorScheme = colorSchemeForTheme(visibleTheme, loginScreen = chooserVisible),
-        typography = remember(appFont) { appTypography(appFont) }
+        colorScheme = colorScheme,
+        typography = typography
     ) {
         CompositionLocalProvider(
             LocalAnimeTvColors provides themeColors,
             LocalAppToast provides showToast,
-            LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = appFont),
+            LocalTextStyle provides appTextStyle,
             LocalIconFont provides iconFont,
             LocalPerformanceEffects provides appSettings.performanceEffects,
             LocalJapaneseTitles provides appSettings.japaneseTitles,
             LocalImageCdn provides appSettings.useImageCdn,
-            LocalNavigationSound provides rememberPlatformClickSound(appSettings.navigationSound),
-            LocalCardStyle provides CardStylePreferences(
-                cardSize = 0,
-                cardRadius = 0,
-                badgeStyle = 0,
-                badgeColors = badgeThemeColorsFor(visibleTheme)
-            )
+            LocalNavigationSound provides clickSound,
+            LocalCardStyle provides cardStyle
         ) {
             Surface(Modifier.fillMaxSize(), color = Color.Black) {
                 BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -1429,11 +1450,18 @@ fun AnimeTvApp(
                                     )
                                 }
                             } else {
-                                val localWallpaper = curatedWallpapers.firstOrNull {
-                                    it.source == appSettings.wallpaperUrl
+                                val platformContext = LocalPlatformContext.current
+                                val capW = if (portraitLayout) 1080 else 1920
+                                val capH = if (portraitLayout) 1920 else 1080
+                                val viewportW = with(density) { maxWidth.roundToPx().coerceIn(1, capW) }
+                                val viewportH = with(density) { maxHeight.roundToPx().coerceIn(1, capH) }
+                                val localWallpaper = remember(appSettings.wallpaperUrl) {
+                                    curatedWallpapers.firstOrNull { it.source == appSettings.wallpaperUrl }
                                 }
-                                val wallpaperUrl = appSettings.wallpaperUrl.takeIf {
-                                    localWallpaper == null && it.isNotBlank()
+                                val wallpaperUrl = remember(appSettings.wallpaperUrl, localWallpaper) {
+                                    appSettings.wallpaperUrl.takeIf {
+                                        localWallpaper == null && it.isNotBlank()
+                                    }
                                 }
                                 if (localWallpaper != null) {
                                     Image(
@@ -1443,8 +1471,15 @@ fun AnimeTvApp(
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 } else if (wallpaperUrl != null) {
+                                    val wallpaperRequest = remember(platformContext, wallpaperUrl, viewportW, viewportH) {
+                                        ImageRequest.Builder(platformContext)
+                                            .data(wallpaperUrl)
+                                            .size(viewportW, viewportH)
+                                            .precision(Precision.INEXACT)
+                                            .build()
+                                    }
                                     AsyncImage(
-                                        model = wallpaperUrl,
+                                        model = wallpaperRequest,
                                         contentDescription = null,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
@@ -1474,65 +1509,91 @@ fun AnimeTvApp(
                                 }
 
                                 val tvLayout = platformIsTelevision()
-                                val currentScrollOffset = scrollOffsets[mainSection] ?: 0.dp
-                                val headerScrolled = currentScrollOffset > tokens.u * 5f
+                                val scrollThreshold = tokens.u * 5f
+                                val currentScrollThreshold by rememberUpdatedState(scrollThreshold)
                                 val activeEpisode = selectedEpisode
                                 val activeAnime = selectedAnime
                                 val profileRating = activeProfile?.parentalRating ?: 6
                                 val selectedSource = appSettings.selectedSource
-                                val sourceWatchlist = watchlist.filter { it.sourceIndex == selectedSource }
-                                val sourceHistory = watchHistory.filter {
-                                    (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) == selectedSource
+                                val sourceWatchlist = remember(watchlist, selectedSource) {
+                                    watchlist.filter { it.sourceIndex == selectedSource }
                                 }
-                                val homeWithHistory = homeFeed.copy(
-                                    continueWatching = (sourceHistory.sortedByDescending { it.updatedAtEpochMs }
-                                        .mapNotNull { it.anime } + homeFeed.continueWatching.filter { it.sourceIndex == selectedSource })
-                                        .distinctBy { it.id to it.sourceIndex }
-                                ).filteredForRating(profileRating)
-                                val visibleWatchlist = sourceWatchlist.filter { it.allowedForRating(profileRating) }
-                                val visibleHistory = sourceHistory.sortedByDescending { it.updatedAtEpochMs }
-                                    .filter { it.anime?.allowedForRating(profileRating) == true }
-                                    .distinctBy { it.animeId }
-                                val visibleSchedule = schedule.filter { it.anime.allowedForRating(profileRating) }
-                                val visibleAnimeDetails = animeDetails?.copy(
-                                    related = animeDetails?.related.orEmpty().filter {
-                                        it.allowedForRating(profileRating)
-                                    },
-                                    recommendations = animeDetails?.recommendations.orEmpty().filter {
-                                        it.allowedForRating(profileRating)
+                                val sourceHistory = remember(watchHistory, selectedSource) {
+                                    watchHistory.filter {
+                                        (it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX) == selectedSource
                                     }
-                                )
-                                val retainedVisibleAnimeDetails = retainedAnimeDetails?.copy(
-                                    related = retainedAnimeDetails?.related.orEmpty().filter {
-                                        it.allowedForRating(profileRating)
-                                    },
-                                    recommendations = retainedAnimeDetails?.recommendations.orEmpty().filter {
-                                        it.allowedForRating(profileRating)
-                                    }
-                                )
+                                }
+                                val homeWithHistory = remember(homeFeed, sourceHistory, selectedSource, profileRating) {
+                                    homeFeed.copy(
+                                        continueWatching = (sourceHistory.sortedByDescending { it.updatedAtEpochMs }
+                                            .mapNotNull { it.anime } +
+                                            homeFeed.continueWatching.filter { it.sourceIndex == selectedSource })
+                                            .distinctBy { it.id to it.sourceIndex }
+                                    ).filteredForRating(profileRating)
+                                }
+                                val visibleWatchlist = remember(sourceWatchlist, profileRating) {
+                                    sourceWatchlist.filter { it.allowedForRating(profileRating) }
+                                }
+                                val visibleHistory = remember(sourceHistory, profileRating) {
+                                    sourceHistory.sortedByDescending { it.updatedAtEpochMs }
+                                        .filter { it.anime?.allowedForRating(profileRating) == true }
+                                        .distinctBy { it.animeId }
+                                }
+                                val visibleSchedule = remember(schedule, profileRating) {
+                                    schedule.filter { it.anime.allowedForRating(profileRating) }
+                                }
+                                val visibleAnimeDetails = remember(animeDetails, profileRating) {
+                                    animeDetails?.copy(
+                                        related = animeDetails?.related.orEmpty().filter {
+                                            it.allowedForRating(profileRating)
+                                        },
+                                        recommendations = animeDetails?.recommendations.orEmpty().filter {
+                                            it.allowedForRating(profileRating)
+                                        }
+                                    )
+                                }
+                                val retainedVisibleAnimeDetails = remember(retainedAnimeDetails, profileRating) {
+                                    retainedAnimeDetails?.copy(
+                                        related = retainedAnimeDetails?.related.orEmpty().filter {
+                                            it.allowedForRating(profileRating)
+                                        },
+                                        recommendations = retainedAnimeDetails?.recommendations.orEmpty().filter {
+                                            it.allowedForRating(profileRating)
+                                        }
+                                    )
+                                }
 
                                 Column(Modifier.fillMaxSize()) {
                                     Box(Modifier.weight(1f).fillMaxWidth()) {
                                         if (activeEpisode != null) {
                                             val choice = playbackChoice
                                             val episodes = visibleAnimeDetails?.episodes ?: animeDetails?.episodes.orEmpty()
-                                            val currentIndex = episodes.indexOfFirst { it.id == activeEpisode.id }
-                                            val previousEpisode = if (currentIndex > 0) {
-                                                episodes.take(currentIndex).lastOrNull {
-                                                    !appSettings.skipFiller || !it.filler
-                                                }
-                                            } else null
-                                            val nextEpisode = if (currentIndex >= 0) {
-                                                episodes.drop(currentIndex + 1).firstOrNull {
-                                                    !appSettings.skipFiller || !it.filler
-                                                }
-                                            } else null
+                                            val (previousEpisode, nextEpisode) = remember(
+                                                episodes,
+                                                activeEpisode.id,
+                                                appSettings.skipFiller
+                                            ) {
+                                                val currentIndex = episodes.indexOfFirst { it.id == activeEpisode.id }
+                                                val prev = if (currentIndex > 0) {
+                                                    episodes.take(currentIndex).lastOrNull {
+                                                        !appSettings.skipFiller || !it.filler
+                                                    }
+                                                } else null
+                                                val next = if (currentIndex >= 0) {
+                                                    episodes.drop(currentIndex + 1).firstOrNull {
+                                                        !appSettings.skipFiller || !it.filler
+                                                    }
+                                                } else null
+                                                prev to next
+                                            }
                                             val playerDetailsAnime = visibleAnimeDetails?.anime ?: activeAnime
                                             val playerBackdropUrl = playerDetailsAnime?.bannerUrl?.takeIf { it.isNotBlank() }
                                                 ?: activeAnime?.bannerUrl?.takeIf { it.isNotBlank() }
                                                 ?: playerDetailsAnime?.posterUrl?.takeIf { it.isNotBlank() }
                                                 ?: activeAnime?.posterUrl
-                                            val formattedEpisodeLabel = formatPlaybackEpisodeLabel(activeEpisode)
+                                            val formattedEpisodeLabel = remember(activeEpisode.id, activeEpisode.number, activeEpisode.title) {
+                                                formatPlaybackEpisodeLabel(activeEpisode)
+                                            }
                                             val playerDescription = translatedSynopsis
                                                 ?: playerDetailsAnime?.synopsis.orEmpty()
                                             val playerGenres = playerDetailsAnime?.genres?.ifEmpty {
@@ -1548,57 +1609,66 @@ fun AnimeTvApp(
                                             ) {
                                                 "R+"
                                             } else null
-                                            val inWatchlistNow = activeAnime != null &&
-                                                sourceWatchlist.any { it.id == activeAnime.id }
+                                            val inWatchlistNow = remember(activeAnime?.id, sourceWatchlist) {
+                                                activeAnime != null && sourceWatchlist.any { it.id == activeAnime.id }
+                                            }
                                             val isTrackedNow =
                                                 animeTracking.aniList.isTracked || animeTracking.mal.isTracked
                                             val playerSubLabel = if (activeAnime?.sourceIndex == SourceCatalog.REANIME_INDEX) {
                                                 "Sub"
                                             } else "Hardsub"
-                                            val onPlayerToggleWatchlist: () -> Unit = {
-                                                activeAnime?.let { anime ->
-                                                    val targetAnime = anime.copy(sourceIndex = selectedSource)
-                                                    val currentlySaved = sourceWatchlist.any { it.id == targetAnime.id }
-                                                    coroutineScope.launch {
-                                                        if (currentlySaved) {
-                                                            libraryRepository.removeFromWatchlist(targetAnime.id, selectedSource)
-                                                        } else {
-                                                            libraryRepository.addToWatchlist(targetAnime)
+                                            val onPlayerToggleWatchlist: () -> Unit = remember(activeAnime, selectedSource, sourceWatchlist) {
+                                                {
+                                                    activeAnime?.let { anime ->
+                                                        val targetAnime = anime.copy(sourceIndex = selectedSource)
+                                                        val currentlySaved = sourceWatchlist.any { it.id == targetAnime.id }
+                                                        coroutineScope.launch {
+                                                            if (currentlySaved) {
+                                                                libraryRepository.removeFromWatchlist(targetAnime.id, selectedSource)
+                                                            } else {
+                                                                libraryRepository.addToWatchlist(targetAnime)
+                                                            }
+                                                            watchlist = libraryRepository.loadWatchlist()
                                                         }
-                                                        watchlist = libraryRepository.loadWatchlist()
                                                     }
                                                 }
                                             }
-                                            val onPlayerTrackingClick: () -> Unit = {
-                                                val anime = activeAnime
-                                                if (anime != null) {
-                                                    val connected =
-                                                        accountState.aniListUsername != null ||
-                                                            accountState.malUsername != null
-                                                    val canAnyTrack =
-                                                        animeTracking.aniList.canTrack ||
-                                                            animeTracking.mal.canTrack
-                                                    when {
-                                                        !connected -> showToast(
-                                                            "Please login to AniList or MAL first..."
-                                                        )
-                                                        !canAnyTrack -> showToast("Anime Untrackable...")
-                                                        else -> playerTrackingDialogOpen = true
+                                            val onPlayerTrackingClick: () -> Unit = remember(activeAnime, accountState, animeTracking) {
+                                                {
+                                                    val anime = activeAnime
+                                                    if (anime != null) {
+                                                        val connected =
+                                                            accountState.aniListUsername != null ||
+                                                                accountState.malUsername != null
+                                                        val canAnyTrack =
+                                                            animeTracking.aniList.canTrack ||
+                                                                animeTracking.mal.canTrack
+                                                        when {
+                                                            !connected -> showToast(
+                                                                "Please login to AniList or MAL first..."
+                                                            )
+                                                            !canAnyTrack -> showToast("Anime Untrackable...")
+                                                            else -> playerTrackingDialogOpen = true
+                                                        }
                                                     }
                                                 }
                                             }
-                                            val onPlayerSearchGenre: (String) -> Unit = { genre ->
-                                                closePlayerPreview()
-                                                leavePlayback()
-                                                selectedAnime = null
-                                                searchQuery = ""
-                                                pendingSearchFilterNonce += 1
-                                                pendingSearchFilter = pendingSearchFilterNonce to genre
-                                                section = Section.Search
+                                            val onPlayerSearchGenre: (String) -> Unit = remember {
+                                                { genre ->
+                                                    closePlayerPreview()
+                                                    leavePlayback()
+                                                    selectedAnime = null
+                                                    searchQuery = ""
+                                                    pendingSearchFilterNonce += 1
+                                                    pendingSearchFilter = pendingSearchFilterNonce to genre
+                                                    section = Section.Search
+                                                }
                                             }
-                                            val onPlayerOpenSettings: () -> Unit = {
-                                                settingsReloadPending = false
-                                                settingsOpen = true
+                                            val onPlayerOpenSettings: () -> Unit = remember {
+                                                {
+                                                    settingsReloadPending = false
+                                                    settingsOpen = true
+                                                }
                                             }
 
                                             if (choice != null) {
@@ -1668,17 +1738,24 @@ fun AnimeTvApp(
                                                     },
                                                     autoSkipIntro = appSettings.autoSkipIntro,
                                                     skipFiller = appSettings.skipFiller,
-                                                    startPositionMs = playbackPositionMs
-                                                        ?: playbackStartOverride?.takeIf { it.first == activeEpisode.id }?.second
-                                                        ?: tvResumePosition?.takeIf { it.first == activeEpisode.id }?.second
-                                                        ?: sourceHistory.sortedByDescending { it.updatedAtEpochMs }
-                                                            .firstOrNull {
-                                                                it.episodeId == activeEpisode.id &&
-                                                                    (activeAnime == null ||
-                                                                        it.animeId == activeAnime.id ||
-                                                                        it.animeId == visibleAnimeDetails?.anime?.id)
-                                                            }?.positionMs
-                                                        ?: 0L,
+                                                    startPositionMs = remember(
+                                                        activeEpisode.id,
+                                                        playbackStartOverride,
+                                                        tvResumePosition,
+                                                        choice.url
+                                                    ) {
+                                                        livePlaybackPosition[0].takeIf { it >= 0L }
+                                                            ?: playbackStartOverride?.takeIf { it.first == activeEpisode.id }?.second
+                                                            ?: tvResumePosition?.takeIf { it.first == activeEpisode.id }?.second
+                                                            ?: sourceHistory.sortedByDescending { it.updatedAtEpochMs }
+                                                                .firstOrNull {
+                                                                    it.episodeId == activeEpisode.id &&
+                                                                        (activeAnime == null ||
+                                                                            it.animeId == activeAnime.id ||
+                                                                            it.animeId == visibleAnimeDetails?.anime?.id)
+                                                                }?.positionMs
+                                                            ?: 0L
+                                                    },
                                                     seekSeconds = appSettings.seekSeconds,
                                                     videoScale = appSettings.videoScale,
                                                     onVideoScaleChange = { scale ->
@@ -1689,8 +1766,8 @@ fun AnimeTvApp(
                                                     cacheSizeMb = appSettings.cacheSizeMb,
                                                     disableTouchGestures = appSettings.disableTouchGestures,
                                                     onProgress = { position, duration ->
-                                                        playbackPositionMs = position
-                                                        playbackDurationMs = duration
+                                                        livePlaybackPosition[0] = position
+                                                        livePlaybackPosition[1] = duration
                                                         activeAnime?.let { anime ->
                                                             val savedAnime = (visibleAnimeDetails?.anime ?: anime)
                                                                 .copy(sourceIndex = selectedSource)
@@ -1815,8 +1892,20 @@ fun AnimeTvApp(
                                                 ) {
                                                     val backdropModel = imageCdnUrl(playerBackdropUrl, LocalImageCdn.current)
                                                     if (!backdropModel.isNullOrBlank()) {
+                                                        val backdropRequest = remember(
+                                                            platformContext,
+                                                            backdropModel,
+                                                            viewportW,
+                                                            viewportH
+                                                        ) {
+                                                            ImageRequest.Builder(platformContext)
+                                                                .data(backdropModel)
+                                                                .size(viewportW, viewportH)
+                                                                .precision(Precision.INEXACT)
+                                                                .build()
+                                                        }
                                                         AsyncImage(
-                                                            model = backdropModel,
+                                                            model = backdropRequest,
                                                             contentDescription = activeAnime?.let {
                                                                 displayAnimeTitle(it, appSettings.japaneseTitles)
                                                             },
@@ -1989,9 +2078,9 @@ fun AnimeTvApp(
                                                     onMyListLayoutChange = ::saveMyListLayout,
                                                     homeLayout = homeLayout,
                                                     searchQuery = searchQuery,
-                                                    onSearchQueryChange = { searchQuery = it },
-                                                    onBackToHome = { section = mainSection },
-                                                    onVoiceSearchResult = { openVoiceSearchResult(it) },
+                                                    onSearchQueryChange = remember { { searchQuery = it } },
+                                                    onBackToHome = remember { { section = mainSection } },
+                                                    onVoiceSearchResult = remember { { openVoiceSearchResult(it) } },
                                                     onSettingsChange = onSettingsChange,
                                                     homeFeed = homeWithHistory,
                                                     homeLoading = homeLoading,
@@ -1999,38 +2088,49 @@ fun AnimeTvApp(
                                                     watchHistory = visibleHistory,
                                                     schedule = visibleSchedule,
                                                     scheduleLoading = scheduleLoading,
-                                                    onRemoveFromWatchlist = { anime ->
-                                                        coroutineScope.launch {
-                                                            libraryRepository.removeFromWatchlist(anime.id, anime.sourceIndex)
-                                                            watchlist = libraryRepository.loadWatchlist()
+                                                    onRemoveFromWatchlist = remember {
+                                                        { anime ->
+                                                            coroutineScope.launch {
+                                                                libraryRepository.removeFromWatchlist(anime.id, anime.sourceIndex)
+                                                                watchlist = libraryRepository.loadWatchlist()
+                                                            }
                                                         }
                                                     },
-                                                    onClearWatchHistory = { clearHistoryStage = 1 },
+                                                    onClearWatchHistory = remember { { clearHistoryStage = 1 } },
                                                     accountRepository = accountRepository,
                                                     settingsRepository = settingsRepository,
                                                     settingsReady = settingsReady,
                                                     debugLogRepository = debugLogRepository,
                                                     searchHistoryRepository = searchHistoryRepository,
                                                     accountState = accountState,
-                                                    onAccountStateChange = { accountState = it },
+                                                    onAccountStateChange = remember { { accountState = it } },
                                                     repository = animeRepository,
-                                                    onAnimeSelected = { openAnime(it, null) },
-                                                    onHistorySelected = { progress ->
-                                                        progress.anime?.let { openAnime(it, null) }
+                                                    onAnimeSelected = remember { { openAnime(it, null) } },
+                                                    onHistorySelected = remember {
+                                                        { progress ->
+                                                            progress.anime?.let { openAnime(it, null) }
+                                                        }
                                                     },
-                                                    onContinueWatching = { anime ->
-                                                        openAnime(anime, null)
+                                                    onContinueWatching = remember {
+                                                        { anime -> openAnime(anime, null) }
                                                     },
-                                                    onScrollOffsetChange = { offset ->
-                                                        scrollOffsets[targetSection] = offset
+                                                    onScrollOffsetChange = remember(targetSection) {
+                                                        { offset ->
+                                                            val isScrolled = offset > currentScrollThreshold
+                                                            if (scrolledSections[targetSection] != isScrolled) {
+                                                                scrolledSections[targetSection] = isScrolled
+                                                            }
+                                                        }
                                                     },
-                                                    onRefreshHome = { refreshHome() },
-                                                    onAboutFooterClick = {
-                                                        settingsReloadPending = false
-                                                        settingsOpen = true
+                                                    onRefreshHome = remember { { refreshHome() } },
+                                                    onAboutFooterClick = remember {
+                                                        {
+                                                            settingsReloadPending = false
+                                                            settingsOpen = true
+                                                        }
                                                     },
                                                     isAdminProfile = activeProfile?.prefix.isNullOrEmpty(),
-                                                    onReloadNeeded = { settingsReloadPending = true },
+                                                    onReloadNeeded = remember { { settingsReloadPending = true } },
                                                     currentVersionName = remember(appUpdateRepository) {
                                                         appUpdateRepository.currentVersionName()
                                                     },
@@ -2220,14 +2320,16 @@ fun AnimeTvApp(
                                         ) {
                                             val previewAnime = playerPreviewAnime
                                             if (previewAnime != null) {
-                                                val resolvedDetails = playerPreviewDetails?.copy(
-                                                    related = playerPreviewDetails?.related.orEmpty().filter {
-                                                        it.allowedForRating(profileRating)
-                                                    },
-                                                    recommendations = playerPreviewDetails?.recommendations.orEmpty().filter {
-                                                        it.allowedForRating(profileRating)
-                                                    }
-                                                )
+                                                val resolvedDetails = remember(playerPreviewDetails, profileRating) {
+                                                    playerPreviewDetails?.copy(
+                                                        related = playerPreviewDetails?.related.orEmpty().filter {
+                                                            it.allowedForRating(profileRating)
+                                                        },
+                                                        recommendations = playerPreviewDetails?.recommendations.orEmpty().filter {
+                                                            it.allowedForRating(profileRating)
+                                                        }
+                                                    )
+                                                }
                                                 val detailTarget = resolvedDetails?.anime ?: previewAnime
                                                 Box(
                                                     modifier = Modifier
@@ -2358,6 +2460,9 @@ fun AnimeTvApp(
                                             Alignment.TopCenter
                                         }
                                     ) {
+                                        val headerScrolled by remember(mainSection) {
+                                            derivedStateOf { scrolledSections[mainSection] == true }
+                                        }
                                         AppHeader(
                                             selected = if (settingsOpen) Section.Settings else section,
                                             tvLayout = tvLayout,
@@ -2451,7 +2556,7 @@ fun AnimeTvApp(
                                     modifier = Modifier.align(Alignment.CenterEnd),
                                     label = "settings-panel"
                                 ) {
-                                    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+                                    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { true }
                                     val settingsPanelWidth = if (portraitLayout) tokens.screenWidth else tokens.vw * 34f
                                     Surface(
                                         modifier = Modifier
@@ -2529,51 +2634,53 @@ fun AnimeTvApp(
                                     val canMal = animeTracking.mal.canTrack
                                     val hasAniList = animeTracking.aniList.isTracked
                                     val hasMal = animeTracking.mal.isTracked
-                                    val items = buildList {
-                                        if (canAniList && canMal && !hasAniList && !hasMal) {
-                                            add(
-                                                ListOrderItem(
-                                                    id = "trackall",
-                                                    title = "Track on AniList and MAL",
-                                                    icon = IconGlyphs.Done
+                                    val items = remember(canAniList, canMal, hasAniList, hasMal) {
+                                        buildList {
+                                            if (canAniList && canMal && !hasAniList && !hasMal) {
+                                                add(
+                                                    ListOrderItem(
+                                                        id = "trackall",
+                                                        title = "Track on AniList and MAL",
+                                                        icon = IconGlyphs.Done
+                                                    )
                                                 )
-                                            )
-                                        }
-                                        if (canAniList && !hasAniList) {
-                                            add(
-                                                ListOrderItem(
-                                                    id = "anilist",
-                                                    title = "Track on AniList",
-                                                    icon = IconGlyphs.PlaylistAddCheckCircle
+                                            }
+                                            if (canAniList && !hasAniList) {
+                                                add(
+                                                    ListOrderItem(
+                                                        id = "anilist",
+                                                        title = "Track on AniList",
+                                                        icon = IconGlyphs.PlaylistAddCheckCircle
+                                                    )
                                                 )
-                                            )
-                                        }
-                                        if (canMal && !hasMal) {
-                                            add(
-                                                ListOrderItem(
-                                                    id = "mal",
-                                                    title = "Track on MAL",
-                                                    icon = IconGlyphs.PlaylistAddCheckCircle
+                                            }
+                                            if (canMal && !hasMal) {
+                                                add(
+                                                    ListOrderItem(
+                                                        id = "mal",
+                                                        title = "Track on MAL",
+                                                        icon = IconGlyphs.PlaylistAddCheckCircle
+                                                    )
                                                 )
-                                            )
-                                        }
-                                        if (canAniList && hasAniList) {
-                                            add(
-                                                ListOrderItem(
-                                                    id = "delanilist",
-                                                    title = "Remove from AniList",
-                                                    icon = IconGlyphs.Cancel
+                                            }
+                                            if (canAniList && hasAniList) {
+                                                add(
+                                                    ListOrderItem(
+                                                        id = "delanilist",
+                                                        title = "Remove from AniList",
+                                                        icon = IconGlyphs.Cancel
+                                                    )
                                                 )
-                                            )
-                                        }
-                                        if (canMal && hasMal) {
-                                            add(
-                                                ListOrderItem(
-                                                    id = "delmal",
-                                                    title = "Remove from MAL",
-                                                    icon = IconGlyphs.Cancel
+                                            }
+                                            if (canMal && hasMal) {
+                                                add(
+                                                    ListOrderItem(
+                                                        id = "delmal",
+                                                        title = "Remove from MAL",
+                                                        icon = IconGlyphs.Cancel
+                                                    )
                                                 )
-                                            )
+                                            }
                                         }
                                     }
                                     ListOrderDialog(

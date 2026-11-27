@@ -1,5 +1,6 @@
 package com.paregi.animetv
 
+import android.app.ActivityManager
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -128,7 +129,8 @@ class MainActivity : ComponentActivity() {
 
     private fun preferHighestSupportedRefreshRate() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
-            !packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN)
+            !packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN) ||
+            (getSystemService(ACTIVITY_SERVICE) as? ActivityManager)?.isLowRamDevice == true
         ) return
 
         val display = window.decorView.display ?: return

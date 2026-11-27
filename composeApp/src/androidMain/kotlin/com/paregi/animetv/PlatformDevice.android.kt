@@ -1,6 +1,7 @@
 package com.paregi.animetv
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.PackageManager
@@ -73,6 +74,15 @@ actual fun platformIsTouchDevice(): Boolean {
     return isTouch
 }
 
+@Composable
+actual fun platformIsLowRamDevice(): Boolean {
+    val context = LocalContext.current
+    return remember(context) {
+        val am = context.applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        am?.isLowRamDevice == true
+    }
+}
+
 private class TouchObservingWindowCallback(
     private val delegate: Window.Callback,
     private val onTouchDetected: () -> Unit
@@ -92,8 +102,7 @@ private fun isPhysicalTouchDown(event: MotionEvent): Boolean {
     }
     val toolType = event.getToolType(event.actionIndex)
     return event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN) ||
-        toolType == MotionEvent.TOOL_TYPE_FINGER ||
-        (toolType == MotionEvent.TOOL_TYPE_UNKNOWN && !event.isFromSource(InputDevice.SOURCE_MOUSE))
+        toolType == MotionEvent.TOOL_TYPE_FINGER
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

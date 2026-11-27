@@ -1,6 +1,8 @@
 package com.paregi.animetv.source.reanime
 
 import android.net.Uri
+import android.os.SystemClock
+import android.util.LruCache
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.Episode
 import com.paregi.animetv.domain.SearchFilters
@@ -20,6 +22,8 @@ import java.util.Locale
 internal class ReAnimeCatalogApi(
     private val requestBytes: SourceRequestBytes
 ) : SourceCatalogApi {
+    private data class CachedDetail(val root: JSONObject, val timestampMs: Long)
+    private val animeDetailCache = LruCache<String, CachedDetail>(32)
     override suspend fun search(filters: SearchFilters, page: Int, source: CatalogSource): SearchPage {
         val safePage = page.coerceAtLeast(1)
         val offset = (safePage - 1) * PAGE_SIZE
@@ -101,7 +105,7 @@ internal class ReAnimeCatalogApi(
     }
 
     override suspend fun loadAnime(sourceId: String, source: CatalogSource): Anime? {
-        val root = json(source.root + "/api/v1/anime/" + Uri.encode(sourceId), source)
+        val root = fetchAnimeDetailRoot(sourceId, source)
         val data = root.optJSONObject("data") ?: root
         return ReAnimeSource.anime(data, sourceId)
     }
@@ -110,7 +114,7 @@ internal class ReAnimeCatalogApi(
         val encodedId = Uri.encode(animeId)
         val detailsDeferred = async {
             try {
-                val root = json(source.root + "/api/v1/anime/$encodedId", source)
+                val root = fetchAnimeDetailRoot(animeId, source)
                 root.optJSONObject("data") ?: root
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -132,6 +136,28 @@ internal class ReAnimeCatalogApi(
     }
 
     override suspend fun json(url: String, source: CatalogSource): JSONObject {
+        val detailPrefix = "${source.root}/api/v1/anime/"
+        if (url.startsWith(detailPrefix)) {
+            val rest = url.removePrefix(detailPrefix)
+            if (rest.isNotBlank() && '/' !in rest && '?' !in rest) {
+                return fetchAnimeDetailRoot(Uri.decode(rest), source)
+            }
+        }
+        return fetchJsonUncached(url, source)
+    }
+
+    private suspend fun fetchAnimeDetailRoot(sourceId: String, source: CatalogSource): JSONObject {
+        val cacheKey = "${source.root}|$sourceId"
+        val now = SystemClock.elapsedRealtime()
+        animeDetailCache.get(cacheKey)?.takeIf { now - it.timestampMs < DETAIL_CACHE_TTL_MS }?.let {
+            return it.root
+        }
+        val root = fetchJsonUncached(source.root + "/api/v1/anime/" + Uri.encode(sourceId), source)
+        animeDetailCache.put(cacheKey, CachedDetail(root, SystemClock.elapsedRealtime()))
+        return root
+    }
+
+    private suspend fun fetchJsonUncached(url: String, source: CatalogSource): JSONObject {
         val bytes = requestBytes(
             url,
             null,
@@ -193,5 +219,6 @@ internal class ReAnimeCatalogApi(
     private companion object {
         const val PAGE_SIZE = 36
         const val HOME_PAGE_SIZE = 28
+        const val DETAIL_CACHE_TTL_MS = 3 * 60_000L
     }
 }

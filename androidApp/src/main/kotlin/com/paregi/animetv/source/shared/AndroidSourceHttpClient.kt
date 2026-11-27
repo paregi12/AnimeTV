@@ -3,6 +3,7 @@ package com.paregi.animetv.source.shared
 import android.net.Uri
 import com.paregi.animetv.AndroidNetworkStack
 import com.paregi.animetv.domain.SourceCatalog
+import com.paregi.animetv.readBoundedBytes
 import com.paregi.animetv.source.CatalogSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -92,10 +93,8 @@ internal class AndroidSourceHttpClient(
         )
         try {
             val status = response.responseCode
-            val stream = if (status in 200..299) response.inputStream else response.errorStream
-            val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
             check(status in 200..299) { "Request failed with HTTP " + status }
-            bytes
+            response.inputStream?.use { it.readBoundedBytes() } ?: ByteArray(0)
         } finally {
             response.close()
         }

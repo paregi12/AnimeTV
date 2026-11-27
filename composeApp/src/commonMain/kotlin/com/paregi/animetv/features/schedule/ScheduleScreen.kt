@@ -68,14 +68,19 @@ internal fun ScheduleScreen(
             .groupBy { it.info.dayOffset }
     }
 
-    val todayEntries = remember(entriesByOffset, scheduleDays) {
-        val todayOffset = scheduleDays.firstOrNull { it.isToday }?.offset ?: 0
+    val todayOffset = remember(scheduleDays) {
+        scheduleDays.firstOrNull { it.isToday }?.offset ?: 0
+    }
+    val todayEntries = remember(entriesByOffset, todayOffset) {
         entriesByOffset[todayOffset].orEmpty()
     }
 
     val todayShelfState = remember(todayEntries) {
         val firstUnairIndex = todayEntries.indexOfFirst { !it.hasAired }.coerceAtLeast(0)
         LazyListState(firstVisibleItemIndex = firstUnairIndex)
+    }
+    val dayShelfStates = remember(scheduleDays) {
+        scheduleDays.associate { it.offset to LazyListState() }
     }
 
     val listState = rememberLazyListState()
@@ -123,7 +128,7 @@ internal fun ScheduleScreen(
                 verticalArrangement = Arrangement.spacedBy(tokens.u * 1f)
             ) {
                 if (portrait) {
-                    item(key = "schedule_title") {
+                    item(key = "schedule_title", contentType = "schedule_title") {
                         Text(
                             text = "Airing Schedule",
                             color = Color.White,
@@ -138,11 +143,11 @@ internal fun ScheduleScreen(
                 scheduleDays.forEach { day ->
                     val dayEntries = entriesByOffset[day.offset].orEmpty()
                     val headerTitle = if (day.isToday) "${day.dayName} (Today)" else day.dayName
-                    item(key = "schedule_day_${day.offset}") {
+                    item(key = "schedule_day_${day.offset}", contentType = "schedule_day") {
                         ScheduleDayShelf(
                             title = headerTitle,
                             entries = dayEntries,
-                            shelfState = if (day.isToday) todayShelfState else rememberLazyListState(),
+                            shelfState = if (day.isToday) todayShelfState else (dayShelfStates[day.offset] ?: rememberLazyListState()),
                             horizontalInset = horizontalInset,
                             cardDims = cardDims,
                             largeUi = largeUi && !portrait,
@@ -180,7 +185,8 @@ private fun ScheduleDayShelf(
     ) {
         items(
             items = entries,
-            key = { "${it.anime.id}:${it.airingAtEpochSeconds}" }
+            key = { "${it.anime.id}:${it.airingAtEpochSeconds}" },
+            contentType = { "anime_card" }
         ) { entry ->
             FocusCard(
                 anime = entry.anime,

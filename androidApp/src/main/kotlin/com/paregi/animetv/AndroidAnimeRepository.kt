@@ -1,6 +1,8 @@
 package com.paregi.animetv
 
 import android.net.Uri
+import android.os.SystemClock
+import android.util.LruCache
 import com.paregi.animetv.domain.AiringEntry
 import com.paregi.animetv.domain.AniListAnimeInfo
 import com.paregi.animetv.domain.Anime
@@ -64,6 +66,12 @@ class AndroidAnimeRepository(
     )
     @Volatile
     private var cachedAniListHome: AniListHomeShelves? = null
+    private val homeCache = LruCache<HomeCacheKey, TimedValue<HomeFeed>>(4)
+    private val aniListHomeCache = LruCache<AniListHomeCacheKey, TimedValue<AniListHomeShelves>>(4)
+    private val detailsCache = LruCache<ScopedCacheKey, TimedValue<AnimeDetails>>(32)
+    private val episodesCache = LruCache<ScopedCacheKey, TimedValue<List<Episode>>>(32)
+    private val scheduleCache = LruCache<ScheduleCacheKey, TimedValue<List<AiringEntry>>>(8)
+    private val aniListInfoCache = LruCache<AniListInfoKey, TimedValue<AniListAnimeInfo>>(32)
     private val playbackResolver = AndroidPlaybackResolver(
         streamProxy = streamProxy,
         catalogApi = catalogApi,
@@ -108,9 +116,18 @@ class AndroidAnimeRepository(
             val latency = System.currentTimeMillis() - t0
             try {
                 val status = response.responseCode
-                val stream = if (status in 200..299) response.inputStream else response.errorStream
-                val text = stream?.use { it.readBytes().toString(StandardCharsets.UTF_8) }.orEmpty()
-                if (status in 200..299 && text.isNotBlank()) {
+                if (status !in 200..299) {
+                    return@withContext DomainBenchmarkResult(
+                        domain = cleanDomain,
+                        latencyMs = latency,
+                        success = false,
+                        errorMessage = "HTTP $status"
+                    )
+                }
+                val text = response.inputStream?.use {
+                    it.readBoundedBytes(1024 * 1024).toString(StandardCharsets.UTF_8)
+                }.orEmpty()
+                if (text.isNotBlank()) {
                     val json = runCatching { JSONObject(text) }.getOrNull()
                     if (json != null && (json.has(checkKey) || json.has("data") || json.has("results"))) {
                         DomainBenchmarkResult(
@@ -161,9 +178,25 @@ class AndroidAnimeRepository(
         highResolutionImages: Boolean
     ): HomeFeed = withContext(Dispatchers.IO) {
         val source = sourceSnapshot()
+        val cacheGen = networkStack.cacheGeneration.get()
+        val homeKey = HomeCacheKey(
+            cacheGen = cacheGen,
+            sourceIndex = source.index,
+            domain = source.domain,
+            useAniListTrending = useAniListTrending,
+            highResolutionImages = highResolutionImages
+        )
+        homeCache.getFresh(homeKey, HOME_CACHE_TTL_MS)?.let { return@withContext it }
+
         val alYearTarget = Calendar.getInstance().apply {
             timeInMillis = System.currentTimeMillis() - 2_592_000_000L
         }.get(Calendar.YEAR)
+        val alKey = AniListHomeCacheKey(
+            cacheGen = cacheGen,
+            includeFeatured = useAniListTrending,
+            highResolutionImages = highResolutionImages,
+            year = alYearTarget
+        )
         coroutineScope {
             val trendingDeferred = async {
                 safeFetch {
@@ -181,13 +214,18 @@ class AndroidAnimeRepository(
                 }
             }
             val aniListDeferred = async {
+                aniListHomeCache.getFresh(alKey, ANILIST_HOME_CACHE_TTL_MS)?.let { return@async it }
                 try {
-                    aniListCatalogApi.fetchHomeShelves(
+                    val fresh = aniListCatalogApi.fetchHomeShelves(
                         highResolutionImages = highResolutionImages,
                         includeFeatured = useAniListTrending,
                         year = alYearTarget,
                         source = source
                     )
+                    if (listOfNotNull(fresh.recent, fresh.top, fresh.popular, fresh.year, fresh.upcoming).isNotEmpty()) {
+                        aniListHomeCache.putTimed(alKey, fresh)
+                    }
+                    fresh
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
@@ -227,7 +265,11 @@ class AndroidAnimeRepository(
             HomeFeed(
                 featured = featured,
                 sections = sections
-            )
+            ).also { feed ->
+                if (sections.any { it.items.isNotEmpty() }) {
+                    homeCache.putTimed(homeKey, feed)
+                }
+            }
         }
     }
 
@@ -285,67 +327,172 @@ class AndroidAnimeRepository(
 
     override suspend fun loadDetails(animeId: String): AnimeDetails = withContext(Dispatchers.IO) {
         val source = sourceSnapshot()
-        val externalKey = animeId.substringBefore('|')
-        val aniListId = externalKey.removePrefix("anilist:")
-            .takeIf { animeId.startsWith("anilist:") && it.isNotBlank() }
-        val malId = externalKey.removePrefix("mal:")
-            .takeIf { animeId.startsWith("mal:") && it.isNotBlank() }
-        val externalTitle = Uri.decode(animeId.substringAfter('|', "").substringBefore('|'))
-        val titleMetadata = if (aniListId != null || malId != null) {
-            runCatching { aniListApi.loadTitleMetadata(aniListId, malId) }.getOrNull()
-        } else null
-        val sourceId = if (aniListId != null || malId != null) {
-            sourceAnimeLookup.resolveSourceId(
-                aniListId.orEmpty(),
-                externalTitle,
-                malId ?: titleMetadata?.malId,
-                titleMetadata?.aliases.orEmpty(),
-                titleMetadata?.year,
-                titleMetadata?.status,
-                source
+        val cacheGen = networkStack.cacheGeneration.get()
+        val detailKey = ScopedCacheKey(cacheGen, source.index, source.domain, animeId)
+        detailsCache.getFresh(detailKey, DETAILS_CACHE_TTL_MS)?.let { return@withContext it }
+
+        coroutineScope {
+            val externalKey = animeId.substringBefore('|')
+            val aniListId = externalKey.removePrefix("anilist:")
+                .takeIf { animeId.startsWith("anilist:") && it.isNotBlank() }
+            val malId = externalKey.removePrefix("mal:")
+                .takeIf { animeId.startsWith("mal:") && it.isNotBlank() }
+            val externalTitle = Uri.decode(animeId.substringAfter('|', "").substringBefore('|'))
+
+            val prefetchedRelated = aniListId?.let { id ->
+                async { runCatching { aniListApi.loadRelatedTitles(id, source) }.getOrNull() }
+            }
+            val titleMetadata = if (aniListId != null || malId != null) {
+                runCatching { aniListApi.loadTitleMetadata(aniListId, malId) }.getOrNull()
+            } else null
+            val sourceId = if (aniListId != null || malId != null) {
+                sourceAnimeLookup.resolveSourceId(
+                    aniListId.orEmpty(),
+                    externalTitle,
+                    malId ?: titleMetadata?.malId,
+                    titleMetadata?.aliases.orEmpty(),
+                    titleMetadata?.year,
+                    titleMetadata?.status,
+                    source
+                )
+            } else animeId
+
+            val gotakuDetail: JSONObject?
+            val anime: Anime
+            val episodesDeferred = if (!source.isReAnime) {
+                async { loadEpisodesCached(sourceId, source) }
+            } else null
+            if (!source.isReAnime) {
+                gotakuDetail = catalogApi.json("${source.root}/api/v1/titles/${Uri.encode(sourceId)}", source)
+                    .let { it.optJSONObject("data") ?: it }
+                anime = GotakuSource.anime(gotakuDetail.optJSONObject("title") ?: gotakuDetail, sourceId)
+                    ?: error("Anime details response had no title")
+            } else {
+                gotakuDetail = null
+                anime = catalogApi.loadAnime(sourceId, source)
+                    ?: error("Anime details response had no title")
+            }
+            val activeEpisodesDeferred = episodesDeferred ?: async { loadEpisodesCached(sourceId, source) }
+
+            val (gotakuSeasons, gotakuRelations, gotakuRecommendations) =
+                gotakuDetail?.let { GotakuSource.relatedItems(it, sourceId) }
+                    ?: Triple(emptyList(), emptyList(), emptyList())
+            val resolvedAniListId = anime.aniListId ?: titleMetadata?.aniListId ?: aniListId
+            val resolvedMalId = anime.malId ?: titleMetadata?.malId ?: malId
+            val trailerDeferred = if (titleMetadata?.trailerId == null && anime.trailerId == null && resolvedAniListId != null) {
+                async { runCatching { aniListApi.loadTrailer(resolvedAniListId) }.getOrNull() }
+            } else null
+            val relatedDeferred = prefetchedRelated ?: resolvedAniListId?.let { id ->
+                async { runCatching { aniListApi.loadRelatedTitles(id, source) }.getOrNull() }
+            }
+
+            val episodes = activeEpisodesDeferred.await()
+            val trailerId = titleMetadata?.trailerId ?: trailerDeferred?.await()
+            val relatedTitles = relatedDeferred?.await()
+            val detailsAnime = anime.copy(
+                aniListId = resolvedAniListId,
+                malId = resolvedMalId,
+                trailerId = trailerId ?: anime.trailerId
             )
-        } else animeId
-        val gotakuDetail = if (!source.isReAnime) {
-            catalogApi.json("${source.root}/api/v1/titles/${Uri.encode(sourceId)}", source)
-                .let { it.optJSONObject("data") ?: it }
-        } else null
-        val anime = (if (gotakuDetail != null) {
-            GotakuSource.anime(gotakuDetail.optJSONObject("title") ?: gotakuDetail, sourceId)
-        } else {
-            catalogApi.loadAnime(sourceId, source)
-        }) ?: error("Anime details response had no title")
-        val (gotakuSeasons, gotakuRelations, gotakuRecommendations) =
-            gotakuDetail?.let { GotakuSource.relatedItems(it, sourceId) }
-                ?: Triple(emptyList(), emptyList(), emptyList())
-        val resolvedAniListId = anime.aniListId ?: titleMetadata?.aniListId ?: aniListId
-        val resolvedMalId = anime.malId ?: titleMetadata?.malId ?: malId
-        val trailerId = titleMetadata?.trailerId
-            ?: resolvedAniListId?.let { runCatching { aniListApi.loadTrailer(it) }.getOrNull() }
-        val detailsAnime = anime.copy(
-            aniListId = resolvedAniListId,
-            malId = resolvedMalId,
-            trailerId = trailerId ?: anime.trailerId
-        )
-        val relatedTitles = resolvedAniListId
-            ?.let { runCatching { aniListApi.loadRelatedTitles(it, source) }.getOrNull() }
-        AnimeDetails(
-            anime = detailsAnime,
-            episodes = catalogApi.loadEpisodes(sourceId, source),
-            related = relatedTitles?.related.orEmpty().ifEmpty { gotakuRelations },
-            recommendations = relatedTitles?.recommendations.orEmpty().ifEmpty { gotakuRecommendations },
-            seasons = gotakuSeasons
-        )
+            AnimeDetails(
+                anime = detailsAnime,
+                episodes = episodes,
+                related = relatedTitles?.related.orEmpty().ifEmpty { gotakuRelations },
+                recommendations = relatedTitles?.recommendations.orEmpty().ifEmpty { gotakuRecommendations },
+                seasons = gotakuSeasons
+            ).also { details ->
+                detailsCache.putTimed(detailKey, details)
+            }
+        }
     }
 
     override suspend fun loadAniListInfo(anime: Anime): AniListAnimeInfo? = withContext(Dispatchers.IO) {
-        aniListApi.loadInfo(anime)
+        val key = AniListInfoKey(
+            cacheGen = networkStack.cacheGeneration.get(),
+            id = anime.id,
+            aniListId = anime.aniListId,
+            malId = anime.malId
+        )
+        aniListInfoCache.getFresh(key, INFO_CACHE_TTL_MS)?.let { return@withContext it }
+        aniListApi.loadInfo(anime)?.also { aniListInfoCache.putTimed(key, it) }
     }
 
     override suspend fun loadSchedule(day: Int?, includeNonJapan: Boolean): List<AiringEntry> =
-        aniListApi.loadSchedule(day, includeNonJapan, sourceSnapshot())
+        withContext(Dispatchers.IO) {
+            val source = sourceSnapshot()
+            val key = ScheduleCacheKey(
+                cacheGen = networkStack.cacheGeneration.get(),
+                sourceIndex = source.index,
+                day = day,
+                includeNonJapan = includeNonJapan
+            )
+            scheduleCache.getFresh(key, SCHEDULE_CACHE_TTL_MS)?.let { return@withContext it }
+            aniListApi.loadSchedule(day, includeNonJapan, source).also { entries ->
+                if (entries.isNotEmpty()) scheduleCache.putTimed(key, entries)
+            }
+        }
 
     override suspend fun loadEpisodes(animeId: String): List<Episode> = withContext(Dispatchers.IO) {
-        catalogApi.loadEpisodes(animeId, sourceSnapshot())
+        loadEpisodesCached(animeId, sourceSnapshot())
+    }
+
+    private suspend fun loadEpisodesCached(animeId: String, source: CatalogSource): List<Episode> {
+        val key = ScopedCacheKey(networkStack.cacheGeneration.get(), source.index, source.domain, animeId)
+        episodesCache.getFresh(key, EPISODES_CACHE_TTL_MS)?.let { return it }
+        return catalogApi.loadEpisodes(animeId, source).also { list ->
+            if (list.isNotEmpty()) episodesCache.putTimed(key, list)
+        }
+    }
+
+    private data class TimedValue<T>(val value: T, val cachedAtMs: Long)
+    private data class HomeCacheKey(
+        val cacheGen: Long,
+        val sourceIndex: Int,
+        val domain: String,
+        val useAniListTrending: Boolean,
+        val highResolutionImages: Boolean
+    )
+    private data class AniListHomeCacheKey(
+        val cacheGen: Long,
+        val includeFeatured: Boolean,
+        val highResolutionImages: Boolean,
+        val year: Int
+    )
+    private data class ScopedCacheKey(
+        val cacheGen: Long,
+        val sourceIndex: Int,
+        val domain: String,
+        val id: String
+    )
+    private data class ScheduleCacheKey(
+        val cacheGen: Long,
+        val sourceIndex: Int,
+        val day: Int?,
+        val includeNonJapan: Boolean
+    )
+    private data class AniListInfoKey(
+        val cacheGen: Long,
+        val id: String,
+        val aniListId: String?,
+        val malId: String?
+    )
+
+    private fun <K : Any, V : Any> LruCache<K, TimedValue<V>>.getFresh(key: K, ttlMs: Long): V? {
+        val entry = get(key) ?: return null
+        return if (SystemClock.elapsedRealtime() - entry.cachedAtMs < ttlMs) entry.value else null
+    }
+
+    private fun <K : Any, V : Any> LruCache<K, TimedValue<V>>.putTimed(key: K, value: V) {
+        put(key, TimedValue(value, SystemClock.elapsedRealtime()))
+    }
+
+    private companion object {
+        const val HOME_CACHE_TTL_MS = 60_000L
+        const val ANILIST_HOME_CACHE_TTL_MS = 5 * 60_000L
+        const val DETAILS_CACHE_TTL_MS = 3 * 60_000L
+        const val EPISODES_CACHE_TTL_MS = 3 * 60_000L
+        const val SCHEDULE_CACHE_TTL_MS = 5 * 60_000L
+        const val INFO_CACHE_TTL_MS = 5 * 60_000L
     }
 
     override suspend fun resolvePlayback(

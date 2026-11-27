@@ -22,7 +22,6 @@ kotlin {
             implementation(compose.foundation)
             implementation(compose.material3)
             implementation(compose.ui)
-            implementation("dev.chrisbanes.haze:haze:1.7.3")
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.engine.defaults)
             implementation(libs.coil.compose)
@@ -34,7 +33,6 @@ kotlin {
             implementation(libs.media3.datasource)
             implementation(libs.media3.database)
             implementation(libs.media3.exoplayer.hls)
-            implementation(libs.media3.exoplayer.dash)
             implementation(libs.media3.ui)
             implementation(libs.zxing.core)
         }

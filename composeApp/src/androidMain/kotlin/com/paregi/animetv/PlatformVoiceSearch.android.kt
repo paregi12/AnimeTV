@@ -10,21 +10,21 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.animateColor
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -46,10 +46,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
@@ -91,7 +99,7 @@ actual fun PlatformVoiceSearchButton(
     var listening by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("...") }
     var partialResult by remember { mutableStateOf("") }
-    var voiceLevel by remember { mutableFloatStateOf(0f) }
+    val voiceLevelState = remember { mutableFloatStateOf(0f) }
     var transientMessage by remember { mutableStateOf(false) }
     val latestOnResult by rememberUpdatedState(onResult)
 
@@ -103,7 +111,7 @@ actual fun PlatformVoiceSearchButton(
             runCatching { current.destroy() }
         }
         listening = false
-        voiceLevel = 0f
+        voiceLevelState.floatValue = 0f
     }
 
     fun startRecognition() {
@@ -125,7 +133,7 @@ actual fun PlatformVoiceSearchButton(
                 }
 
                 override fun onRmsChanged(rmsdB: Float) {
-                    voiceLevel = ((rmsdB - 3f) / 8f).coerceIn(0f, 1f)
+                    voiceLevelState.floatValue = ((rmsdB - 3f) / 8f).coerceIn(0f, 1f)
                 }
 
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
@@ -259,23 +267,34 @@ actual fun PlatformVoiceSearchButton(
 
         if (inlineSearchBar && voiceActive) {
             val targetPillWidth = if (tokens.portrait) tokens.vw * 62f else tokens.vw * 59f
-            var expanded by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) { expanded = true }
+            val animEnabled = tokens.tim10s > 0
+            var expanded by remember { mutableStateOf(!animEnabled) }
+            if (animEnabled) {
+                LaunchedEffect(Unit) { expanded = true }
+            }
 
-            val pillWidth by animateDpAsState(
-                targetValue = if (expanded) targetPillWidth else buttonSize,
-                animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
-            )
-            val pulse = rememberInfiniteTransition(label = "voice-inline")
-            val animatedPulseColor by pulse.animateColor(
-                initialValue = Color.Black,
-                targetValue = colors.accent1,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(durationMillis = 500, easing = LinearEasing),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "voice-border-color"
-            )
+            val expandFraction = if (animEnabled) {
+                animateFloatAsState(
+                    targetValue = if (expanded) 1f else 0.25f,
+                    animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
+                )
+            } else {
+                remember { mutableFloatStateOf(1f) }
+            }
+            val pulseFraction = if (animEnabled) {
+                val pulse = rememberInfiniteTransition(label = "voice-inline")
+                pulse.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 500, easing = LinearEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "voice-border-color"
+                )
+            } else {
+                remember { mutableFloatStateOf(1f) }
+            }
             val offsetX = with(density) { (-tokens.u * 0.5f).toPx().roundToInt() }
             val offsetY = with(density) { (-tokens.u * 0.6f).toPx().roundToInt() }
 
@@ -285,6 +304,10 @@ actual fun PlatformVoiceSearchButton(
                 "$clipped..."
             } else rawDisplay
 
+            val pillCornerRadius = tokens.u * 8f
+            val pillShape = remember(pillCornerRadius) { RoundedCornerShape(pillCornerRadius) }
+            val pillBorderWidth = tokens.u * 0.2f
+
             Popup(
                 alignment = Alignment.TopStart,
                 offset = IntOffset(offsetX, offsetY),
@@ -292,10 +315,27 @@ actual fun PlatformVoiceSearchButton(
             ) {
                 Box(
                     modifier = Modifier
-                        .width(pillWidth)
-                        .clip(RoundedCornerShape(tokens.u * 8f))
+                        .width(targetPillWidth)
+                        .graphicsLayer {
+                            scaleX = expandFraction.value
+                            transformOrigin = TransformOrigin(0f, 0.5f)
+                        }
+                        .clip(pillShape)
                         .background(Color.White)
-                        .border(tokens.u * 0.2f, animatedPulseColor, RoundedCornerShape(tokens.u * 8f))
+                        .drawWithContent {
+                            drawContent()
+                            val strokePx = pillBorderWidth.toPx()
+                            val half = strokePx / 2f
+                            val radiusPx = pillCornerRadius.toPx()
+                            val innerRadius = (radiusPx - half).coerceAtLeast(0f)
+                            drawRoundRect(
+                                color = lerp(Color.Black, colors.accent1, pulseFraction.value),
+                                topLeft = Offset(half, half),
+                                size = Size(size.width - strokePx, size.height - strokePx),
+                                cornerRadius = CornerRadius(innerRadius, innerRadius),
+                                style = Stroke(width = strokePx)
+                            )
+                        }
                         .navigationClickable {
                             closeRecognizer(cancel = true)
                             voiceActive = false
@@ -321,14 +361,26 @@ actual fun PlatformVoiceSearchButton(
                             .padding(start = tokens.u * 0.5f, top = tokens.u * 0.6f)
                             .size(buttonSize)
                             .clip(CircleShape)
-                            .background(Color(180, 200, 220, (voiceLevel * 255).roundToInt().coerceIn(0, 255))),
+                            .drawBehind {
+                                val alphaInt = (voiceLevelState.floatValue * 255).roundToInt().coerceIn(0, 255)
+                                if (alphaInt > 0) {
+                                    drawCircle(Color(180, 200, 220, alphaInt))
+                                }
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = IconGlyphs.Mic,
-                            color = animatedPulseColor,
+                            color = Color.Black,
                             fontFamily = LocalIconFont.current,
                             fontSize = resolvedIconSize
+                        )
+                        Text(
+                            text = IconGlyphs.Mic,
+                            color = colors.accent1,
+                            fontFamily = LocalIconFont.current,
+                            fontSize = resolvedIconSize,
+                            modifier = Modifier.graphicsLayer { alpha = pulseFraction.value }
                         )
                     }
                 }
@@ -362,7 +414,11 @@ actual fun PlatformVoiceSearchButton(
                         .background(Color(0xFF111111))
                 ) {
                     Box(
-                        Modifier.fillMaxWidth(fraction = voiceLevel.coerceAtLeast(0.08f)).height(5.dp)
+                        Modifier.fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = voiceLevelState.floatValue.coerceAtLeast(0.08f)
+                                transformOrigin = TransformOrigin(0f, 0.5f)
+                            }
                             .background(colors.accent1)
                     )
                 }

@@ -32,7 +32,7 @@ class TvChannelRefreshJobService : JobService() {
         runningJob = scope.launch {
             var completed = false
             try {
-                val networkStack = AndroidNetworkStack(applicationContext)
+                val networkStack = AndroidNetworkStack(applicationContext, enableDiskCache = false)
                 try {
                     val profileNamespace = ProfileNamespace()
                     val profileDirectory = AndroidProfileRepository(applicationContext, profileNamespace).loadProfiles()
@@ -88,7 +88,8 @@ class TvChannelRefreshJobService : JobService() {
         private const val JOB_ID = 66_607
         private const val REFRESH_DELAY_MS = 60L * 60L * 1_000L
         private const val REFRESH_DEADLINE_MS = 63L * 60L * 1_000L
-        private const val INITIAL_REFRESH_DEADLINE_MS = 60L * 1_000L
+        private const val INITIAL_REFRESH_DELAY_MS = 15_000L
+        private const val INITIAL_REFRESH_DEADLINE_MS = 90_000L
         private const val TAG = "ParegiTvChannels"
 
         fun schedule(context: Context) {
@@ -96,7 +97,11 @@ class TvChannelRefreshJobService : JobService() {
         }
 
         fun refreshNow(context: Context) {
-            schedule(context, minimumLatencyMs = 0L, overrideDeadlineMs = INITIAL_REFRESH_DEADLINE_MS)
+            schedule(
+                context,
+                minimumLatencyMs = INITIAL_REFRESH_DELAY_MS,
+                overrideDeadlineMs = INITIAL_REFRESH_DEADLINE_MS
+            )
         }
 
         private fun schedule(context: Context, minimumLatencyMs: Long, overrideDeadlineMs: Long) {
@@ -105,6 +110,7 @@ class TvChannelRefreshJobService : JobService() {
             ) return
             val component = ComponentName(context, TvChannelRefreshJobService::class.java)
             val job = JobInfo.Builder(JOB_ID, component)
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
                 .setMinimumLatency(minimumLatencyMs)
                 .setOverrideDeadline(overrideDeadlineMs)
                 .setPersisted(true)

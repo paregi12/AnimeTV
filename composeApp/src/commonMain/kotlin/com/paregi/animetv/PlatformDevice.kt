@@ -8,3 +8,6 @@ expect fun platformIsTelevision(): Boolean
 
 @Composable
 expect fun platformIsTouchDevice(): Boolean
+
+@Composable
+expect fun platformIsLowRamDevice(): Boolean

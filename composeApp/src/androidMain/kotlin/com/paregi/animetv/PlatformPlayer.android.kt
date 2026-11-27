@@ -1,6 +1,7 @@
 package com.paregi.animetv
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.res.Resources
@@ -29,6 +30,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -54,6 +56,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -72,8 +77,10 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
@@ -96,8 +103,36 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.roundToInt
+
+private val LOCALHOST_PORT_REGEX = Regex("^http://127\\.0\\.0\\.1:\\d+")
+
+private class LazyCacheDataSourceFactory(
+    context: Context,
+    private val sizeMb: Int,
+    private val upstreamFactory: DataSource.Factory
+) : DataSource.Factory {
+    private val appContext = context.applicationContext
+
+    @Volatile
+    private var delegate: CacheDataSource.Factory? = null
+
+    override fun createDataSource(): DataSource {
+        val factory = delegate ?: synchronized(this) {
+            delegate ?: CacheDataSource.Factory()
+                .setCache(PlaybackCache.get(appContext, sizeMb))
+                .setUpstreamDataSourceFactory(upstreamFactory)
+                .setCacheKeyFactory { dataSpec ->
+                    dataSpec.key ?: dataSpec.uri.toString().replaceFirst(LOCALHOST_PORT_REGEX, "http://127.0.0.1")
+                }
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+                .also { delegate = it }
+        }
+        return factory.createDataSource()
+    }
+}
 
 private object PlaybackCache {
     private var cache: SimpleCache? = null
@@ -137,12 +172,14 @@ actual fun clearPlatformPlaybackCache() {
     PlaybackCache.clear()
 }
 
-@Composable
-actual fun platformSubtitleFontFamily(fontIndex: Int, weightIndex: Int): FontFamily {
-    val context = LocalContext.current
-    return remember(context, fontIndex) {
-        val assets = context.assets
-        when (fontIndex) {
+private object SubtitleFontFamilyCache {
+    private val cache = mutableMapOf<Int, FontFamily>()
+
+    @Synchronized
+    fun get(context: Context, fontIndex: Int): FontFamily {
+        cache[fontIndex]?.let { return it }
+        val assets = context.applicationContext.assets
+        val family = when (fontIndex) {
             0 -> FontFamily.Serif
             1 -> runCatching {
                 FontFamily(
@@ -168,6 +205,16 @@ actual fun platformSubtitleFontFamily(fontIndex: Int, weightIndex: Int): FontFam
                 } else FontFamily.SansSerif
             }
         }
+        cache[fontIndex] = family
+        return family
+    }
+}
+
+@Composable
+actual fun platformSubtitleFontFamily(fontIndex: Int, weightIndex: Int): FontFamily {
+    val context = LocalContext.current
+    return remember(fontIndex) {
+        SubtitleFontFamilyCache.get(context, fontIndex)
     }
 }
 
@@ -285,16 +332,35 @@ actual fun PlatformPlayer(
     settingsOverlayOpen: Boolean
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val colors = LocalAnimeTvColors.current
     val tokens = LocalAnimeTvTokens.current
     val showToast = LocalAppToast.current
     val coroutineScope = rememberCoroutineScope()
     val brightnessController = remember(context) { PlayerBrightnessController(context) }
     val volumeController = remember(context) { PlayerVolumeController(context) }
+    val isLowRam = remember(context) {
+        (context.applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+            ?.isLowRamDevice == true
+    }
+    val (autoMaxWidth, autoMaxHeight) = remember(context, isLowRam) {
+        val dm = context.resources.displayMetrics
+        val longSide = maxOf(dm.widthPixels, dm.heightPixels).coerceAtLeast(1280)
+        val shortSide = minOf(dm.widthPixels, dm.heightPixels).coerceAtLeast(720)
+        if (isLowRam) {
+            minOf(longSide, 1280) to minOf(shortSide, 720)
+        } else {
+            minOf(longSide, 1920) to minOf(shortSide, 1080)
+        }
+    }
 
-    var positionMs by remember(url) { mutableStateOf(startPositionMs) }
-    var durationMs by remember(url) { mutableStateOf(0L) }
-    var bufferedPositionMs by remember(url) { mutableStateOf(0L) }
+    DisposableEffect(brightnessController) {
+        onDispose { brightnessController.reset() }
+    }
+
+    var positionMs by remember(url) { mutableLongStateOf(startPositionMs) }
+    var durationMs by remember(url) { mutableLongStateOf(0L) }
+    var bufferedPositionMs by remember(url) { mutableLongStateOf(0L) }
     var playing by remember(url) { mutableStateOf(true) }
     var isBuffering by remember(url) { mutableStateOf(true) }
     var ended by remember(url) { mutableStateOf(false) }
@@ -305,61 +371,93 @@ actual fun PlatformPlayer(
     var availableVideoHeights by remember(url) { mutableStateOf<List<Int>>(emptyList()) }
     var currentTracks by remember(url) { mutableStateOf(Tracks.EMPTY) }
     var activeCues by remember(url) { mutableStateOf<List<Cue>>(emptyList()) }
+    var retryCount by remember(url) { mutableIntStateOf(0) }
 
     var osdState by remember(url) { mutableStateOf<PlayerOsdHudState?>(null) }
     var osdNonce by remember(url) { mutableIntStateOf(0) }
     var seekIndicatorSide by remember(url) { mutableStateOf<Int?>(null) }
     var seekDebounceJob by remember(url) { mutableStateOf<Job?>(null) }
 
+    val latestShowToast = rememberUpdatedState(showToast)
+    val latestOnDetectedVideoHeightsChanged = rememberUpdatedState(onDetectedVideoHeightsChanged)
+    val latestOnAvailableAudioLanguagesChanged = rememberUpdatedState(onAvailableAudioLanguagesChanged)
+    val latestOnProgress = rememberUpdatedState(onProgress)
+    val latestOnEnded = rememberUpdatedState(onEnded)
+    val latestHasNext = rememberUpdatedState(hasNext)
+    val latestHasPrevious = rememberUpdatedState(hasPrevious)
+    val latestPlaybackSpeed = rememberUpdatedState(playbackSpeed)
+    val availableVideoHeightsState = rememberUpdatedState(availableVideoHeights)
+    val detectedVideoHeightState = rememberUpdatedState(detectedVideoHeight)
+
     fun showOsdHud(state: PlayerOsdHudState) {
         osdState = state
         osdNonce += 1
     }
 
-    val player = remember(url, headers, videoBuffer, progressiveCache, cacheSizeMb) {
-        val httpFactory = DefaultHttpDataSource.Factory().setDefaultRequestProperties(headers)
-        val upstreamFactory: DataSource.Factory = DefaultDataSource.Factory(context, httpFactory)
+    val httpFactory = remember(context, videoBuffer, progressiveCache, cacheSizeMb, isLowRam) {
+        DefaultHttpDataSource.Factory()
+    }
+    val player = remember(context, videoBuffer, progressiveCache, cacheSizeMb, isLowRam) {
+        val appContext = context.applicationContext
+        val upstreamFactory: DataSource.Factory = DefaultDataSource.Factory(appContext, httpFactory)
         val dataSourceFactory: DataSource.Factory = if (progressiveCache) {
-            CacheDataSource.Factory()
-                .setCache(PlaybackCache.get(context, cacheSizeMb))
-                .setUpstreamDataSourceFactory(upstreamFactory)
-                .setCacheKeyFactory { dataSpec ->
-                    dataSpec.key ?: dataSpec.uri.toString().replaceFirst(
-                        Regex("^http://127\\.0\\.0\\.1:\\d+"),
-                        "http://127.0.0.1"
-                    )
-                }
-                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            LazyCacheDataSourceFactory(appContext, cacheSizeMb, upstreamFactory)
         } else upstreamFactory
-        val mediaSourceFactory = DefaultMediaSourceFactory(context).setDataSourceFactory(dataSourceFactory)
-        val bufferDurations = when (videoBuffer.coerceIn(0, 4)) {
-            0 -> intArrayOf(30_000, 30_000, 1_500, 3_000)
-            1 -> intArrayOf(60_000, 60_000, 2_000, 4_000)
-            2 -> intArrayOf(120_000, 120_000, 2_500, 5_000)
-            3 -> intArrayOf(300_000, 300_000, 2_500, 5_000)
-            else -> intArrayOf(600_000, 600_000, 2_500, 5_000)
+        val mediaSourceFactory = DefaultMediaSourceFactory(appContext).setDataSourceFactory(dataSourceFactory)
+        val bufferTier = videoBuffer.coerceIn(0, 4)
+        val bufferDurations = if (isLowRam) {
+            when (bufferTier) {
+                0 -> intArrayOf(20_000, 20_000, 1_500, 3_000)
+                1 -> intArrayOf(35_000, 35_000, 2_000, 4_000)
+                2 -> intArrayOf(45_000, 45_000, 2_500, 5_000)
+                3 -> intArrayOf(60_000, 60_000, 2_500, 5_000)
+                else -> intArrayOf(90_000, 90_000, 2_500, 5_000)
+            }
+        } else {
+            when (bufferTier) {
+                0 -> intArrayOf(30_000, 30_000, 1_500, 3_000)
+                1 -> intArrayOf(60_000, 60_000, 2_000, 4_000)
+                2 -> intArrayOf(120_000, 120_000, 2_500, 5_000)
+                3 -> intArrayOf(300_000, 300_000, 2_500, 5_000)
+                else -> intArrayOf(600_000, 600_000, 2_500, 5_000)
+            }
         }
-        val backBufferDuration = when (videoBuffer.coerceIn(0, 4)) {
-            0 -> 10_000
-            1 -> 20_000
-            2 -> 30_000
-            3 -> 60_000
-            else -> 120_000
+        val backBufferDuration = if (isLowRam) {
+            when (bufferTier) {
+                0 -> 5_000
+                1 -> 10_000
+                2 -> 15_000
+                3 -> 20_000
+                else -> 30_000
+            }
+        } else {
+            when (bufferTier) {
+                0 -> 10_000
+                1 -> 20_000
+                2 -> 30_000
+                3 -> 60_000
+                else -> 120_000
+            }
         }
+        val targetBufferBytes = if (isLowRam) 24 * 1024 * 1024 else 48 * 1024 * 1024
         val loadControl = DefaultLoadControl.Builder()
             .setBackBuffer(backBufferDuration, true)
             .setBufferDurationsMs(bufferDurations[0], bufferDurations[1], bufferDurations[2], bufferDurations[3])
+            .setTargetBufferBytes(targetBufferBytes)
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
-        val mediaItem = buildPlaybackMediaItem(url, subtitles)
-        var playerRetryCount = 0
-        ExoPlayer.Builder(context)
+        val renderersFactory = DefaultRenderersFactory(appContext).setEnableDecoderFallback(true)
+        val trackSelector = DefaultTrackSelector(appContext)
+        ExoPlayer.Builder(appContext, renderersFactory)
+            .setTrackSelector(trackSelector)
             .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(loadControl)
             .build().apply {
-                setMediaItem(mediaItem)
-                if (startPositionMs > 0) seekTo(startPositionMs)
-                playWhenReady = true
                 addListener(object : Player.Listener {
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        playing = isPlaying
+                    }
+
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         isBuffering = playbackState == Player.STATE_BUFFERING
                         if (playbackState == Player.STATE_BUFFERING && duration <= 0L) {
@@ -378,7 +476,8 @@ actual fun PlatformPlayer(
                     override fun onVideoSizeChanged(videoSize: VideoSize) {
                         if (videoSize.height > 0) {
                             detectedVideoHeight = videoSize.height
-                            onDetectedVideoHeightsChanged?.invoke(videoSize.height, availableVideoHeights)
+                            latestOnDetectedVideoHeightsChanged.value
+                                ?.invoke(videoSize.height, availableVideoHeightsState.value)
                         }
                     }
 
@@ -405,9 +504,10 @@ actual fun PlatformPlayer(
                         }
                         val sortedHeights = videoHeights.distinct().sortedDescending()
                         availableVideoHeights = sortedHeights
-                        onDetectedVideoHeightsChanged?.invoke(detectedVideoHeight, sortedHeights)
+                        latestOnDetectedVideoHeightsChanged.value
+                            ?.invoke(detectedVideoHeightState.value, sortedHeights)
                         if (audioLangs.isNotEmpty()) {
-                            onAvailableAudioLanguagesChanged?.invoke(audioLangs)
+                            latestOnAvailableAudioLanguagesChanged.value?.invoke(audioLangs)
                         }
                     }
 
@@ -416,8 +516,8 @@ actual fun PlatformPlayer(
                     }
 
                     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                        if (playerRetryCount < 2) {
-                            playerRetryCount++
+                        if (retryCount < 2) {
+                            retryCount++
                             val resumePos = currentPosition.coerceAtLeast(0)
                             seekTo(resumePos)
                             prepare()
@@ -427,16 +527,38 @@ actual fun PlatformPlayer(
                             val msg = "Playback error: ${error.errorCodeName}"
                             playbackErrorMessage = msg
                             statusText = "PLAYBACK ERROR"
-                            showToast(msg)
+                            latestShowToast.value(msg)
                         }
                     }
                 })
-                prepare()
             }
     }
 
     DisposableEffect(player) {
-        onDispose { player.release() }
+        onDispose {
+            seekDebounceJob?.cancel()
+            seekDebounceJob = null
+            player.release()
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, player) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+                val pos = player.currentPosition.coerceAtLeast(0L)
+                val dur = player.duration.coerceAtLeast(0L)
+                if (dur > 0L && pos > 0L) {
+                    latestOnProgress.value(pos, dur)
+                }
+                player.playWhenReady = false
+                player.pause()
+                playing = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     fun currentPosition(): Long = player.currentPosition.coerceAtLeast(0)
@@ -517,23 +639,54 @@ actual fun PlatformPlayer(
         player.setPlaybackSpeed(playbackSpeed)
     }
 
-    var appliedSubtitles by remember(url) { mutableStateOf(subtitles) }
-    LaunchedEffect(player, subtitles) {
-        if (subtitles == appliedSubtitles) return@LaunchedEffect
-        val resumeMs = player.currentPosition.coerceAtLeast(0L)
-        val shouldPlay = player.playWhenReady
-        player.setMediaItem(buildPlaybackMediaItem(url, subtitles), resumeMs)
-        player.playWhenReady = shouldPlay
-        player.prepare()
-        appliedSubtitles = subtitles
+    var appliedUrl by remember(player) { mutableStateOf<String?>(null) }
+    var appliedHeaders by remember(player) { mutableStateOf<Map<String, String>?>(null) }
+    var appliedSubtitleUrls by remember(player) { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(player, url, headers, subtitles) {
+        val subtitleUrls = subtitles.map { it.url }
+        if (appliedUrl != url || appliedHeaders != headers) {
+            val targetPos = if (appliedUrl == null) positionMs.coerceAtLeast(0L) else startPositionMs.coerceAtLeast(0L)
+            durationMs = 0L
+            bufferedPositionMs = 0L
+            playing = true
+            isBuffering = true
+            ended = false
+            firstFrameRendered = false
+            playbackErrorMessage = null
+            statusText = "LOADING SERVER"
+            detectedVideoHeight = 0
+            availableVideoHeights = emptyList()
+            currentTracks = Tracks.EMPTY
+            activeCues = emptyList()
+            osdState = null
+            seekIndicatorSide = null
+            seekDebounceJob?.cancel()
+            seekDebounceJob = null
+            retryCount = 0
+
+            httpFactory.setDefaultRequestProperties(headers)
+            player.setMediaItem(buildPlaybackMediaItem(url, subtitles), targetPos)
+            player.playWhenReady = true
+            player.prepare()
+            appliedUrl = url
+            appliedHeaders = headers
+            appliedSubtitleUrls = subtitleUrls
+        } else if (subtitleUrls != appliedSubtitleUrls) {
+            val resumeMs = player.currentPosition.coerceAtLeast(0L)
+            val shouldPlay = player.playWhenReady
+            player.setMediaItem(buildPlaybackMediaItem(url, subtitles), resumeMs)
+            player.playWhenReady = shouldPlay
+            player.prepare()
+            appliedSubtitleUrls = subtitleUrls
+        }
     }
 
     fun updateMediaSessionState(state: Int, position: Long, speed: Float) {
         val actions = PlaybackState.ACTION_PLAY_PAUSE or
             PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
             PlaybackState.ACTION_SEEK_TO or
-            (if (hasNext) PlaybackState.ACTION_SKIP_TO_NEXT else 0L) or
-            (if (hasPrevious) PlaybackState.ACTION_SKIP_TO_PREVIOUS else 0L)
+            (if (latestHasNext.value) PlaybackState.ACTION_SKIP_TO_NEXT else 0L) or
+            (if (latestHasPrevious.value) PlaybackState.ACTION_SKIP_TO_PREVIOUS else 0L)
         mediaSession.setPlaybackState(
             PlaybackState.Builder()
                 .setActions(actions)
@@ -557,7 +710,7 @@ actual fun PlatformPlayer(
 
     LaunchedEffect(
         player, subtitles, effectiveSubtitleIndex, audioLanguage,
-        playbackQuality, currentTracks, availableVideoHeights
+        playbackQuality, currentTracks, availableVideoHeights, autoMaxWidth, autoMaxHeight
     ) {
         val builder = player.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
@@ -576,13 +729,18 @@ actual fun PlatformPlayer(
         builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
         val qualityTier = playbackQuality.coerceIn(0, 3)
         if (qualityTier == 0) {
-            builder.clearVideoSizeConstraints()
+            builder.setMinVideoSize(0, 0)
+            builder.setMaxVideoSize(autoMaxWidth, autoMaxHeight)
         } else if (availableVideoHeights.isNotEmpty()) {
-            val targetHeight = availableVideoHeights.getOrNull(qualityTier - 1) ?: availableVideoHeights.last()
+            val targetHeight = when (qualityTier) {
+                1 -> availableVideoHeights.first()
+                2 -> availableVideoHeights.firstOrNull { it <= 720 } ?: availableVideoHeights.last()
+                else -> availableVideoHeights.firstOrNull { it <= 480 } ?: availableVideoHeights.last()
+            }
             findMatchingVideoGroup(currentTracks, targetHeight)?.let { (group, trackIndices) ->
                 builder.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndices))
             }
-            builder.setMinVideoSize(0, targetHeight)
+            builder.setMinVideoSize(0, 0)
             builder.setMaxVideoSize(Int.MAX_VALUE, targetHeight)
         } else {
             val fallbackMaxHeight = when (qualityTier) {
@@ -597,18 +755,27 @@ actual fun PlatformPlayer(
         player.trackSelectionParameters = builder.build()
     }
 
-    LaunchedEffect(player, skipRanges, autoSkipIntro, skipFiller) {
+    LaunchedEffect(player, url, skipRanges, autoSkipIntro, skipFiller) {
         var lastReport = 0L
         var endedReported = false
+        var lastSessionState = -1
+        var lastSessionSpeed = -1f
+        var lastSessionNavMask = -1
+        var lastSessionPos = -1L
+        var lastSessionElapsedMs = 0L
         while (true) {
             delay(500)
             val isEnded = player.playbackState == Player.STATE_ENDED
             if (isEnded) {
                 ended = true
-                updateMediaSessionState(PlaybackState.STATE_STOPPED, currentPosition(), 0f)
+                if (lastSessionState != PlaybackState.STATE_STOPPED) {
+                    updateMediaSessionState(PlaybackState.STATE_STOPPED, currentPosition(), 0f)
+                    lastSessionState = PlaybackState.STATE_STOPPED
+                    lastSessionSpeed = 0f
+                }
                 if (!endedReported) {
-                    onProgress(currentPosition(), currentDuration())
-                    onEnded()
+                    latestOnProgress.value(currentPosition(), currentDuration())
+                    latestOnEnded.value()
                     endedReported = true
                 }
                 continue
@@ -640,13 +807,30 @@ actual fun PlatformPlayer(
             durationMs = currentDuration()
             bufferedPositionMs = player.bufferedPosition.coerceAtLeast(0)
             playing = player.isPlaying
-            updateMediaSessionState(
-                if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
-                positionMs,
-                if (playing) playbackSpeed else 0f
-            )
+            val sessionState = if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+            val sessionSpeed = if (playing) latestPlaybackSpeed.value else 0f
+            val navMask = (if (latestHasNext.value) 1 else 0) or (if (latestHasPrevious.value) 2 else 0)
+            val nowElapsed = SystemClock.elapsedRealtime()
+            val expectedPos = if (lastSessionState == PlaybackState.STATE_PLAYING && lastSessionPos >= 0L) {
+                lastSessionPos + ((nowElapsed - lastSessionElapsedMs) * lastSessionSpeed).toLong()
+            } else lastSessionPos
+            if (
+                sessionState != lastSessionState ||
+                sessionSpeed != lastSessionSpeed ||
+                navMask != lastSessionNavMask ||
+                lastSessionPos < 0L ||
+                abs(positionMs - expectedPos) >= 1_500L ||
+                nowElapsed - lastSessionElapsedMs >= 5_000L
+            ) {
+                updateMediaSessionState(sessionState, positionMs, sessionSpeed)
+                lastSessionState = sessionState
+                lastSessionSpeed = sessionSpeed
+                lastSessionNavMask = navMask
+                lastSessionPos = positionMs
+                lastSessionElapsedMs = nowElapsed
+            }
             if (position - lastReport >= 10_000 || position < lastReport) {
-                onProgress(position, durationMs)
+                latestOnProgress.value(position, durationMs)
                 lastReport = position
             }
         }
@@ -739,9 +923,12 @@ actual fun PlatformPlayer(
         firstFrameRendered = firstFrameRendered,
         hasNext = hasNext,
         hasPrevious = hasPrevious,
-        positionMs = positionMs,
-        durationMs = durationMs,
-        bufferedPositionMs = bufferedPositionMs,
+        positionMs = 0L,
+        durationMs = 0L,
+        bufferedPositionMs = 0L,
+        positionMsProvider = { positionMs },
+        durationMsProvider = { durationMs },
+        bufferedPositionMsProvider = { bufferedPositionMs },
         isPlaying = playing,
         isLoading = isBuffering,
         isEnded = ended,
@@ -833,6 +1020,9 @@ actual fun PlatformPlayer(
         videoContent = {
             val primary1Argb = colors.primary1.toArgb()
             val accent1Argb = colors.accent1.toArgb()
+            val screenHeightDp = tokens.screenHeight.value
+            val appliedState = remember { PlayerViewAppliedState() }
+            val showNativeSubtitles = !useComposeCueOverlay
             Box(Modifier.fillMaxSize()) {
                 AndroidView(
                     factory = { ctx ->
@@ -851,6 +1041,13 @@ actual fun PlatformPlayer(
                             setKeepContentOnPlayerReset(true)
                             isFocusable = false
                             isFocusableInTouchMode = false
+                            appliedState.player = player
+                            appliedState.showNativeSubtitles = showNativeSubtitleViewState.value
+                            appliedState.subtitleStyle = subtitleStyle
+                            appliedState.primary1Argb = primary1Argb
+                            appliedState.accent1Argb = accent1Argb
+                            appliedState.screenHeightDp = screenHeightDp
+                            appliedState.videoScale = videoScale
                             post {
                                 subtitleView?.visibility =
                                     if (showNativeSubtitleViewState.value) View.VISIBLE else View.GONE
@@ -859,16 +1056,37 @@ actual fun PlatformPlayer(
                         }
                     },
                     update = {
-                        it.player = player
-                        it.subtitleView?.visibility =
-                            if (showNativeSubtitleViewState.value) View.VISIBLE else View.GONE
-                        applySubtitleStyle(it, subtitleStyle, primary1Argb, accent1Argb, tokens)
-                        it.resizeMode = when (videoScale) {
-                            1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                            2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        if (appliedState.player !== player) {
+                            it.player = player
+                            appliedState.player = player
+                        }
+                        if (appliedState.showNativeSubtitles != showNativeSubtitles) {
+                            it.subtitleView?.visibility =
+                                if (showNativeSubtitles) View.VISIBLE else View.GONE
+                            appliedState.showNativeSubtitles = showNativeSubtitles
+                        }
+                        if (
+                            appliedState.subtitleStyle != subtitleStyle ||
+                            appliedState.primary1Argb != primary1Argb ||
+                            appliedState.accent1Argb != accent1Argb ||
+                            appliedState.screenHeightDp != screenHeightDp
+                        ) {
+                            applySubtitleStyle(it, subtitleStyle, primary1Argb, accent1Argb, tokens)
+                            appliedState.subtitleStyle = subtitleStyle
+                            appliedState.primary1Argb = primary1Argb
+                            appliedState.accent1Argb = accent1Argb
+                            appliedState.screenHeightDp = screenHeightDp
+                        }
+                        if (appliedState.videoScale != videoScale) {
+                            it.resizeMode = when (videoScale) {
+                                1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            }
+                            appliedState.videoScale = videoScale
                         }
                     },
+                    onRelease = { it.player = null },
                     modifier = Modifier.fillMaxSize()
                 )
                 if (useComposeCueOverlay) {
@@ -1012,12 +1230,23 @@ private fun findMatchingTextGroup(
     return textPairs.getOrNull(targetIndex)
 }
 
-private class PlayerVolumeController(private val context: Context) {
+private class PlayerViewAppliedState(
+    var player: ExoPlayer? = null,
+    var showNativeSubtitles: Boolean? = null,
+    var subtitleStyle: Int = Int.MIN_VALUE,
+    var primary1Argb: Int = 0,
+    var accent1Argb: Int = 0,
+    var screenHeightDp: Float = -1f,
+    var videoScale: Int = -1
+)
+
+private class PlayerVolumeController(context: Context) {
+    private val appContext = context.applicationContext
+    private val audioManager by lazy { appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private var lastAppliedStreamVolume: Int = -1
     private var trackedPercent: Float = -1f
 
     fun adjust(direction: Int): Int {
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         val minimum = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             audioManager.getStreamMinVolume(AudioManager.STREAM_MUSIC).coerceIn(0, maximum)
@@ -1065,6 +1294,18 @@ private class PlayerBrightnessController(private val context: Context) {
         attributes.screenBrightness = updated / 255f
         window.attributes = attributes
         return updated
+    }
+
+    fun reset() {
+        if (brightnessLevel == null) return
+        val activity = context.findActivity() ?: return
+        val window = activity.window
+        val attributes = window.attributes
+        if (attributes.screenBrightness != WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE) {
+            attributes.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            window.attributes = attributes
+        }
+        brightnessLevel = null
     }
 }
 

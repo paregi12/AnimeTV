@@ -10,6 +10,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.dnsoverhttps.DnsOverHttps
 import org.chromium.net.CronetEngine
+import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.InputStream
 import java.net.HttpURLConnection
@@ -17,11 +18,16 @@ import java.net.InetAddress
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /** Applies the original HTTP client, DNS, and cache preferences to Android network requests. */
-class AndroidNetworkStack(context: Context) : Closeable {
+class AndroidNetworkStack(
+    context: Context,
+    private val enableDiskCache: Boolean = true
+) : Closeable {
     private val appContext = context.applicationContext
     internal val context: Context get() = appContext
+    internal val cacheGeneration = AtomicLong(0L)
     private val clients = ConcurrentHashMap<NetworkConfig, NetworkClients>()
 
     @Volatile
@@ -35,10 +41,12 @@ class AndroidNetworkStack(context: Context) : Closeable {
         )
         if (config == activeConfig && clients.containsKey(config)) return
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            synchronized(clients) {
+            val evicted = synchronized(clients) {
                 clients.getOrPut(config) { createClients(config) }
                 activeConfig = config
+                clients.keys.filter { it != config }.mapNotNull { clients.remove(it) }
             }
+            evicted.forEach { runCatching { it.close() } }
         }
     }
 
@@ -52,6 +60,7 @@ class AndroidNetworkStack(context: Context) : Closeable {
                     ?.filter { it.exists() && !it.deleteRecursively() && it.exists() }
                     .orEmpty()
                 check(undeleted.isEmpty()) { "Could not remove the HTTP cache" }
+                cacheGeneration.incrementAndGet()
                 clients[activeConfig] = createClients(activeConfig)
             }
         }
@@ -62,8 +71,8 @@ class AndroidNetworkStack(context: Context) : Closeable {
         method: String = "GET",
         headers: Map<String, String> = emptyMap(),
         body: ByteArray? = null,
-        connectTimeoutMs: Int = 12_000,
-        readTimeoutMs: Int = 18_000
+        connectTimeoutMs: Int = DEFAULT_CONNECT_TIMEOUT_MS,
+        readTimeoutMs: Int = DEFAULT_READ_TIMEOUT_MS
     ): AndroidNetworkResponse {
         val config = activeConfig
         val network = clients[config] ?: synchronized(clients) {
@@ -77,18 +86,24 @@ class AndroidNetworkStack(context: Context) : Closeable {
     }
 
     override fun close() {
-        clients.values.toSet().forEach { runCatching { it.close() } }
-        clients.clear()
+        val current = synchronized(clients) {
+            clients.values.toSet().also { clients.clear() }
+        }
+        current.forEach { runCatching { it.close() } }
     }
 
     private fun createClients(config: NetworkConfig): NetworkClients {
         val cacheBytes = config.cacheSizeMb.toLong() * 1024L * 1024L
         val cacheDir = appContext.cacheDir
-        val okHttpCache = if (config.httpClient == 0) Cache(
+        val okHttpCache = if (enableDiskCache && config.httpClient == 0) Cache(
             cacheDir.resolve("http-okhttp-${config.useDnsOverHttps}-${config.cacheSizeMb}"),
             cacheBytes
         ) else null
         val bootstrapClient = OkHttpClient.Builder().apply {
+            connectTimeout(DOH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            readTimeout(DOH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            writeTimeout(DOH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            callTimeout(DOH_CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             if (okHttpCache != null) cache(okHttpCache)
         }.build()
         val dns = if (config.httpClient == 0 && config.useDnsOverHttps) {
@@ -102,19 +117,32 @@ class AndroidNetworkStack(context: Context) : Closeable {
         } else null
         val okHttp = bootstrapClient.newBuilder().apply {
             if (dns != null) dns(dns)
+            connectTimeout(DEFAULT_CONNECT_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            readTimeout(DEFAULT_READ_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            writeTimeout(DEFAULT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            callTimeout(
+                defaultCallTimeoutMs(DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_READ_TIMEOUT_MS),
+                TimeUnit.MILLISECONDS
+            )
         }.build()
 
         val cronet = if (config.httpClient == 2) {
             runCatching {
-                CronetEngine.Builder(appContext)
-                    .setStoragePath(cacheDir.resolve(
-                        "http-cronet-${config.httpClient}-${config.useDnsOverHttps}-${config.cacheSizeMb}"
-                    ).absolutePath)
-                    .enableHttpCache(CronetEngine.Builder.HTTP_CACHE_DISK, cacheBytes)
-                    .enableHttp2(true)
-                    .enableQuic(true)
-                    .enableBrotli(true)
-                    .build()
+                CronetEngine.Builder(appContext).apply {
+                    if (enableDiskCache) {
+                        setStoragePath(
+                            cacheDir.resolve(
+                                "http-cronet-${config.httpClient}-${config.useDnsOverHttps}-${config.cacheSizeMb}"
+                            ).absolutePath
+                        )
+                        enableHttpCache(CronetEngine.Builder.HTTP_CACHE_DISK, cacheBytes)
+                    } else {
+                        enableHttpCache(CronetEngine.Builder.HTTP_CACHE_DISABLED, 0L)
+                    }
+                    enableHttp2(true)
+                    enableQuic(true)
+                    enableBrotli(true)
+                }.build()
             }.getOrNull()
         } else null
         return NetworkClients(okHttp, okHttpCache, cronet)
@@ -137,10 +165,7 @@ class AndroidNetworkStack(context: Context) : Closeable {
                 ?: if (method in BODY_METHODS) ByteArray(0).toRequestBody(contentType) else null
             method(method, requestBody)
         }.build()
-        val client = network.okHttp.newBuilder()
-            .connectTimeout(connectTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
-            .readTimeout(readTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
-            .build()
+        val client = network.clientFor(connectTimeoutMs, readTimeoutMs)
         val response = client.newCall(request).execute()
         return AndroidNetworkResponse(response)
     }
@@ -178,20 +203,64 @@ class AndroidNetworkStack(context: Context) : Closeable {
         val cacheSizeMb: Int = 100
     )
 
-    private data class NetworkClients(
+    private class NetworkClients(
         val okHttp: OkHttpClient,
         val okHttpCache: Cache?,
         val cronet: CronetEngine?
     ) : Closeable {
+        private val timeoutClients = ConcurrentHashMap<Long, OkHttpClient>()
+
+        fun clientFor(connectTimeoutMs: Int, readTimeoutMs: Int): OkHttpClient {
+            if (connectTimeoutMs == DEFAULT_CONNECT_TIMEOUT_MS && readTimeoutMs == DEFAULT_READ_TIMEOUT_MS) {
+                return okHttp
+            }
+            val key = (connectTimeoutMs.toLong() shl 32) or (readTimeoutMs.toLong() and 0xFFFF_FFFFL)
+            timeoutClients[key]?.let { return it }
+            return synchronized(timeoutClients) {
+                timeoutClients.getOrPut(key) {
+                    okHttp.newBuilder()
+                        .connectTimeout(connectTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
+                        .readTimeout(readTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
+                        .callTimeout(defaultCallTimeoutMs(connectTimeoutMs, readTimeoutMs), TimeUnit.MILLISECONDS)
+                        .build()
+                }
+            }
+        }
+
         override fun close() {
-            okHttpCache?.close()
-            cronet?.shutdown()
+            runCatching { okHttp.dispatcher.executorService.shutdown() }
+            runCatching { okHttp.connectionPool.evictAll() }
+            runCatching { okHttpCache?.close() }
+            runCatching { cronet?.shutdown() }
         }
     }
 
     private companion object {
+        const val DEFAULT_CONNECT_TIMEOUT_MS = 12_000
+        const val DEFAULT_READ_TIMEOUT_MS = 18_000
+        const val DEFAULT_WRITE_TIMEOUT_MS = 15_000L
+        const val DOH_TIMEOUT_MS = 8_000L
+        const val DOH_CALL_TIMEOUT_MS = 10_000L
         val BODY_METHODS = setOf("POST", "PUT", "PATCH")
+
+        fun defaultCallTimeoutMs(connectTimeoutMs: Int, readTimeoutMs: Int): Long =
+            if (readTimeoutMs > 20_000) 0L
+            else maxOf(connectTimeoutMs.toLong() + readTimeoutMs.toLong() * 2L, 30_000L)
     }
+}
+
+internal fun InputStream.readBoundedBytes(maxBytes: Int = 16 * 1024 * 1024): ByteArray {
+    val out = ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    var total = 0
+    while (true) {
+        val read = read(buffer)
+        if (read == -1) break
+        total += read
+        check(total <= maxBytes) { "Response exceeded $maxBytes bytes" }
+        out.write(buffer, 0, read)
+    }
+    return out.toByteArray()
 }
 
 /** Small common view of OkHttp and HttpURLConnection responses, including streaming bodies. */

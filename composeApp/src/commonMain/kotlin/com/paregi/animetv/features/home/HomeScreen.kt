@@ -12,7 +12,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.hoverable
@@ -52,9 +51,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -86,8 +85,12 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
+import coil3.size.Precision
 import com.paregi.animetv.LocalNavigationSound
 import com.paregi.animetv.PlatformTrailer
+import com.paregi.animetv.platformIsLowRamDevice
 import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.theme.LocalAnimeTvColors
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
@@ -262,6 +265,12 @@ internal fun HomeScreen(
         val enabledHomeSections = remember(homeLayout.sections) {
             homeLayout.sections.filter { it.enabled && it.id != "continue_watching" }
         }
+        val sectionById = remember(feed.sections) {
+            feed.sections.associateBy { it.id }
+        }
+        val showPullIndicator by remember(pullEnabled) {
+            derivedStateOf { pullEnabled && (pullDistancePx > 0f || isRefreshingAnim) }
+        }
 
         LazyColumn(
             state = listState,
@@ -269,7 +278,7 @@ internal fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(shelfSpacing)
         ) {
             if (featuredCount > 0) {
-                item(key = "home_featured") {
+                item(key = "home_featured", contentType = "home_featured") {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -376,7 +385,7 @@ internal fun HomeScreen(
                     }
                 }
             } else if (loading) {
-                item(key = "home_featured_loader") {
+                item(key = "home_featured_loader", contentType = "home_featured_loader") {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -396,8 +405,8 @@ internal fun HomeScreen(
             enabledHomeSections.forEach { pref ->
                 val shelfOverlap = if (featuredCount > 0 && firstShelfAfterFeatured) firstShelfOverlap else 0.dp
                 if (pref.id == "altab") {
-                    val tabItems = feed.sections.firstOrNull { it.id == alTabSelected }?.items.orEmpty()
-                    item(key = "home_shelf_altab") {
+                    val tabItems = sectionById[alTabSelected]?.items.orEmpty()
+                    item(key = "home_shelf_altab", contentType = "home_tabbed_shelf") {
                         Box(modifier = Modifier.zIndex(if (shelfOverlap > 0.dp) 2f else 1f).overlapTopBy(shelfOverlap)) {
                             HomeTabbedAniListShelf(
                                 yearLabel = alYearLabel,
@@ -415,10 +424,10 @@ internal fun HomeScreen(
                     }
                     firstShelfAfterFeatured = false
                 } else {
-                    val shelf = feed.sections.firstOrNull { it.id == pref.id }
+                    val shelf = sectionById[pref.id]
                     val title = shelf?.title ?: homeSectionTitle(pref.id, sourceName)
                     val items = shelf?.items.orEmpty()
-                    item(key = "home_shelf_${pref.id}") {
+                    item(key = "home_shelf_${pref.id}", contentType = "home_standard_shelf") {
                         Box(modifier = Modifier.zIndex(if (shelfOverlap > 0.dp) 2f else 1f).overlapTopBy(shelfOverlap)) {
                             HomeStandardShelf(
                                 title = title,
@@ -437,7 +446,7 @@ internal fun HomeScreen(
                 }
             }
 
-            item(key = "home_about") {
+            item(key = "home_about", contentType = "home_about") {
                 val resolvedSource = sourceName.ifBlank { "Gotaku" }
                 val aboutShadow = animeTvTextShadow(blurMultiplier = 0.2f, offsetMultiplier = 0.2f)
                 Column(
@@ -473,9 +482,9 @@ internal fun HomeScreen(
             }
         }
 
-        if (pullEnabled && (pullDistancePx > 0f || isRefreshingAnim)) {
+        if (showPullIndicator) {
             PullRefreshIndicator(
-                pullDistancePx = pullDistancePx,
+                pullDistanceProvider = { pullDistancePx },
                 maxPullPx = maxPullPx,
                 triggerPullPx = triggerPullPx,
                 refreshing = isRefreshingAnim,
@@ -487,7 +496,7 @@ internal fun HomeScreen(
 
 @Composable
 private fun PullRefreshIndicator(
-    pullDistancePx: Float,
+    pullDistanceProvider: () -> Float,
     maxPullPx: Float,
     triggerPullPx: Float,
     refreshing: Boolean,
@@ -497,30 +506,35 @@ private fun PullRefreshIndicator(
     val colors = LocalAnimeTvColors.current
     val density = LocalDensity.current
 
-    val spinTransition = rememberInfiniteTransition(label = "pull_spin")
-    val spinDeg by spinTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 720f,
-        animationSpec = infiniteRepeatable(tween(1300, easing = LinearEasing), RepeatMode.Restart),
-        label = "pull_deg"
-    )
+    val spinDeg = if (refreshing) {
+        val spinTransition = rememberInfiniteTransition(label = "pull_spin")
+        val deg by spinTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 720f,
+            animationSpec = infiniteRepeatable(tween(1300, easing = LinearEasing), RepeatMode.Restart),
+            label = "pull_deg"
+        )
+        deg
+    } else 0f
 
     val minOffsetPx = with(density) { (tokens.vh * 10f).toPx() }
     val restingOffsetPx = with(density) { (tokens.vh * 10f + tokens.sysStatHeight).toPx() }
-    val progress = (pullDistancePx / maxPullPx).coerceIn(0f, 1f)
-    val yOffsetPx = if (refreshing) restingOffsetPx else (pullDistancePx - minOffsetPx)
-    val rotation = if (refreshing) spinDeg else (progress * 360f - 360f)
-    val alpha = if (refreshing) 1f else progress
-    val reached = pullDistancePx >= triggerPullPx
+    val reached by remember(triggerPullPx) {
+        derivedStateOf { pullDistanceProvider() >= triggerPullPx }
+    }
 
     val circleSize = tokens.fs25 + tokens.fs10 * 2f
     Box(
         modifier = modifier
-            .offset { IntOffset(0, yOffsetPx.roundToInt()) }
+            .offset {
+                val yPx = if (refreshing) restingOffsetPx else (pullDistanceProvider() - minOffsetPx)
+                IntOffset(0, yPx.roundToInt())
+            }
             .size(circleSize)
             .graphicsLayer {
-                this.alpha = alpha
-                rotationZ = rotation
+                val progress = (pullDistanceProvider() / maxPullPx).coerceIn(0f, 1f)
+                alpha = if (refreshing) 1f else progress
+                rotationZ = if (refreshing) spinDeg else (progress * 360f - 360f)
             }
             .clip(CircleShape)
             .background(Color.White),
@@ -560,6 +574,11 @@ private fun FeaturedHero(
     val maskEnabled = !performanceEffects.getOrElse(3) { false }
     val textShadowDisabled = performanceEffects.getOrElse(4) { false }
     val density = LocalDensity.current
+    val platformContext = LocalPlatformContext.current
+    val imageCdn = LocalImageCdn.current
+    val japaneseTitles = LocalJapaneseTitles.current
+    val isLowRam = platformIsLowRamDevice()
+    val allowTrailer = trailerMode > 0 && !(isLowRam && trailerMode == 1)
 
     var focused by remember { mutableStateOf(false) }
     val interactionSource = remember { MutableInteractionSource() }
@@ -569,10 +588,10 @@ private fun FeaturedHero(
     var mountTrailer by remember { mutableStateOf(false) }
     var ytPlaying by remember { mutableStateOf(false) }
 
-    LaunchedEffect(focused, anime.id, anime.trailerId, trailerMode, isActivePage) {
+    LaunchedEffect(focused, anime.id, anime.trailerId, allowTrailer, isActivePage) {
         ytPlaying = false
         mountTrailer = false
-        if (trailerMode > 0 && !anime.trailerId.isNullOrEmpty() && isActivePage && focused) {
+        if (allowTrailer && !anime.trailerId.isNullOrEmpty() && isActivePage && focused) {
             delay(600)
             mountTrailer = true
         }
@@ -589,23 +608,13 @@ private fun FeaturedHero(
         animationSpec = tween(durationMillis = tokens.tim10s, easing = tokens.easing)
     )
 
-    // Portrait hero horizontal pan (30% -> 90% over 30s).
-    var panTarget by remember(anime.id, isActivePage, portrait) { mutableFloatStateOf(-0.4f) }
-    LaunchedEffect(anime.id, isActivePage, portrait) {
-        if (portrait && isActivePage) {
-            panTarget = -0.4f
-            panTarget = 0.8f
-        } else {
-            panTarget = -0.4f
-        }
+    val titleText = remember(anime.id, anime.title, anime.originalTitle, japaneseTitles) {
+        displayAnimeTitle(anime, japaneseTitles)
     }
-    val panBias by animateFloatAsState(
-        targetValue = if (portrait) panTarget else 0f,
-        animationSpec = tween(
-            durationMillis = if (portrait && isActivePage) 30_000 else 300,
-            easing = LinearEasing
-        )
-    )
+    val synopsisText = remember(anime.synopsis) {
+        anime.synopsis?.takeIf { it.isNotBlank() }?.let(::displayAnimeSynopsis)
+    }
+    val metaItems = remember(anime) { buildHeroMetaItems(anime) }
 
     val useAlphaMask = wallpaperActive && maskEnabled
 
@@ -622,6 +631,19 @@ private fun FeaturedHero(
             }
             .navigationFocusable()
     ) {
+        val heroImageRequest = remember(imageUrl, imageCdn, maxWidth, heroHeight, portrait, isLowRam, platformContext) {
+            val resolvedUrl = imageCdnUrl(imageUrl, imageCdn)
+            val rawW = with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
+            val rawH = with(density) { heroHeight.roundToPx().coerceAtLeast(1) }
+            val capW = if (portrait) (if (isLowRam) 720 else 1080) else (if (isLowRam) 1280 else 1920)
+            val capH = if (portrait) (if (isLowRam) 1280 else 1920) else (if (isLowRam) 720 else 1080)
+            ImageRequest.Builder(platformContext)
+                .data(resolvedUrl)
+                .size(rawW.coerceAtMost(capW), rawH.coerceAtMost(capH))
+                .precision(Precision.INEXACT)
+                .build()
+        }
+
         val visualModifier = if (useAlphaMask) {
             Modifier
                 .fillMaxSize()
@@ -653,10 +675,10 @@ private fun FeaturedHero(
 
         Box(modifier = visualModifier) {
             AsyncImage(
-                model = imageCdnUrl(imageUrl, LocalImageCdn.current),
-                contentDescription = displayAnimeTitle(anime, LocalJapaneseTitles.current),
+                model = heroImageRequest,
+                contentDescription = titleText,
                 contentScale = ContentScale.Crop,
-                alignment = if (portrait) BiasAlignment(panBias, 0f) else Alignment.Center,
+                alignment = Alignment.Center,
                 onSuccess = { imageLoaded = true },
                 modifier = Modifier
                     .fillMaxSize()
@@ -664,7 +686,7 @@ private fun FeaturedHero(
                         alpha = imageLoadAlpha * (1f - trailerCrossfadeAlpha)
                     }
             )
-            if (mountTrailer && !anime.trailerId.isNullOrEmpty()) {
+            if (allowTrailer && mountTrailer && !anime.trailerId.isNullOrEmpty()) {
                 PlatformTrailer(
                     youtubeId = anime.trailerId,
                     muted = trailerMode == 1,
@@ -685,30 +707,24 @@ private fun FeaturedHero(
         }
 
         if (!useAlphaMask) {
-            val leftFadeEndPx = with(density) { (tokens.vw * 40f).toPx() }
-            val heroHeightPx = with(density) { heroHeight.toPx() }
-            val bottomFadeStartPx = (heroHeightPx - with(density) { (tokens.vw * 20f).toPx() }).coerceAtLeast(0f)
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.horizontalGradient(
-                            listOf(Color.Black, Color.Transparent),
-                            endX = leftFadeEndPx
-                        )
-                    )
-            )
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color.Transparent, Color.Black),
-                            startY = bottomFadeStartPx,
-                            endY = heroHeightPx
-                        )
-                    )
-            )
+            val leftFadeBrush = remember(density, tokens.vw) {
+                val leftFadeEndPx = with(density) { (tokens.vw * 40f).toPx() }
+                Brush.horizontalGradient(
+                    listOf(Color.Black, Color.Transparent),
+                    endX = leftFadeEndPx
+                )
+            }
+            val bottomFadeBrush = remember(density, tokens.vw, heroHeight) {
+                val heroHeightPx = with(density) { heroHeight.toPx() }
+                val bottomFadeStartPx = (heroHeightPx - with(density) { (tokens.vw * 20f).toPx() }).coerceAtLeast(0f)
+                Brush.verticalGradient(
+                    listOf(Color.Transparent, Color.Black),
+                    startY = bottomFadeStartPx,
+                    endY = heroHeightPx
+                )
+            }
+            Box(Modifier.fillMaxSize().background(leftFadeBrush))
+            Box(Modifier.fillMaxSize().background(bottomFadeBrush))
         }
 
         val infoWidth = tokens.vw * (if (portrait) 80f else 55f)
@@ -720,15 +736,19 @@ private fun FeaturedHero(
             targetValue = if (heroActive) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = if (portrait) 0.8f else 0.7f),
             animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
         )
-        val titleShadow = if (!textShadowDisabled) {
-            val offsetPx = with(density) { (tokens.u * 0.2f).toPx() }
-            Shadow(Color.Black, Offset(0f, offsetPx), offsetPx)
-        } else null
-        val descShadow = if (!textShadowDisabled) {
-            val offsetPx = with(density) { (tokens.u * 0.1f).toPx() }
-            val blurPx = with(density) { (tokens.u * 0.2f).toPx() }
-            Shadow(Color.Black, Offset(offsetPx, offsetPx), blurPx)
-        } else null
+        val titleShadow = remember(textShadowDisabled, density, tokens.u) {
+            if (!textShadowDisabled) {
+                val offsetPx = with(density) { (tokens.u * 0.2f).toPx() }
+                Shadow(Color.Black, Offset(0f, offsetPx), offsetPx)
+            } else null
+        }
+        val descShadow = remember(textShadowDisabled, density, tokens.u) {
+            if (!textShadowDisabled) {
+                val offsetPx = with(density) { (tokens.u * 0.1f).toPx() }
+                val blurPx = with(density) { (tokens.u * 0.2f).toPx() }
+                Shadow(Color.Black, Offset(offsetPx, offsetPx), blurPx)
+            } else null
+        }
 
         Box(
             modifier = Modifier
@@ -738,7 +758,7 @@ private fun FeaturedHero(
         ) {
             Column(modifier = Modifier.width(infoWidth)) {
                 Text(
-                    text = displayAnimeTitle(anime, LocalJapaneseTitles.current),
+                    text = titleText,
                     color = titleColor,
                     fontSize = fsSp(tokens.fs30),
                     lineHeight = fsSp(tokens.fs30) * 1.2f,
@@ -748,9 +768,9 @@ private fun FeaturedHero(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                anime.synopsis?.takeIf { it.isNotBlank() }?.let { rawSynopsis ->
+                synopsisText?.let { rawSynopsis ->
                     Text(
-                        text = displayAnimeSynopsis(rawSynopsis),
+                        text = rawSynopsis,
                         color = descColor,
                         fontSize = fsSp(tokens.fs15),
                         lineHeight = fsSp(tokens.fs15) * 1.3f,
@@ -761,7 +781,6 @@ private fun FeaturedHero(
                     )
                 }
 
-                val metaItems = buildHeroMetaItems(anime)
                 Column(modifier = Modifier.padding(top = tokens.u * 1.5f)) {
                     if (portrait) {
                         HeroWatchNowButton(active = heroActive)
@@ -790,28 +809,52 @@ private fun FeaturedHero(
 @Composable
 private fun HeroWatchNowButton(active: Boolean) {
     val tokens = LocalAnimeTvTokens.current
-    val bgColor by animateColorAsState(
+    val bgColorState = animateColorAsState(
         targetValue = if (active) Color(0xFF006600) else Color.White.copy(alpha = 0.2f),
         animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
     )
-    val borderColor = if (active) {
+    val pulseBorderState = if (active && tokens.tim10s > 0) {
         val pulse = rememberInfiniteTransition(label = "home_play_ani")
-        val animatedBorder by pulse.animateColor(
+        pulse.animateColor(
             initialValue = Color(0xFF004400),
             targetValue = Color.White,
             animationSpec = infiniteRepeatable(tween(700, easing = tokens.easing), RepeatMode.Reverse),
             label = "home_play_border"
         )
-        animatedBorder
-    } else {
-        Color.Transparent
-    }
-    val shape = RoundedCornerShape(tokens.u * 3f)
+    } else null
+
+    val cornerRadius = tokens.u * 3f
+    val borderWidth = (tokens.u * 0.2f).coerceAtLeast(1.dp)
+    val shape = RoundedCornerShape(cornerRadius)
     Box(
         modifier = Modifier
             .clip(shape)
-            .background(bgColor)
-            .border((tokens.u * 0.2f).coerceAtLeast(1.dp), borderColor, shape)
+            .drawBehind {
+                drawRect(bgColorState.value)
+            }
+            .drawWithContent {
+                drawContent()
+                val borderCol = when {
+                    !active -> Color.Transparent
+                    pulseBorderState != null -> pulseBorderState.value
+                    else -> Color.White
+                }
+                if (borderCol != Color.Transparent) {
+                    val strokePx = borderWidth.toPx()
+                    val half = strokePx / 2f
+                    val radiusPx = cornerRadius.toPx()
+                    drawRoundRect(
+                        color = borderCol,
+                        topLeft = Offset(half, half),
+                        size = androidx.compose.ui.geometry.Size(
+                            (size.width - strokePx).coerceAtLeast(0f),
+                            (size.height - strokePx).coerceAtLeast(0f)
+                        ),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(radiusPx, radiusPx),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokePx)
+                    )
+                }
+            }
             .padding(horizontal = tokens.u * 1.4f, vertical = tokens.u * 0.3f),
         contentAlignment = Alignment.Center
     ) {
@@ -825,6 +868,8 @@ private fun HeroWatchNowButton(active: Boolean) {
         )
     }
 }
+
+private val HERO_DURATION_DIGITS_REGEX = Regex("\\d+")
 
 private data class HeroMetaText(val text: String, val color: Color)
 
@@ -840,7 +885,7 @@ private fun buildHeroMetaItems(anime: Anime): List<HeroMetaText> = buildList {
         add(HeroMetaText(typeYear, Color.White.copy(alpha = 0.7f)))
     }
     anime.duration?.let { dur ->
-        val label = Regex("\\d+").find(dur)?.value?.let { "$it min" } ?: dur
+        val label = HERO_DURATION_DIGITS_REGEX.find(dur)?.value?.let { "$it min" } ?: dur
         add(HeroMetaText(label, Color(0xFF66BBDD)))
     }
     anime.episodeCount?.takeIf { it > 0 }?.let { eps ->
@@ -856,11 +901,13 @@ private fun HeroMetaContent(
 ) {
     val tokens = LocalAnimeTvTokens.current
     val density = LocalDensity.current
-    val metaShadow = if (!textShadowDisabled) {
-        val offPx = with(density) { (tokens.u * 0.1f).toPx() }
-        val blurPx = with(density) { (tokens.u * 0.2f).toPx() }
-        Shadow(Color.Black.copy(alpha = 0.8f), Offset(offPx, offPx), blurPx)
-    } else null
+    val metaShadow = remember(textShadowDisabled, density, tokens.u) {
+        if (!textShadowDisabled) {
+            val offPx = with(density) { (tokens.u * 0.1f).toPx() }
+            val blurPx = with(density) { (tokens.u * 0.2f).toPx() }
+            Shadow(Color.Black.copy(alpha = 0.8f), Offset(offPx, offPx), blurPx)
+        } else null
+    }
 
     var hasPreceding = false
     val score = anime.score?.takeIf { it > 0f }
@@ -935,7 +982,11 @@ private fun HomeStandardShelf(
         rowState = rowState,
         maskEnabled = maskEnabled
     ) {
-        itemsIndexed(animes, key = { idx, anime -> "${idx}:${anime.id}" }) { _, anime ->
+        itemsIndexed(
+            animes,
+            key = { idx, anime -> "${idx}:${anime.id}" },
+            contentType = { _, _ -> "anime_card" }
+        ) { _, anime ->
             FocusCard(
                 anime = anime,
                 cardWidth = cardDims.cardWidth,
@@ -1012,7 +1063,11 @@ private fun HomeTabbedAniListShelf(
                     contentPadding = PaddingValues(horizontal = horizontalInset),
                     horizontalArrangement = Arrangement.spacedBy(cardDims.cardGap)
                 ) {
-                    itemsIndexed(items, key = { idx, anime -> "${selectedTabId}:${idx}:${anime.id}" }) { _, anime ->
+                    itemsIndexed(
+                        items,
+                        key = { idx, anime -> "${selectedTabId}:${idx}:${anime.id}" },
+                        contentType = { _, _ -> "anime_card" }
+                    ) { _, anime ->
                         FocusCard(
                             anime = anime,
                             cardWidth = cardDims.cardWidth,
@@ -1034,6 +1089,6 @@ private fun HomeTabbedAniListShelf(
 
 private fun currentYearFallback(): String {
     val firstDate = platformScheduleDays().firstOrNull()?.dateLabel.orEmpty()
-    val match = Regex("\\d{4}").find(firstDate)?.value
+    val match = HERO_DURATION_DIGITS_REGEX.find(firstDate)?.value
     return match ?: "Year"
 }

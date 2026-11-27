@@ -50,6 +50,7 @@ android {
     buildTypes {
         getByName("release") {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -79,5 +80,4 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.dnsoverhttps)
     implementation(libs.play.services.cronet)
-    implementation(libs.kotlin.stdlib.jdk7)
 }

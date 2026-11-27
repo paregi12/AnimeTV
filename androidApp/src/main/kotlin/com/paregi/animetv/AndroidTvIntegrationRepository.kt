@@ -1,6 +1,8 @@
 package com.paregi.animetv
 
+import android.content.ContentProviderOperation
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -24,6 +26,7 @@ import com.paregi.animetv.domain.TvLaunchRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import kotlin.math.abs
 
 /** Android TV launcher channels and Watch Next integration. */
 class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository {
@@ -38,6 +41,8 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
     private var pendingLaunch: TvLaunchRequest? = null
     private var lastWatchNextKey: String? = null
     private var lastWatchNextWriteAt = 0L
+    private var lastWatchNextPositionMs = -1L
+    private var lastWatchNextUri: Uri? = null
 
     override suspend fun updateHomeChannels(feed: HomeFeed) {
         if (!isTv || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -71,11 +76,14 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
             watchNextMutex.withLock {
                 val itemKey = "${anime.sourceIndex}|${anime.id}|${episode.id}"
                 val now = System.currentTimeMillis()
-                if (!force && itemKey == lastWatchNextKey && now - lastWatchNextWriteAt < WATCH_NEXT_UPDATE_INTERVAL_MS) {
-                    return@withLock
+                if (!force && itemKey == lastWatchNextKey) {
+                    val elapsed = now - lastWatchNextWriteAt
+                    val movedMs = abs(positionMs - lastWatchNextPositionMs)
+                    if (elapsed < WATCH_NEXT_UPDATE_INTERVAL_MS || movedMs < WATCH_NEXT_MIN_POSITION_DELTA_MS) {
+                        return@withLock
+                    }
                 }
                 runCatching {
-                    clearOwnedWatchNextPrograms()
                     val intent = appIntent().apply {
                         putExtra(EXTRA_ANIME_JSON, anime.toTvJson().toString())
                         putExtra(EXTRA_EPISODE_ID, episode.id)
@@ -93,12 +101,17 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
                         .setDescription("Episode ${episode.number}")
                         .setIntentUri(intentUri)
                     anime.posterUrl?.let { builder.setPosterArtUri(Uri.parse(it)) }
-                    resolver.insert(
-                        TvContractCompat.WatchNextPrograms.CONTENT_URI,
-                        builder.build().toContentValues()
-                    )
+                    val values = builder.build().toContentValues()
+                    val existingUri = if (itemKey == lastWatchNextKey) lastWatchNextUri else null
+                    val updatedInPlace = existingUri != null &&
+                        runCatching { resolver.update(existingUri, values, null, null) > 0 }.getOrDefault(false)
+                    if (!updatedInPlace) {
+                        clearOwnedWatchNextPrograms()
+                        lastWatchNextUri = resolver.insert(TvContractCompat.WatchNextPrograms.CONTENT_URI, values)
+                    }
                     lastWatchNextKey = itemKey
                     lastWatchNextWriteAt = now
+                    lastWatchNextPositionMs = positionMs
                 }
             }
         }
@@ -111,6 +124,8 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
                 runCatching { clearOwnedWatchNextPrograms() }
                 lastWatchNextKey = null
                 lastWatchNextWriteAt = 0L
+                lastWatchNextPositionMs = -1L
+                lastWatchNextUri = null
             }
         }
     }
@@ -144,13 +159,37 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
             return
         }
         val channelId = existingChannelId ?: createChannel(feed)
-        clearChannelPrograms(channelId)
-        feed.items.asSequence()
+        val existingIds = queryChannelProgramIds(channelId)
+        val newValues = feed.items.asSequence()
             .filter { !it.posterUrl.isNullOrBlank() }
             .take(MAX_PROGRAMS_PER_CHANNEL)
-            .forEach { anime ->
-                runCatching { insertPreviewProgram(channelId, anime) }
+            .mapNotNull { anime -> runCatching { buildPreviewProgramValues(channelId, anime) }.getOrNull() }
+            .toList()
+        val operations = ArrayList<ContentProviderOperation>(existingIds.size + newValues.size)
+        existingIds.forEach { programId ->
+            operations += ContentProviderOperation
+                .newDelete(TvContractCompat.buildPreviewProgramUri(programId))
+                .build()
+        }
+        newValues.forEach { values ->
+            operations += ContentProviderOperation
+                .newInsert(TvContractCompat.PreviewPrograms.CONTENT_URI)
+                .withValues(values)
+                .build()
+        }
+        if (operations.isEmpty()) return
+        val batched = runCatching {
+            resolver.applyBatch(TvContract.AUTHORITY, operations)
+            true
+        }.getOrDefault(false)
+        if (!batched) {
+            existingIds.forEach { programId ->
+                runCatching { resolver.delete(TvContractCompat.buildPreviewProgramUri(programId), null, null) }
             }
+            newValues.forEach { values ->
+                runCatching { resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, values) }
+            }
+        }
     }
 
     private fun findChannelId(providerId: String): Long? {
@@ -191,8 +230,9 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
         return channelId
     }
 
-    private fun clearChannelPrograms(channelId: Long) {
+    private fun queryChannelProgramIds(channelId: Long): List<Long> {
         val projection = arrayOf(TvContractCompat.Programs._ID, TvContract.Programs.COLUMN_CHANNEL_ID)
+        val ids = mutableListOf<Long>()
         resolver.query(
             TvContractCompat.PreviewPrograms.CONTENT_URI,
             projection,
@@ -202,14 +242,34 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
         )?.use { cursor ->
             val idIndex = cursor.getColumnIndexOrThrow(TvContractCompat.Programs._ID)
             while (cursor.moveToNext()) {
-                val programUri = TvContractCompat.buildPreviewProgramUri(cursor.getLong(idIndex))
-                resolver.delete(programUri, null, null)
+                ids += cursor.getLong(idIndex)
+            }
+        }
+        return ids
+    }
+
+    private fun clearChannelPrograms(channelId: Long) {
+        val ids = queryChannelProgramIds(channelId)
+        if (ids.isEmpty()) return
+        val operations = ArrayList<ContentProviderOperation>(ids.size)
+        ids.forEach { programId ->
+            operations += ContentProviderOperation
+                .newDelete(TvContractCompat.buildPreviewProgramUri(programId))
+                .build()
+        }
+        val batched = runCatching {
+            resolver.applyBatch(TvContract.AUTHORITY, operations)
+            true
+        }.getOrDefault(false)
+        if (!batched) {
+            ids.forEach { programId ->
+                runCatching { resolver.delete(TvContractCompat.buildPreviewProgramUri(programId), null, null) }
             }
         }
     }
 
-    private fun insertPreviewProgram(channelId: Long, anime: Anime) {
-        val posterUrl = anime.posterUrl ?: return
+    private fun buildPreviewProgramValues(channelId: Long, anime: Anime): ContentValues? {
+        val posterUrl = anime.posterUrl ?: return null
         val intent = appIntent().apply { putExtra(EXTRA_ANIME_JSON, anime.toTvJson().toString()) }
         val program = PreviewProgram.Builder()
             .setChannelId(channelId)
@@ -220,7 +280,7 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
             .setPosterArtUri(Uri.parse(posterUrl))
             .setIntentUri(Uri.parse(intent.toUri(Intent.URI_ANDROID_APP_SCHEME)))
             .build()
-        resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, program.toContentValues())
+        return program.toContentValues()
     }
 
     private fun clearOwnedWatchNextPrograms() {
@@ -285,6 +345,7 @@ class AndroidTvIntegrationRepository(context: Context) : TvIntegrationRepository
         private const val EXTRA_WATCH_NEXT_MARKER = "paregi_watch_next"
         private const val MAX_PROGRAMS_PER_CHANNEL = 50
         private const val WATCH_NEXT_UPDATE_INTERVAL_MS = 30_000L
+        private const val WATCH_NEXT_MIN_POSITION_DELTA_MS = 10_000L
         private val CHANNEL_UPDATE_MUTEX = Mutex()
     }
 }

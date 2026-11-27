@@ -4,11 +4,13 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 
+@Immutable
 data class AnimeTvThemeColors(
     val primaryBg: Color,
     val primary1: Color,
@@ -122,6 +124,7 @@ internal val LocalJapaneseTitles = compositionLocalOf { false }
 internal val LocalImageCdn = compositionLocalOf { true }
 internal val LocalIconFont = compositionLocalOf<FontFamily> { FontFamily.Default }
 
+@Immutable
 data class BadgeThemeColors(
     val primaryBg: Color,
     val primary1: Color,

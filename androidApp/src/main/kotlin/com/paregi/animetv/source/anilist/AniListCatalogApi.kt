@@ -89,11 +89,19 @@ internal class AniListCatalogApi(private val client: AniListGraphQlClient) {
             .put("tm", nowSeconds)
             .put("year", year)
             .put("startDate", startDate)
+        var batchError: Throwable? = null
         val data = runCatching {
             postGraphQl(query, variables).optJSONObject("data")
         }.getOrElse { error ->
             if (error is CancellationException) throw error
+            batchError = error
             null
+        }
+        if (data == null && batchError?.let { err ->
+                "HTTP 429" in err.message.orEmpty() || err is java.io.IOException
+            } == true
+        ) {
+            return AniListHomeShelves()
         }
 
         val featured = if (includeFeatured) {

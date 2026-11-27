@@ -30,7 +30,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
@@ -146,21 +149,21 @@ private fun PortraitNavCapsule(
     onRefreshSchedule: () -> Unit
 ) {
     val tokens = LocalAnimeTvTokens.current
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { true }
     val hideDistance = tokens.vh * 12f + tokens.sysNavHeight
-    val scrollOffsetY by animateDpAsState(
+    val scrollOffsetYState = animateDpAsState(
         targetValue = if (headerScrolled) hideDistance else 0.dp,
         animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
     )
     val density = LocalDensity.current
-    val capsuleShape = RoundedCornerShape(tokens.vh * 10f)
+    val capsuleShape = remember(tokens.vh) { RoundedCornerShape(tokens.vh * 10f) }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = tokens.sysNavHeight + tokens.vh * 2f)
             .graphicsLayer {
-                translationY = with(density) { scrollOffsetY.toPx() }
+                translationY = with(density) { scrollOffsetYState.value.toPx() }
             },
         contentAlignment = Alignment.BottomCenter
     ) {
@@ -300,7 +303,7 @@ private fun TvHeader(
         )
     }
 
-    val scrollOffsetY by animateDpAsState(
+    val scrollOffsetYState = animateDpAsState(
         targetValue = if (headerScrolled) -tokens.vw * 10f else 0.dp,
         animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
     )
@@ -317,24 +320,25 @@ private fun TvHeader(
     }
 
     val logoActive = logoFocused || logoHovered
-    val logoOpacity by animateFloatAsState(
+    val logoOpacityState = animateFloatAsState(
         targetValue = if (logoActive) 1f else 0.7f,
         animationSpec = tween(durationMillis = tokens.tim2s, easing = tokens.easing)
     )
-    val menuIconAlpha by animateFloatAsState(
+    val menuIconAlphaState = animateFloatAsState(
         targetValue = if (logoActive) 1f else 0f,
         animationSpec = tween(durationMillis = tokens.tim2s, easing = tokens.easing)
     )
-    val menuIconRotation by animateFloatAsState(
+    val menuIconRotationState = animateFloatAsState(
         targetValue = if (logoActive) 0f else -90f,
         animationSpec = tween(durationMillis = tokens.tim2s, easing = tokens.easing)
     )
+    val showMenuIcon by remember { derivedStateOf { menuIconAlphaState.value > 0.01f } }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                translationY = with(density) { scrollOffsetY.toPx() }
+                translationY = with(density) { scrollOffsetYState.value.toPx() }
             }
             .padding(
                 start = tokens.vw * 5f,
@@ -359,7 +363,7 @@ private fun TvHeader(
                 .navigationFocusable(),
             contentAlignment = Alignment.CenterStart
         ) {
-            if (menuIconAlpha > 0.01f) {
+            if (showMenuIcon) {
                 Text(
                     text = IconGlyphs.Menu,
                     fontFamily = LocalIconFont.current,
@@ -369,8 +373,8 @@ private fun TvHeader(
                     modifier = Modifier
                         .offset(x = -(tokens.vw * 0.2f + tokens.fs20))
                         .graphicsLayer {
-                            alpha = menuIconAlpha
-                            rotationZ = menuIconRotation
+                            alpha = menuIconAlphaState.value
+                            rotationZ = menuIconRotationState.value
                         }
                 )
             }
@@ -381,7 +385,7 @@ private fun TvHeader(
                 fontSize = fsSp(tokens.fs20),
                 lineHeight = fsSp(tokens.fs20),
                 style = TextStyle(shadow = headerShadow),
-                modifier = Modifier.graphicsLayer { alpha = logoOpacity }
+                modifier = Modifier.graphicsLayer { alpha = logoOpacityState.value }
             )
         }
 
@@ -395,7 +399,8 @@ private fun TvHeader(
             )
         }
 
-        listOf(Section.Search, Section.Home, Section.MyList).forEach { item ->
+        val mainSections = remember { listOf(Section.Search, Section.Home, Section.MyList) }
+        mainSections.forEach { item ->
             val isSelected = selected == item
             TvHeaderItem(
                 section = item,
@@ -461,7 +466,7 @@ private fun ClockLabel(headerShadow: Shadow?) {
     var time by remember { mutableStateOf(platformClockLabel()) }
     LaunchedEffect(Unit) {
         while (true) {
-            delay(2_000)
+            delay(15_000L)
             time = platformClockLabel()
         }
     }
@@ -493,7 +498,7 @@ private fun TvHeaderItem(
     val hovered by interactionSource.collectIsHoveredAsState()
 
     val isActive = focused || hovered
-    val underlineProgress by animateFloatAsState(
+    val underlineProgressState = animateFloatAsState(
         targetValue = if (selected && !isActive) 1f else 0f,
         animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
     )
@@ -511,13 +516,14 @@ private fun TvHeaderItem(
             .padding(end = tokens.vw * 0.4f)
             .drawWithContent {
                 drawContent()
-                if (underlineProgress > 0.01f) {
-                    val lineW = size.width * 0.60f * underlineProgress
+                val progress = underlineProgressState.value
+                if (progress > 0.01f) {
+                    val lineW = size.width * 0.60f * progress
                     val lineH = (tokens.vw * 0.25f).toPx()
                     val left = (size.width - lineW) / 2f
                     val top = size.height + (tokens.vw * 0.25f).toPx()
                     drawRect(
-                        color = Color.White.copy(alpha = underlineProgress),
+                        color = Color.White.copy(alpha = progress),
                         topLeft = Offset(left, top),
                         size = Size(lineW, lineH)
                     )
@@ -580,14 +586,15 @@ private fun TvHeaderIconItem(
     val hovered by interactionSource.collectIsHoveredAsState()
 
     val isActive = focused || hovered
-    val underlineProgress by animateFloatAsState(
+    val underlineProgressState = animateFloatAsState(
         targetValue = if (selected && !isActive) 1f else 0f,
         animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
     )
-    val tooltipProgress by animateFloatAsState(
+    val tooltipProgressState = animateFloatAsState(
         targetValue = if (isActive) 1f else 0f,
         animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
     )
+    val showTooltip by remember { derivedStateOf { tooltipProgressState.value > 0.01f } }
 
     val pillBg = if (isActive) Color.White else Color.Transparent
     val fgColor = when {
@@ -602,13 +609,14 @@ private fun TvHeaderIconItem(
             .size(tokens.vw * 4f)
             .drawWithContent {
                 drawContent()
-                if (underlineProgress > 0.01f) {
-                    val lineW = size.width * 0.60f * underlineProgress
+                val progress = underlineProgressState.value
+                if (progress > 0.01f) {
+                    val lineW = size.width * 0.60f * progress
                     val lineH = (tokens.vw * 0.25f).toPx()
                     val left = (size.width - lineW) / 2f
                     val top = size.height + (tokens.vw * 0.25f).toPx()
                     drawRect(
-                        color = Color.White.copy(alpha = underlineProgress),
+                        color = Color.White.copy(alpha = progress),
                         topLeft = Offset(left, top),
                         size = Size(lineW, lineH)
                     )
@@ -642,8 +650,7 @@ private fun TvHeaderIconItem(
             )
         }
 
-        if (tooltipProgress > 0.01f) {
-            val scale = 0.5f + 0.5f * tooltipProgress
+        if (showTooltip) {
             Text(
                 text = tooltip,
                 color = Color.White,
@@ -656,7 +663,9 @@ private fun TvHeaderIconItem(
                     .offset(y = tokens.vw * 2.5f)
                     .requiredWidth(tokens.vw * 10f)
                     .graphicsLayer {
-                        alpha = tooltipProgress
+                        val p = tooltipProgressState.value
+                        val scale = 0.5f + 0.5f * p
+                        alpha = p
                         scaleX = scale
                         scaleY = scale
                     }
@@ -679,14 +688,21 @@ internal fun SidebarDialog(
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
     val density = LocalDensity.current
-    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
-    val maskDisabled = LocalPerformanceEffects.current.getOrElse(3) { false }
+    val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { true }
+    val maskDisabled = LocalPerformanceEffects.current.getOrElse(3) { true }
 
-    val animProgress by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
-    )
-    if (!visible && animProgress <= 0.001f) return
+    val animProgressState = if (tokens.tim3s > 0) {
+        animateFloatAsState(
+            targetValue = if (visible) 1f else 0f,
+            animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
+        )
+    } else {
+        remember(visible) { mutableFloatStateOf(if (visible) 1f else 0f) }
+    }
+    val drawerVisible by remember(visible) {
+        derivedStateOf { visible || animProgressState.value > 0.001f }
+    }
+    if (!drawerVisible) return
 
     var activeIndex by remember(visible) { mutableIntStateOf(0) }
     val profileRequester = remember { FocusRequester() }
@@ -702,30 +718,32 @@ internal fun SidebarDialog(
         }
     }
 
-    val scrimBrush = if (tokens.portrait) {
-        Brush.horizontalGradient(
-            colorStops = arrayOf(
-                0.05f to Color.Black.copy(alpha = animProgress),
-                0.35f to Color.Black.copy(alpha = 0.80f * animProgress),
-                0.70f to Color.Black.copy(alpha = 0.60f * animProgress),
-                1.00f to Color.Black.copy(alpha = 0.30f * animProgress)
+    val scrimBrush = remember(tokens.portrait) {
+        if (tokens.portrait) {
+            Brush.horizontalGradient(
+                colorStops = arrayOf(
+                    0.05f to Color.Black,
+                    0.35f to Color.Black.copy(alpha = 0.80f),
+                    0.70f to Color.Black.copy(alpha = 0.60f),
+                    1.00f to Color.Black.copy(alpha = 0.30f)
+                )
             )
-        )
-    } else {
-        Brush.horizontalGradient(
-            colorStops = arrayOf(
-                0.05f to Color.Black.copy(alpha = animProgress),
-                0.20f to Color.Black.copy(alpha = 0.95f * animProgress),
-                0.50f to Color.Black.copy(alpha = 0.60f * animProgress),
-                1.00f to Color.Transparent
+        } else {
+            Brush.horizontalGradient(
+                colorStops = arrayOf(
+                    0.05f to Color.Black,
+                    0.20f to Color.Black.copy(alpha = 0.95f),
+                    0.50f to Color.Black.copy(alpha = 0.60f),
+                    1.00f to Color.Transparent
+                )
             )
-        )
+        }
     }
 
     val drawerWidth = if (tokens.portrait) tokens.vw * 50f + tokens.vh * 4f else tokens.vw * 22f
     val sidePad = if (tokens.portrait) tokens.vh * 2f else tokens.vw * 2f
     val topPad = if (tokens.portrait) tokens.vh * 4f + tokens.sysStatHeight else tokens.vw * 2f
-    val slideOffsetPx = with(density) { (-tokens.u * 5f).toPx() } * (1f - animProgress)
+    val closedSlideOffsetPx = with(density) { (-tokens.u * 5f).toPx() }
 
     val maskModifier = if (!tokens.portrait && !maskDisabled) {
         Modifier
@@ -748,7 +766,9 @@ internal fun SidebarDialog(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(scrimBrush)
+            .drawBehind {
+                drawRect(brush = scrimBrush, alpha = animProgressState.value)
+            }
             .then(
                 if (visible) {
                     Modifier.clickable(
@@ -796,8 +816,9 @@ internal fun SidebarDialog(
                 .fillMaxHeight()
                 .width(drawerWidth)
                 .graphicsLayer {
-                    translationX = slideOffsetPx
-                    alpha = animProgress
+                    val p = animProgressState.value
+                    translationX = closedSlideOffsetPx * (1f - p)
+                    alpha = p
                 }
                 .then(maskModifier)
                 .clickable(

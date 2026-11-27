@@ -21,10 +21,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +62,8 @@ import com.paregi.animetv.domain.WatchProgress
 import com.paregi.animetv.domain.allowedForRating
 import com.paregi.animetv.navigationClickable
 import com.paregi.animetv.navigationFocusable
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 internal fun myListSectionTitle(
     id: String,
@@ -228,9 +232,17 @@ private fun UnifiedMyListScreen(
         val prev = pagedCache[key] ?: PagedAccountShelfState()
         if (prev.loading) return
         pagedCache[key] = prev.copy(loading = true)
-        val loaded = runCatching {
+        val loaded = try {
             accountRepository.loadAccountList(provider, status, page)
-        }.getOrNull()
+        } catch (cancelled: CancellationException) {
+            val current = pagedCache[key]
+            if (current != null && current.loading) {
+                pagedCache[key] = current.copy(loading = false)
+            }
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
         val current = pagedCache[key] ?: PagedAccountShelfState()
         if (loaded != null) {
             val filtered = loaded.entries.filter { it.anime.allowedForRating(profileRating) }.distinctBy { it.anime.id }
@@ -264,22 +276,27 @@ private fun UnifiedMyListScreen(
 
     activeProviderRequests.forEach { (provider, status) ->
         val key = shelfKey(provider, status)
-        LaunchedEffect(key, accountRepository, accountState.malUsername, accountState.aniListUsername, profileRating) {
-            if (pagedCache[key] == null) {
-                loadShelfPage(provider, status, 1)
+        key(key) {
+            LaunchedEffect(key, accountRepository, accountState.malUsername, accountState.aniListUsername, profileRating) {
+                if (pagedCache[key] == null) {
+                    loadShelfPage(provider, status, 1)
+                }
             }
         }
     }
 
-    var paginationTrigger by remember { mutableStateOf<Pair<AccountProvider, String>?>(null) }
-    LaunchedEffect(paginationTrigger) {
-        val (provider, status) = paginationTrigger ?: return@LaunchedEffect
+    val paginationScope = rememberCoroutineScope()
+    fun requestNextPage(provider: AccountProvider, status: String) {
         val key = shelfKey(provider, status)
         val state = pagedCache[key]
         if (state != null && state.hasNextPage && !state.loading) {
-            loadShelfPage(provider, status, state.page + 1)
+            paginationScope.launch {
+                val latest = pagedCache[key]
+                if (latest != null && latest.hasNextPage && !latest.loading) {
+                    loadShelfPage(provider, status, latest.page + 1)
+                }
+            }
         }
-        paginationTrigger = null
     }
 
     val listState = rememberLazyListState()
@@ -324,8 +341,10 @@ private fun UnifiedMyListScreen(
             onScrollOffsetChange(scrollOffsetDp)
         }
 
-        val openAccountAnime: (Anime) -> Unit = { anime ->
-            onOpenAnime(selectedSource?.let { anime.copy(sourceIndex = it) } ?: anime)
+        val openAccountAnime: (Anime) -> Unit = remember(onOpenAnime, selectedSource) {
+            { anime ->
+                onOpenAnime(selectedSource?.let { anime.copy(sourceIndex = it) } ?: anime)
+            }
         }
 
         LazyColumn(
@@ -335,7 +354,7 @@ private fun UnifiedMyListScreen(
             verticalArrangement = Arrangement.spacedBy(tokens.u * 1f)
         ) {
             if (portrait) {
-                item(key = "mylist_title") {
+                item(key = "mylist_title", contentType = "mylist_title") {
                     Text(
                         text = "MyList",
                         color = Color.White,
@@ -348,7 +367,7 @@ private fun UnifiedMyListScreen(
             }
 
             if (visibleSections.isEmpty()) {
-                item(key = "mylist_empty") {
+                item(key = "mylist_empty", contentType = "mylist_empty") {
                     AnimeTvShelfPlaceholder(
                         loading = false,
                         emptyText = "No lists enabled",
@@ -359,8 +378,8 @@ private fun UnifiedMyListScreen(
                 visibleSections.forEach { sectionId ->
                     when (sectionId) {
                         "maltab" -> {
-                            val state = pagedCache[shelfKey(AccountProvider.MAL, malTabStatus)] ?: PagedAccountShelfState()
-                            item(key = "mylist_maltab") {
+                            item(key = "mylist_maltab", contentType = "mylist_tabbed_shelf") {
+                                val state = pagedCache[shelfKey(AccountProvider.MAL, malTabStatus)] ?: PagedAccountShelfState()
                                 AccountTabbedShelf(
                                     title = myListSectionTitle("maltab", accountState, forLayoutDialog = false),
                                     tabs = MAL_TAB_STATUSES,
@@ -373,13 +392,13 @@ private fun UnifiedMyListScreen(
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
                                     onOpenAnime = openAccountAnime,
-                                    onNearEnd = { paginationTrigger = AccountProvider.MAL to malTabStatus }
+                                    onNearEnd = { requestNextPage(AccountProvider.MAL, malTabStatus) }
                                 )
                             }
                         }
                         "mal" -> {
-                            val state = pagedCache[shelfKey(AccountProvider.MAL, "watching")] ?: PagedAccountShelfState()
-                            item(key = "mylist_mal") {
+                            item(key = "mylist_mal", contentType = "mylist_account_shelf") {
+                                val state = pagedCache[shelfKey(AccountProvider.MAL, "watching")] ?: PagedAccountShelfState()
                                 AccountShelf(
                                     title = myListSectionTitle("mal", accountState),
                                     state = state,
@@ -389,13 +408,13 @@ private fun UnifiedMyListScreen(
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
                                     onOpenAnime = openAccountAnime,
-                                    onNearEnd = { paginationTrigger = AccountProvider.MAL to "watching" }
+                                    onNearEnd = { requestNextPage(AccountProvider.MAL, "watching") }
                                 )
                             }
                         }
                         "malplan" -> {
-                            val state = pagedCache[shelfKey(AccountProvider.MAL, "plan_to_watch")] ?: PagedAccountShelfState()
-                            item(key = "mylist_malplan") {
+                            item(key = "mylist_malplan", contentType = "mylist_account_shelf") {
+                                val state = pagedCache[shelfKey(AccountProvider.MAL, "plan_to_watch")] ?: PagedAccountShelfState()
                                 AccountShelf(
                                     title = myListSectionTitle("malplan", accountState),
                                     state = state,
@@ -405,13 +424,13 @@ private fun UnifiedMyListScreen(
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
                                     onOpenAnime = openAccountAnime,
-                                    onNearEnd = { paginationTrigger = AccountProvider.MAL to "plan_to_watch" }
+                                    onNearEnd = { requestNextPage(AccountProvider.MAL, "plan_to_watch") }
                                 )
                             }
                         }
                         "anilisttab" -> {
-                            val state = pagedCache[shelfKey(AccountProvider.ANILIST, aniListTabStatus)] ?: PagedAccountShelfState()
-                            item(key = "mylist_anilisttab") {
+                            item(key = "mylist_anilisttab", contentType = "mylist_tabbed_shelf") {
+                                val state = pagedCache[shelfKey(AccountProvider.ANILIST, aniListTabStatus)] ?: PagedAccountShelfState()
                                 AccountTabbedShelf(
                                     title = myListSectionTitle("anilisttab", accountState, forLayoutDialog = false),
                                     tabs = ANILIST_TAB_STATUSES,
@@ -424,13 +443,13 @@ private fun UnifiedMyListScreen(
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
                                     onOpenAnime = openAccountAnime,
-                                    onNearEnd = { paginationTrigger = AccountProvider.ANILIST to aniListTabStatus }
+                                    onNearEnd = { requestNextPage(AccountProvider.ANILIST, aniListTabStatus) }
                                 )
                             }
                         }
                         "anilist" -> {
-                            val state = pagedCache[shelfKey(AccountProvider.ANILIST, "CURRENT")] ?: PagedAccountShelfState()
-                            item(key = "mylist_anilist") {
+                            item(key = "mylist_anilist", contentType = "mylist_account_shelf") {
+                                val state = pagedCache[shelfKey(AccountProvider.ANILIST, "CURRENT")] ?: PagedAccountShelfState()
                                 AccountShelf(
                                     title = myListSectionTitle("anilist", accountState),
                                     state = state,
@@ -440,13 +459,13 @@ private fun UnifiedMyListScreen(
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
                                     onOpenAnime = openAccountAnime,
-                                    onNearEnd = { paginationTrigger = AccountProvider.ANILIST to "CURRENT" }
+                                    onNearEnd = { requestNextPage(AccountProvider.ANILIST, "CURRENT") }
                                 )
                             }
                         }
                         "anilistplan" -> {
-                            val state = pagedCache[shelfKey(AccountProvider.ANILIST, "PLANNING")] ?: PagedAccountShelfState()
-                            item(key = "mylist_anilistplan") {
+                            item(key = "mylist_anilistplan", contentType = "mylist_account_shelf") {
+                                val state = pagedCache[shelfKey(AccountProvider.ANILIST, "PLANNING")] ?: PagedAccountShelfState()
                                 AccountShelf(
                                     title = myListSectionTitle("anilistplan", accountState),
                                     state = state,
@@ -456,12 +475,12 @@ private fun UnifiedMyListScreen(
                                     largeUi = tokens.largeUi,
                                     maskEnabled = maskEnabled,
                                     onOpenAnime = openAccountAnime,
-                                    onNearEnd = { paginationTrigger = AccountProvider.ANILIST to "PLANNING" }
+                                    onNearEnd = { requestNextPage(AccountProvider.ANILIST, "PLANNING") }
                                 )
                             }
                         }
                         "fav" -> {
-                            item(key = "mylist_fav") {
+                            item(key = "mylist_fav", contentType = "mylist_local_shelf") {
                                 LocalListShelf(
                                     title = myListSectionTitle("fav"),
                                     emptyText = "Watchlist is empty",
@@ -476,7 +495,7 @@ private fun UnifiedMyListScreen(
                             }
                         }
                         "history" -> {
-                            item(key = "mylist_history") {
+                            item(key = "mylist_history", contentType = "mylist_history_shelf") {
                                 HistoryListShelf(
                                     title = myListSectionTitle("history"),
                                     history = visibleHistory,
@@ -679,7 +698,11 @@ private fun LazyListScope.accountEntryCards(
     onOpenAnime: (Anime) -> Unit
 ) {
     val badgeMode = if (isAniList) CardBadgeMode.AniListMyList else CardBadgeMode.MalMyList
-    itemsIndexed(entries, key = { idx, it -> "${idx}:${it.status}:${it.anime.id}" }) { _, entry ->
+    itemsIndexed(
+        entries,
+        key = { idx, it -> "${idx}:${it.status}:${it.anime.id}" },
+        contentType = { _, _ -> "anime_card" }
+    ) { _, entry ->
         val epLabel = if (entry.progress > 0) "${entry.progress}" else "-"
         FocusCard(
             anime = entry.anime,
@@ -722,7 +745,11 @@ private fun LocalListShelf(
         rowState = rowState,
         maskEnabled = maskEnabled
     ) {
-        itemsIndexed(animes, key = { idx, it -> "fav:${idx}:${it.sourceIndex}:${it.id}" }) { _, anime ->
+        itemsIndexed(
+            animes,
+            key = { idx, it -> "fav:${idx}:${it.sourceIndex}:${it.id}" },
+            contentType = { _, _ -> "anime_card" }
+        ) { _, anime ->
             val progress = historyByAnimeKey[anime.id to anime.sourceIndex]
             val progressFormat = progress?.anime?.format?.takeIf { it.isNotBlank() }
             val cardAnime = if (anime.format.isNullOrBlank() && progressFormat != null) {
@@ -805,7 +832,11 @@ private fun HistoryListShelf(
             }
         } else null
     ) {
-        itemsIndexed(history, key = { idx, it -> "history:${idx}:${it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX}:${it.animeId}:${it.episodeId}" }) { _, progress ->
+        itemsIndexed(
+            history,
+            key = { idx, it -> "history:${idx}:${it.anime?.sourceIndex ?: SourceCatalog.GOTAKU_INDEX}:${it.animeId}:${it.episodeId}" },
+            contentType = { _, _ -> "anime_card" }
+        ) { _, progress ->
             val anime = progress.anime ?: return@itemsIndexed
             val pct = progress.durationMs.takeIf { it > 0 }?.let {
                 (progress.positionMs.toFloat() / it.toFloat()).coerceIn(0f, 1f)

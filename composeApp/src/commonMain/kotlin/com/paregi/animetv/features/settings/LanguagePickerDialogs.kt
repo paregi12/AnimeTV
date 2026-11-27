@@ -1,6 +1,7 @@
 package com.paregi.animetv.features.settings
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import com.paregi.animetv.core.ui.ListOrderDialog
 import com.paregi.animetv.core.ui.ListOrderItem
 import com.paregi.animetv.core.ui.ListOrderMode
@@ -14,17 +15,21 @@ internal fun SubtitleLanguageDialog(
     onDismiss: () -> Unit
 ) {
     val languages = SubtitleLanguageCatalog.all
-    val selectedIndex = languages.indexOfFirst { language ->
-        selectedLanguageCode == language.code ||
-            (selectedLanguageCode.isBlank() && language.code == "hard")
-    }.coerceAtLeast(0)
+    val selectedIndex = remember(selectedLanguageCode) {
+        languages.indexOfFirst { language ->
+            selectedLanguageCode == language.code ||
+                (selectedLanguageCode.isBlank() && language.code == "hard")
+        }.coerceAtLeast(0)
+    }
 
-    val items = languages.mapIndexed { index, language ->
-        ListOrderItem(
-            id = language.code,
-            title = language.label,
-            selected = index == selectedIndex
-        )
+    val items = remember(selectedIndex) {
+        languages.mapIndexed { index, language ->
+            ListOrderItem(
+                id = language.code,
+                title = language.label,
+                selected = index == selectedIndex
+            )
+        }
     }
 
     ListOrderDialog(
@@ -44,14 +49,18 @@ internal fun AudioLanguageDialog(
     onDismiss: () -> Unit
 ) {
     val languages = AudioLanguageCatalog.all
-    val selectedIndex = languages.indexOfFirst { it.code == selectedLanguageCode }.coerceAtLeast(0)
+    val selectedIndex = remember(selectedLanguageCode) {
+        languages.indexOfFirst { it.code == selectedLanguageCode }.coerceAtLeast(0)
+    }
 
-    val items = languages.mapIndexed { index, language ->
-        ListOrderItem(
-            id = language.code.ifBlank { "original" },
-            title = language.label,
-            selected = index == selectedIndex
-        )
+    val items = remember(selectedIndex) {
+        languages.mapIndexed { index, language ->
+            ListOrderItem(
+                id = language.code.ifBlank { "original" },
+                title = language.label,
+                selected = index == selectedIndex
+            )
+        }
     }
 
     ListOrderDialog(

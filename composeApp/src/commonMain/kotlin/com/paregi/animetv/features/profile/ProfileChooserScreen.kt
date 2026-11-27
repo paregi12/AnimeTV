@@ -64,8 +64,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
+import coil3.size.Precision
 import com.paregi.animetv.LocalNavigationSound
 import com.paregi.animetv.PlatformBackHandler
+import com.paregi.animetv.platformIsLowRamDevice
 import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.theme.LocalAnimeTvColors
 import com.paregi.animetv.core.theme.LocalAnimeTvTokens
@@ -147,8 +151,18 @@ internal fun profileAvatarResource(id: String): String = when (id) {
 internal fun ProfileAvatar(profile: UserProfile, size: Dp) {
     val modifier = Modifier.width(size).height(size).clip(CircleShape).background(PurpleLight)
     if (!profile.avatarUrl.isNullOrBlank()) {
+        val platformContext = LocalPlatformContext.current
+        val density = LocalDensity.current
+        val avatarRequest = remember(profile.avatarUrl, size, platformContext) {
+            val px = with(density) { size.roundToPx().coerceAtLeast(1) }
+            ImageRequest.Builder(platformContext)
+                .data(profile.avatarUrl)
+                .size(px, px)
+                .precision(Precision.INEXACT)
+                .build()
+        }
         AsyncImage(
-            model = profile.avatarUrl,
+            model = avatarRequest,
             contentDescription = profile.avatarTitle,
             contentScale = ContentScale.Crop,
             modifier = modifier
@@ -267,16 +281,21 @@ private fun ProfileChooserContent(
     val colors = LocalAnimeTvColors.current
     val playClickSound = LocalNavigationSound.current
     val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
+    val platformContext = LocalPlatformContext.current
+    val density = LocalDensity.current
+    val isLowRam = platformIsLowRamDevice()
 
     var pinErrorCount by remember { mutableIntStateOf(0) }
     val pinClearFocusRequester = remember { FocusRequester() }
     val pinZeroFocusRequester = remember { FocusRequester() }
     var focusedPinKey by remember { mutableStateOf("0") }
 
-    val initialFocusedPrefix = preferredPrefix
-        ?.takeIf { prefix -> profiles.any { it.prefix == prefix } }
-        ?: defaultPrefix?.takeIf { prefix -> profiles.any { it.prefix == prefix } }
-        ?: profiles.firstOrNull()?.prefix
+    val initialFocusedPrefix = remember(profiles, preferredPrefix, defaultPrefix) {
+        preferredPrefix
+            ?.takeIf { prefix -> profiles.any { it.prefix == prefix } }
+            ?: defaultPrefix?.takeIf { prefix -> profiles.any { it.prefix == prefix } }
+            ?: profiles.firstOrNull()?.prefix
+    }
     var focusedProfilePrefix by remember(profiles, initialFocusedPrefix) {
         mutableStateOf(initialFocusedPrefix)
     }
@@ -296,7 +315,10 @@ private fun ProfileChooserContent(
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         Crossfade(
             targetState = visibleWallpaper,
-            animationSpec = tween(durationMillis = tokens.tim10s * 4, easing = tokens.easing),
+            animationSpec = tween(
+                durationMillis = if (tokens.tim10s == 0) 0 else tokens.tim3s,
+                easing = tokens.easing
+            ),
             label = "login-wallpaper"
         ) { wp ->
             if (wp.isNotBlank()) {
@@ -309,8 +331,19 @@ private fun ProfileChooserContent(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
+                    val wpRequest = remember(wp, tokens.screenWidth, tokens.screenHeight, tokens.portrait, isLowRam, platformContext) {
+                        val rawW = with(density) { tokens.screenWidth.roundToPx().coerceAtLeast(1) }
+                        val rawH = with(density) { tokens.screenHeight.roundToPx().coerceAtLeast(1) }
+                        val capW = if (tokens.portrait) (if (isLowRam) 720 else 1080) else (if (isLowRam) 1280 else 1920)
+                        val capH = if (tokens.portrait) (if (isLowRam) 1280 else 1920) else (if (isLowRam) 720 else 1080)
+                        ImageRequest.Builder(platformContext)
+                            .data(wp)
+                            .size(rawW.coerceAtMost(capW), rawH.coerceAtMost(capH))
+                            .precision(Precision.INEXACT)
+                            .build()
+                    }
                     AsyncImage(
-                        model = wp,
+                        model = wpRequest,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
@@ -670,13 +703,7 @@ private fun ProfileChooserContent(
                             }
                         }
 
-                        val pinKeys = listOf(
-                            listOf("7", "8", "9"),
-                            listOf("4", "5", "6"),
-                            listOf("1", "2", "3"),
-                            listOf("clear", "0", "backspace")
-                        )
-                        pinKeys.forEach { rowKeys ->
+                        PIN_KEYS.forEach { rowKeys ->
                             Row(
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
@@ -686,10 +713,10 @@ private fun ProfileChooserContent(
                                     val interactionSource = remember { MutableInteractionSource() }
                                     val hovered by interactionSource.collectIsHoveredAsState()
                                     val isKeyActive = focusedPinKey == key || hovered
-                                    val requester = when (key) {
-                                        "0" -> pinZeroFocusRequester
-                                        "clear" -> pinClearFocusRequester
-                                        else -> remember { FocusRequester() }
+                                    val requesterModifier = when (key) {
+                                        "0" -> Modifier.focusRequester(pinZeroFocusRequester)
+                                        "clear" -> Modifier.focusRequester(pinClearFocusRequester)
+                                        else -> Modifier
                                     }
 
                                     Box(
@@ -710,7 +737,7 @@ private fun ProfileChooserContent(
                                                 }
                                             )
                                             .hoverable(interactionSource)
-                                            .focusRequester(requester)
+                                            .then(requesterModifier)
                                             .onFocusChanged { if (it.isFocused) focusedPinKey = key }
                                             .navigationClickable {
                                                 focusedPinKey = key
@@ -748,6 +775,13 @@ private fun ProfileChooserContent(
         }
     }
 }
+
+private val PIN_KEYS = listOf(
+    listOf("7", "8", "9"),
+    listOf("4", "5", "6"),
+    listOf("1", "2", "3"),
+    listOf("clear", "0", "backspace")
+)
 
 private fun keyToDigit(key: Key): String? = when (key) {
     Key.Zero, Key.NumPad0 -> "0"

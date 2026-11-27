@@ -2,8 +2,8 @@
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
--keep class com.paregi.animetv.** { *; }
--keep class com.paregi.androidtv.animetvjmto.** { *; }
+-keep class com.paregi.animetv.MainActivity { <init>(); }
+-keep class com.paregi.animetv.TvChannelRefreshJobService { <init>(); }
 -dontwarn org.slf4j.**
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**

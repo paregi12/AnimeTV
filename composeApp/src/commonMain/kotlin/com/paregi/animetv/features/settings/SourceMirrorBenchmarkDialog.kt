@@ -15,9 +15,8 @@ import com.paregi.animetv.domain.AnimeRepository
 import com.paregi.animetv.domain.AppSettings
 import com.paregi.animetv.domain.DomainBenchmarkResult
 import com.paregi.animetv.domain.SourceCatalog
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 @Composable
@@ -36,18 +35,17 @@ internal fun SourceMirrorBenchmarkDialog(
         }.distinct()
     }
 
-    var benchmarkResults by remember(sourceIndex) {
+    var benchmarkResults by remember(sourceIndex, candidates) {
         mutableStateOf<Map<String, DomainBenchmarkResult>>(emptyMap())
     }
-    var isBenchmarking by remember(sourceIndex) { mutableStateOf(true) }
     var warningDomain by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(sourceIndex, candidates) {
-        isBenchmarking = true
-        val results = coroutineScope {
-            candidates.map { domain ->
-                async {
-                    withTimeoutOrNull(4_000L) {
+        benchmarkResults = emptyMap()
+        coroutineScope {
+            candidates.forEach { domain ->
+                launch {
+                    val result = withTimeoutOrNull(4_000L) {
                         animeRepository.benchmarkDomain(sourceIndex, domain)
                     } ?: DomainBenchmarkResult(
                         domain = domain,
@@ -55,17 +53,16 @@ internal fun SourceMirrorBenchmarkDialog(
                         success = false,
                         errorMessage = "Timeout"
                     )
+                    benchmarkResults = benchmarkResults + (domain to result)
                 }
-            }.awaitAll()
+            }
         }
-        benchmarkResults = results.associateBy { it.domain }
-        isBenchmarking = false
     }
 
-    if (isBenchmarking) {
+    if (candidates.isEmpty()) {
         AboutPopupDialog(
             visible = true,
-            loadingText = "Benchmarking...",
+            loadingText = "No mirrors available",
             onDismiss = onDismiss
         )
         return
@@ -100,23 +97,26 @@ internal fun SourceMirrorBenchmarkDialog(
         bestIdx
     }
 
-    val items = candidates.mapIndexed { idx, domain ->
-        val result = benchmarkResults[domain]
-        val valueText = if (result != null && result.success) {
-            "OK - ${result.latencyMs}ms"
-        } else {
-            "ERROR"
+    val items = remember(candidates, benchmarkResults, fastestIndex) {
+        candidates.mapIndexed { idx, domain ->
+            val result = benchmarkResults[domain]
+            val valueText = when {
+                result == null -> "Testing..."
+                result.success -> "OK - ${result.latencyMs}ms"
+                else -> "ERROR"
+            }
+            ListOrderItem(
+                id = domain,
+                title = domain,
+                value = valueText,
+                selected = idx == fastestIndex
+            )
         }
-        ListOrderItem(
-            id = domain,
-            title = domain,
-            value = valueText,
-            selected = idx == fastestIndex
-        )
     }
 
+    val benchmarking = benchmarkResults.size < candidates.size
     ListOrderDialog(
-        title = "Select Source Domain",
+        title = if (benchmarking) "Select Source Domain (Benchmarking...)" else "Select Source Domain",
         items = items,
         mode = ListOrderMode.LIST,
         initialSelectedIndex = fastestIndex,

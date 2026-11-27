@@ -1,10 +1,14 @@
 package com.paregi.animetv.domain
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class ProfileAppearance(
     val theme: String = "theme_dark",
     val wallpaperUrl: String = ""
 )
 
+@Immutable
 data class MyListSectionPreference(
     val id: String,
     val enabled: Boolean = true
@@ -28,6 +32,7 @@ val DEFAULT_MY_LIST_SECTIONS = listOf(
     "history"
 )
 
+@Immutable
 data class MyListLayout(val sections: List<MyListSectionPreference>) {
     companion object {
         fun default() = MyListLayout(
@@ -41,6 +46,7 @@ data class MyListLayout(val sections: List<MyListSectionPreference>) {
     }
 }
 
+@Immutable
 data class HomeSectionPreference(
     val id: String,
     val enabled: Boolean = false
@@ -64,6 +70,7 @@ val DEFAULT_HOME_SECTIONS = listOf(
     "popular"
 )
 
+@Immutable
 data class HomeLayout(val sections: List<HomeSectionPreference>) {
     companion object {
         fun default() = HomeLayout(
@@ -77,6 +84,7 @@ data class HomeLayout(val sections: List<HomeSectionPreference>) {
     }
 }
 
+@Immutable
 data class AppSettings(
     val selectedSource: Int = SourceCatalog.GOTAKU_INDEX,
     val sourceDomains: Map<Int, String> = emptyMap(),

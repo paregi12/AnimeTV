@@ -13,26 +13,36 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.Executors
 
 class AndroidDebugLogRepository private constructor(context: Context) : DebugLogRepository {
     private val appContext = context.applicationContext
     private val preferences: SharedPreferences =
         appContext.getSharedPreferences("SERVER", Context.MODE_PRIVATE)
+    private val processExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ParegiDebugLog").apply { isDaemon = true }
+    }
     private var logcatProcess: java.lang.Process? = null
 
     fun onHostStarted() {
-        if (isEnabled()) startLogging()
+        processExecutor.execute {
+            if (isEnabled()) startLoggingInternal()
+        }
     }
 
     fun onHostFinished() {
-        stopLogging()
+        processExecutor.execute {
+            stopLoggingInternal()
+        }
     }
 
     override fun isEnabled(): Boolean = preferences.getBoolean(PREF_KEY, false)
 
     override fun setEnabled(enabled: Boolean) {
         preferences.edit().putBoolean(PREF_KEY, enabled).apply()
-        if (enabled) startLogging() else stopLogging()
+        processExecutor.execute {
+            if (enabled) startLoggingInternal() else stopLoggingInternal()
+        }
     }
 
     override fun logPath(): String = logFile().absolutePath
@@ -41,18 +51,21 @@ class AndroidDebugLogRepository private constructor(context: Context) : DebugLog
         val limit = lines.takeIf { it > 0 } ?: DEFAULT_LOG_LINES
         val file = logFile()
         if (file.exists()) {
-            val savedLogs = readSavedLogs(limit)
-            return@withContext savedLogs
+            return@withContext readSavedLogs(limit)
         }
         readLogcat(limit)
     }
 
     override suspend fun clearLogs() = withContext(Dispatchers.IO) {
-        stopLogging()
-        listOf(logFile(), File(logFile().absolutePath + ".1"), File(logFile().absolutePath + ".2"))
-            .forEach { file -> runCatching { file.delete() } }
-        runCatching { logFile().createNewFile() }
-        if (isEnabled()) startLogging()
+        runCatching {
+            processExecutor.submit(Runnable {
+                stopLoggingInternal()
+                listOf(logFile(), File(logFile().absolutePath + ".1"), File(logFile().absolutePath + ".2"))
+                    .forEach { file -> runCatching { file.delete() } }
+                runCatching { logFile().createNewFile() }
+                if (isEnabled()) startLoggingInternal()
+            }).get()
+        }
         Unit
     }
 
@@ -65,8 +78,7 @@ class AndroidDebugLogRepository private constructor(context: Context) : DebugLog
         }.getOrDefault(false)
     }
 
-    @Synchronized
-    private fun startLogging() {
+    private fun startLoggingInternal() {
         if (logcatProcess != null) return
         runCatching {
             logFile().parentFile?.mkdirs()
@@ -82,8 +94,7 @@ class AndroidDebugLogRepository private constructor(context: Context) : DebugLog
         }
     }
 
-    @Synchronized
-    private fun stopLogging() {
+    private fun stopLoggingInternal() {
         val process = logcatProcess ?: return
         logcatProcess = null
         runCatching {
@@ -94,21 +105,24 @@ class AndroidDebugLogRepository private constructor(context: Context) : DebugLog
     }
 
     private fun readSavedLogs(maxLines: Int): String {
-        val lines = mutableListOf<String>()
+        val lines = ArrayDeque<String>(minOf(maxLines, 4096))
         val rotated = File(logFile().absolutePath + ".1")
-        if (rotated.exists()) appendFilteredLines(rotated, lines)
-        appendFilteredLines(logFile(), lines)
-        return lines.takeLast(maxLines).joinToString(separator = "\n").let { content ->
+        if (rotated.exists()) appendFilteredLines(rotated, lines, maxLines)
+        appendFilteredLines(logFile(), lines, maxLines)
+        return lines.joinToString(separator = "\n").let { content ->
             if (content.isEmpty()) "" else "$content\n"
         }
     }
 
-    private fun appendFilteredLines(file: File, output: MutableList<String>) {
+    private fun appendFilteredLines(file: File, output: ArrayDeque<String>, maxLines: Int) {
         runCatching {
             BufferedReader(InputStreamReader(file.inputStream(), StandardCharsets.UTF_8)).use { reader ->
                 while (true) {
                     val line = reader.readLine() ?: break
-                    if (!isNoise(line)) output += line
+                    if (!isNoise(line)) {
+                        if (output.size >= maxLines) output.removeFirst()
+                        output.addLast(line)
+                    }
                 }
             }
         }
@@ -119,15 +133,22 @@ class AndroidDebugLogRepository private constructor(context: Context) : DebugLog
             "logcat", "-d", "-b", "main", "-b", "crash", "-v", "time",
             "--pid=${AndroidProcess.myPid()}", "-t", (maxLines * 3).toString()
         ).redirectErrorStream(true).start()
-        val lines = mutableListOf<String>()
-        BufferedReader(InputStreamReader(process.inputStream, StandardCharsets.UTF_8)).use { reader ->
-            while (true) {
-                val line = reader.readLine() ?: break
-                if (!isNoise(line)) lines += line
+        val lines = ArrayDeque<String>(minOf(maxLines, 4096))
+        try {
+            BufferedReader(InputStreamReader(process.inputStream, StandardCharsets.UTF_8)).use { reader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (!isNoise(line)) {
+                        if (lines.size >= maxLines) lines.removeFirst()
+                        lines.addLast(line)
+                    }
+                }
             }
+            process.waitFor()
+        } finally {
+            runCatching { process.destroy() }
         }
-        process.waitFor()
-        lines.takeLast(maxLines).joinToString(separator = "\n").let { content ->
+        lines.joinToString(separator = "\n").let { content ->
             if (content.isEmpty()) "" else "$content\n"
         }
     }.getOrElse { error -> "Error retrieving logs: ${error.message ?: "unknown error"}" }
@@ -142,11 +163,7 @@ class AndroidDebugLogRepository private constructor(context: Context) : DebugLog
         if (line.contains("ATVLOG") || line.contains(" E/") || line.contains(" F/") ||
             line.contains("FATAL") || line.contains("Exception")
         ) return false
-        return listOf(
-            "Quality ", "ViewRootImplExtImpl", "BufferQueueProducer", "BufferPoolAccessor", "VRI[",
-            "Oplus", "AtlasEventUploadUtils", "Codec2", "CCodec", "BLASTBufferQueue", "SurfaceUtils",
-            "hw-BpHwBinder", "ResourcesManagerExtImpl", "ListServiceUtils", "SurfaceView", "OpenGLRenderer"
-        ).any(line::contains)
+        return NOISE_MARKERS.any(line::contains)
     }
 
     companion object {
@@ -154,6 +171,11 @@ class AndroidDebugLogRepository private constructor(context: Context) : DebugLog
         private const val PREF_KEY = "debug_logcat"
         private const val LOG_FILE_NAME = "paregi-debug.log"
         private const val DEFAULT_LOG_LINES = 1500
+        private val NOISE_MARKERS = listOf(
+            "Quality ", "ViewRootImplExtImpl", "BufferQueueProducer", "BufferPoolAccessor", "VRI[",
+            "Oplus", "AtlasEventUploadUtils", "Codec2", "CCodec", "BLASTBufferQueue", "SurfaceUtils",
+            "hw-BpHwBinder", "ResourcesManagerExtImpl", "ListServiceUtils", "SurfaceView", "OpenGLRenderer"
+        )
 
         @Volatile
         private var instance: AndroidDebugLogRepository? = null

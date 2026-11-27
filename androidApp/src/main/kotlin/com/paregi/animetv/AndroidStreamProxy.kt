@@ -6,17 +6,25 @@ import com.paregi.animetv.source.reanime.ReAnimeHlsProxy
 import java.io.BufferedInputStream
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
+import java.io.Closeable
+import java.io.IOException
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
@@ -26,13 +34,23 @@ import javax.crypto.spec.SecretKeySpec
 class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCloseable {
     @Volatile private var server: ServerSocket? = null
     @Volatile private var workers: ExecutorService? = null
-    @Volatile private var fullPathCounter: Boolean? = null
+    @Volatile private var acceptThread: Thread? = null
     @Volatile private var port: Int = 0
+    private val activeResources = ConcurrentHashMap.newKeySet<Closeable>()
+    private val fullPathBySession = object : LinkedHashMap<String, Boolean>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?): Boolean = size > 16
+    }
     private val reAnimeMask = AtomicReference(byteArrayOf(
         157.toByte(), 42, 241.toByte(), 71, 179.toByte(), 142.toByte(), 92, 112,
         166.toByte(), 25, 228.toByte(), 59, 216.toByte(), 98, 15, 197.toByte()
     ))
-    private val reAnimeProxy = ReAnimeHlsProxy(networkStack, { port }, { reAnimeMask.get() })
+    private val reAnimeProxy = ReAnimeHlsProxy(
+        networkStack = networkStack,
+        port = { port },
+        mask = { reAnimeMask.get() },
+        trackConnection = ::trackResource,
+        untrackConnection = ::untrackResource
+    )
 
     @Synchronized
     fun start() {
@@ -40,18 +58,32 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         val listener = ServerSocket(0, 32, InetAddress.getByName("127.0.0.1"))
         server = listener
         port = listener.localPort
-        val pool = Executors.newCachedThreadPool()
+        val pool = ThreadPoolExecutor(
+            MAX_WORKER_THREADS,
+            MAX_WORKER_THREADS,
+            30L,
+            TimeUnit.SECONDS,
+            LinkedBlockingQueue(64)
+        ).apply { allowCoreThreadTimeOut(true) }
         workers = pool
-        pool.execute {
+        val thread = Thread({
             while (!listener.isClosed) {
                 try {
                     val socket = listener.accept()
-                    pool.execute { handle(socket) }
+                    try {
+                        pool.execute { handle(socket) }
+                    } catch (_: RejectedExecutionException) {
+                        runCatching { socket.close() }
+                    }
                 } catch (error: Exception) {
                     if (!listener.isClosed) Log.w(TAG, "Proxy accept failed", error)
                 }
             }
+        }, "StreamProxy-Accept").apply {
+            isDaemon = true
+            start()
         }
+        acceptThread = thread
     }
 
     fun createPlaylistUrl(
@@ -88,81 +120,142 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         runCatching { server?.close() }
         server = null
         port = 0
+        acceptThread?.interrupt()
+        acceptThread = null
+        activeResources.toList().forEach { resource ->
+            activeResources.remove(resource)
+            runCatching { resource.close() }
+        }
         workers?.shutdownNow()
         workers = null
-        fullPathCounter = null
+        synchronized(fullPathBySession) {
+            fullPathBySession.clear()
+        }
     }
 
-    private fun handle(socket: java.net.Socket) {
-        socket.use { client ->
-            try {
+    private fun trackResource(resource: Closeable) {
+        activeResources.add(resource)
+    }
+
+    private fun untrackResource(resource: Closeable) {
+        activeResources.remove(resource)
+    }
+
+    private fun handle(socket: Socket) {
+        trackResource(socket)
+        var headersSent = false
+        try {
+            socket.use { client ->
+                client.soTimeout = SOCKET_SO_TIMEOUT_MS
                 val reader = BufferedReader(InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8))
                 val parts = (reader.readLine() ?: return).split(' ')
                 if (parts.size < 2) return
                 var rangeStart = 0L
+                var rangeEnd: Long? = null
+                var hasRangeHeader = false
                 while (true) {
                     val line = reader.readLine() ?: break
                     if (line.isEmpty()) break
                     if (line.startsWith("range:", ignoreCase = true)) {
-                        rangeStart = line.substringAfter(':').trim().removePrefix("bytes=")
-                            .substringBefore('-').toLongOrNull() ?: 0L
+                        val spec = line.substringAfter(':').trim()
+                        if (spec.startsWith("bytes=", ignoreCase = true)) {
+                            val rangePart = spec.substring(6).substringBefore(',').trim()
+                            val dashIdx = rangePart.indexOf('-')
+                            if (dashIdx > 0) {
+                                val parsedStart = rangePart.substring(0, dashIdx).trim().toLongOrNull()
+                                val parsedEnd = rangePart.substring(dashIdx + 1).trim().toLongOrNull()
+                                if (parsedStart != null && parsedStart >= 0L) {
+                                    rangeStart = parsedStart
+                                    rangeEnd = parsedEnd?.takeIf { it >= parsedStart }
+                                    hasRangeHeader = true
+                                }
+                            }
+                        }
                     }
                 }
                 val local = Uri.parse("http://127.0.0.1" + parts[1])
                 val upstreamUrl = local.getQueryParameter("url") ?: run {
                     Log.w(TAG, "Missing url query in proxy request: ${parts[1]}")
+                    headersSent = true
                     return badRequest(client.getOutputStream())
                 }
                 if (!upstreamUrl.startsWith("http://") && !upstreamUrl.startsWith("https://")) {
                     Log.w(TAG, "Unsupported upstream scheme in proxy request: ${parts[1]}")
+                    headersSent = true
                     return badRequest(client.getOutputStream())
                 }
                 val key = local.getQueryParameter("key")
                 val segmentBytes = local.getQueryParameter("sb")?.toIntOrNull() ?: 0
                 val referer = local.getQueryParameter("ref")
+                val out = client.getOutputStream()
                 when {
                     local.getQueryParameter("re") == "1" && (
                         local.getQueryParameter("m3u8") == "1" ||
                             parts[1].startsWith("/manifest") ||
                             reAnimeProxy.isManifestRequest(upstreamUrl)
-                        ) ->
+                        ) -> {
+                        headersSent = true
                         reAnimeProxy.servePlaylist(
-                            client.getOutputStream(),
+                            out,
                             upstreamUrl,
                             local.getQueryParameter("wp").orEmpty(),
                             root = parts[1].startsWith("/manifest")
                         )
-                    local.getQueryParameter("re") == "1" ->
+                    }
+                    local.getQueryParameter("re") == "1" -> {
+                        headersSent = true
                         reAnimeProxy.serveSegment(
-                            client.getOutputStream(),
+                            out,
                             upstreamUrl,
                             rangeStart,
+                            rangeEnd,
+                            hasRangeHeader,
                             plain = local.getQueryParameter("plain") == "1"
                         )
-                    local.getQueryParameter("sub") == "1" ->
-                        serveSubtitle(client.getOutputStream(), upstreamUrl, referer)
-                    local.getQueryParameter("m3u8") == "1" ->
-                        servePlaylist(client.getOutputStream(), upstreamUrl, key, segmentBytes, referer)
-                    local.getQueryParameter("plain") == "1" ->
-                        servePassthrough(client.getOutputStream(), upstreamUrl, rangeStart, referer)
-                    else ->
-                        serveSegment(client.getOutputStream(), upstreamUrl, key, segmentBytes, rangeStart, referer)
+                    }
+                    local.getQueryParameter("sub") == "1" -> {
+                        headersSent = true
+                        serveSubtitle(out, upstreamUrl, referer)
+                    }
+                    local.getQueryParameter("m3u8") == "1" -> {
+                        headersSent = true
+                        servePlaylist(out, upstreamUrl, key, segmentBytes, referer)
+                    }
+                    local.getQueryParameter("plain") == "1" -> {
+                        headersSent = true
+                        servePassthrough(out, upstreamUrl, rangeStart, rangeEnd, hasRangeHeader, referer)
+                    }
+                    else -> {
+                        headersSent = true
+                        serveSegment(out, upstreamUrl, key, segmentBytes, rangeStart, rangeEnd, hasRangeHeader, referer)
+                    }
                 }
-            } catch (_: SocketTimeoutException) {
-                Log.w(TAG, "Proxy upstream timeout")
+            }
+        } catch (_: SocketTimeoutException) {
+            Log.w(TAG, "Proxy upstream timeout")
+            if (!headersSent && !socket.isClosed) {
                 runCatching {
                     response(
-                        client.getOutputStream(),
+                        socket.getOutputStream(),
                         503,
                         "Service Unavailable",
                         "text/plain",
                         "Upstream timeout".toByteArray(StandardCharsets.UTF_8)
                     )
                 }
-            } catch (error: Exception) {
-                Log.w(TAG, "Proxy request failed", error)
-                runCatching { response(client.getOutputStream(), 502, "Bad Gateway", "text/plain", ByteArray(0)) }
             }
+        } catch (error: IOException) {
+            if (!headersSent && !socket.isClosed) {
+                Log.w(TAG, "Proxy request I/O failed", error)
+                runCatching { response(socket.getOutputStream(), 502, "Bad Gateway", "text/plain", ByteArray(0)) }
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "Proxy request failed", error)
+            if (!headersSent && !socket.isClosed) {
+                runCatching { response(socket.getOutputStream(), 502, "Bad Gateway", "text/plain", ByteArray(0)) }
+            }
+        } finally {
+            untrackResource(socket)
         }
     }
 
@@ -178,20 +271,23 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         while (body == null) {
             var connection: AndroidNetworkResponse? = null
             try {
-                connection = upstream(url, referer = referer)
+                connection = upstream(url, referer = referer).also(::trackResource)
                 val status = connection.responseCode
                 if (status !in 200..299) {
                     Log.w(TAG, "Playlist upstream HTTP $status: $url")
                     return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
                 }
-                body = connection.inputStream?.use { it.readBytes() }
+                body = connection.inputStream?.use { readStreamBounded(it, MAX_PLAYLIST_BYTES) }
                     ?: return response(out, 502, "Bad Gateway", "text/plain", ByteArray(0))
             } catch (error: SocketTimeoutException) {
                 attempt++
                 if (attempt >= 3) throw error
                 Log.w(TAG, "Manifest timeout, retrying ($attempt/3)")
             } finally {
-                connection?.close()
+                connection?.let {
+                    untrackResource(it)
+                    it.close()
+                }
             }
         }
 
@@ -317,9 +413,12 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
         key: String?,
         segmentBytes: Int,
         rangeStart: Long,
+        rangeEnd: Long?,
+        sendRange: Boolean,
         referer: String?
     ) {
-        val connection = upstream(url, rangeStart, referer)
+        val connection = upstream(url, rangeStart, rangeEnd, sendRange, referer).also(::trackResource)
+        var headersWritten = false
         try {
             val status = connection.responseCode
             if (status !in 200..299) {
@@ -331,6 +430,10 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
             val stream = BufferedInputStream(input)
             val actualStart = if (status == 206) rangeStart else 0L
             val keyBytes = key?.takeIf { it.isNotBlank() }?.let { AndroidGotakuCrypto.decodeUrlSafe(it) }
+            val sessionKey = if (!key.isNullOrBlank()) {
+                val host = runCatching { Uri.parse(url).host.orEmpty() }.getOrDefault("")
+                "$key|$host"
+            } else null
             var cipher: Cipher? = null
             if (keyBytes != null && segmentBytes > 0 && actualStart < segmentBytes) {
                 if (actualStart == 0L) {
@@ -345,20 +448,25 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                     stream.reset()
                     val sample = probe.copyOf(count)
                     if (!looksLikeMedia(sample)) {
-                        var fullPath = fullPathCounter
+                        var fullPath = sessionKey?.let {
+                            synchronized(fullPathBySession) { fullPathBySession[it] }
+                        }
                         if (fullPath == null && sample.size >= 189) {
                             fullPath = listOf(false, true).firstOrNull {
                                 looksLikeMedia(decryptPreview(sample, url, keyBytes, it, segmentBytes))
                             }
-                            if (fullPath != null) {
-                                fullPathCounter = fullPath
+                            if (fullPath != null && sessionKey != null) {
+                                synchronized(fullPathBySession) { fullPathBySession[sessionKey] = fullPath }
                                 Log.i(TAG, "Counter interpretation: ${if (fullPath) "full URL" else "path only"}")
                             }
                         }
                         cipher = segmentCipher(keyBytes, url, fullPath ?: false, actualStart)
                     }
                 } else {
-                    cipher = segmentCipher(keyBytes, url, fullPathCounter ?: false, actualStart)
+                    val fullPath = sessionKey?.let {
+                        synchronized(fullPathBySession) { fullPathBySession[it] }
+                    } ?: false
+                    cipher = segmentCipher(keyBytes, url, fullPath, actualStart)
                 }
             }
             val length = connection.getHeaderFieldLong("Content-Length", -1)
@@ -366,36 +474,54 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
             val headers = StringBuilder("HTTP/1.1 ")
                 .append(if (partial) "206 Partial Content" else "200 OK").append("\r\n")
                 .append("Content-Type: ").append(connection.getHeaderField("Content-Type") ?: "video/mp2t").append("\r\n")
+                .append("Connection: close\r\n")
                 .append("Accept-Ranges: bytes\r\n")
             if (length >= 0) headers.append("Content-Length: ").append(length).append("\r\n")
             connection.getHeaderField("Content-Range")?.let { headers.append("Content-Range: ").append(it).append("\r\n") }
             headers.append("Access-Control-Allow-Origin: *\r\n\r\n")
             out.write(headers.toString().toByteArray(StandardCharsets.UTF_8))
+            headersWritten = true
 
             // Do not let mid-body exceptions emit an HTTP error status into the media stream.
             runCatching {
                 val buffer = ByteArray(8192)
+                val zeroBuf = if (cipher != null) ByteArray(8192) else null
+                val maskBuf = if (cipher != null) ByteArray(cipher.getOutputSize(8192).coerceAtLeast(8192)) else null
                 var currentPos = actualStart
                 while (true) {
                     val count = stream.read(buffer)
                     if (count < 0) break
-                    if (cipher != null && currentPos < segmentBytes) {
+                    if (cipher != null && zeroBuf != null && maskBuf != null && currentPos < segmentBytes) {
                         val n = minOf(count.toLong(), segmentBytes - currentPos).toInt()
-                        val mask = cipher.update(ByteArray(n)) ?: ByteArray(n)
-                        repeat(n) { i -> buffer[i] = (buffer[i].toInt() xor mask[i].toInt()).toByte() }
+                        val written = cipher.update(zeroBuf, 0, n, maskBuf, 0)
+                        val limit = minOf(n, written)
+                        for (i in 0 until limit) {
+                            buffer[i] = (buffer[i].toInt() xor maskBuf[i].toInt()).toByte()
+                        }
                     }
                     currentPos += count
                     out.write(buffer, 0, count)
                 }
                 out.flush()
-            }.onFailure { Log.w(TAG, "Segment stream interrupted", it) }
+            }.onFailure {
+                if (!headersWritten) throw it
+                Log.w(TAG, "Segment stream interrupted", it)
+            }
         } finally {
+            untrackResource(connection)
             connection.close()
         }
     }
 
-    private fun servePassthrough(out: OutputStream, url: String, rangeStart: Long, referer: String?) {
-        val connection = upstream(url, rangeStart, referer)
+    private fun servePassthrough(
+        out: OutputStream,
+        url: String,
+        rangeStart: Long,
+        rangeEnd: Long?,
+        sendRange: Boolean,
+        referer: String?
+    ) {
+        val connection = upstream(url, rangeStart, rangeEnd, sendRange, referer).also(::trackResource)
         try {
             val status = connection.responseCode
             if (status !in 200..299) {
@@ -408,6 +534,7 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
             val headers = StringBuilder("HTTP/1.1 ")
                 .append(if (status == 206) "206 Partial Content" else "200 OK").append("\r\n")
                 .append("Content-Type: ").append(connection.getHeaderField("Content-Type") ?: "application/octet-stream").append("\r\n")
+                .append("Connection: close\r\n")
                 .append("Accept-Ranges: bytes\r\n")
             if (length >= 0) headers.append("Content-Length: ").append(length).append("\r\n")
             connection.getHeaderField("Content-Range")?.let { headers.append("Content-Range: ").append(it).append("\r\n") }
@@ -418,12 +545,13 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                 out.flush()
             }.onFailure { Log.w(TAG, "Passthrough stream interrupted", it) }
         } finally {
+            untrackResource(connection)
             connection.close()
         }
     }
 
     private fun serveSubtitle(out: OutputStream, url: String, referer: String?) {
-        val connection = upstream(url, referer = referer)
+        val connection = upstream(url, referer = referer).also(::trackResource)
         try {
             val status = connection.responseCode
             if (status !in 200..299) return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
@@ -437,19 +565,7 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                 else -> connection.getHeaderField("Content-Type") ?: "text/plain"
             }
             val bytes = try {
-                input.use { stream ->
-                    val bufferOut = ByteArrayOutputStream()
-                    val buf = ByteArray(8192)
-                    var total = 0
-                    while (true) {
-                        val n = stream.read(buf)
-                        if (n == -1) break
-                        total += n
-                        if (total > MAX_SUBTITLE_BYTES) error("Subtitle too large")
-                        bufferOut.write(buf, 0, n)
-                    }
-                    bufferOut.toByteArray()
-                }
+                input.use { stream -> readStreamBounded(stream, MAX_SUBTITLE_BYTES) }
             } catch (_: Exception) {
                 return response(
                     out,
@@ -461,6 +577,7 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
             }
             val headers = "HTTP/1.1 200 OK\r\n" +
                 "Content-Type: $contentType\r\n" +
+                "Connection: close\r\n" +
                 "Access-Control-Allow-Origin: *\r\n" +
                 "Access-Control-Allow-Headers: *\r\n" +
                 "Content-Length: ${bytes.size}\r\n\r\n"
@@ -468,11 +585,18 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
             out.write(bytes)
             out.flush()
         } finally {
+            untrackResource(connection)
             connection.close()
         }
     }
 
-    private fun upstream(url: String, rangeStart: Long = 0, referer: String? = null): AndroidNetworkResponse {
+    private fun upstream(
+        url: String,
+        rangeStart: Long = 0,
+        rangeEnd: Long? = null,
+        sendRange: Boolean = rangeStart > 0L,
+        referer: String? = null
+    ): AndroidNetworkResponse {
         val headers = buildMap {
             put("Accept", "*/*")
             if (!referer.isNullOrBlank()) {
@@ -489,7 +613,10 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
                 put("Referer", "https://gotaku.to/")
             }
             put("User-Agent", USER_AGENT)
-            if (rangeStart > 0) put("Range", "bytes=" + rangeStart + "-")
+            if (sendRange && (rangeStart > 0L || rangeEnd != null)) {
+                val rangeValue = if (rangeEnd != null) "bytes=$rangeStart-$rangeEnd" else "bytes=$rangeStart-"
+                put("Range", rangeValue)
+            }
         }
         return networkStack.execute(url, headers = headers, connectTimeoutMs = 15_000, readTimeoutMs = 30_000)
     }
@@ -503,14 +630,17 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
             val hash = MessageDigest.getInstance("SHA-256").digest(urlId.toByteArray(StandardCharsets.UTF_8))
             val iv = ByteArray(16)
             hash.copyInto(iv, endIndex = 8)
+            val blockOffset = rangeStart ushr 4
+            if (blockOffset > 0L) {
+                for (i in 0 until 8) {
+                    iv[15 - i] = ((blockOffset ushr (i * 8)) and 0xFFL).toByte()
+                }
+            }
             Cipher.getInstance("AES/CTR/NoPadding").apply {
                 init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
-                var remaining = rangeStart
-                val zeros = ByteArray(4096)
-                while (remaining > 0) {
-                    val size = minOf(remaining, zeros.size.toLong()).toInt()
-                    update(zeros, 0, size)
-                    remaining -= size
+                val intraBlock = (rangeStart and 0xFL).toInt()
+                if (intraBlock > 0) {
+                    update(ByteArray(intraBlock))
                 }
             }
         }.getOrNull()
@@ -536,7 +666,7 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
 
     private fun response(out: OutputStream, status: Int, label: String, type: String, body: ByteArray) {
         val header = "HTTP/1.1 " + status + " " + label + "\r\nContent-Type: " + type +
-            "\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + body.size + "\r\n\r\n"
+            "\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + body.size + "\r\n\r\n"
         out.write(header.toByteArray(StandardCharsets.UTF_8))
         out.write(body)
         out.flush()
@@ -544,8 +674,25 @@ class AndroidStreamProxy(private val networkStack: AndroidNetworkStack) : AutoCl
 
     private companion object {
         const val TAG = "AndroidStreamProxy"
+        const val MAX_WORKER_THREADS = 10
+        const val SOCKET_SO_TIMEOUT_MS = 15_000
+        const val MAX_PLAYLIST_BYTES = 4 * 1024 * 1024
         const val MAX_SUBTITLE_BYTES = 512 * 1024
         const val USER_AGENT = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/136.0.0.0 Mobile Safari/537.36"
         val URI_REGEX = Regex("URI=\"([^\"]+)\"")
     }
+}
+
+internal fun readStreamBounded(input: InputStream, maxBytes: Int): ByteArray {
+    val bufferOut = ByteArrayOutputStream()
+    val buf = ByteArray(8192)
+    var total = 0
+    while (true) {
+        val n = input.read(buf)
+        if (n == -1) break
+        total += n
+        if (total > maxBytes) error("Response exceeded $maxBytes bytes")
+        bufferOut.write(buf, 0, n)
+    }
+    return bufferOut.toByteArray()
 }

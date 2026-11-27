@@ -94,46 +94,48 @@ internal fun ProfileOptionsFlowDialog(
                 if (isAdmin) step = ProfileDialogStep.ManageUsers(0) else onDismiss()
                 return
             }
-            val items = buildList {
-                if (target.prefix == activeProfile.prefix && directory.profiles.size > 1) {
-                    add(ListOrderItem(id = "switch", title = "Switch User", icon = IconGlyphs.Cycle))
-                }
-                add(
-                    ListOrderItem(
-                        id = "name",
-                        title = "Display Name",
-                        value = target.displayName,
-                        icon = IconGlyphs.TextFormat
-                    )
-                )
-                add(
-                    ListOrderItem(
-                        id = "avatar",
-                        title = "Profile Picture",
-                        value = target.avatarTitle.ifBlank { target.avatarId },
-                        icon = IconGlyphs.Wallpaper
-                    )
-                )
-                add(
-                    ListOrderItem(
-                        id = "pin",
-                        title = "PIN",
-                        value = if (target.pin.isNotBlank()) "Have PIN" else "No PIN",
-                        icon = IconGlyphs.Encrypted
-                    )
-                )
-                if (target.prefix.isEmpty() && isAdmin) {
-                    add(ListOrderItem(id = "manage", title = "Manage Users", icon = IconGlyphs.Build))
-                } else if (isAdmin && target.prefix.isNotEmpty()) {
+            val items = remember(target, activeProfile.prefix, directory.profiles.size, isAdmin) {
+                buildList {
+                    if (target.prefix == activeProfile.prefix && directory.profiles.size > 1) {
+                        add(ListOrderItem(id = "switch", title = "Switch User", icon = IconGlyphs.Cycle))
+                    }
                     add(
                         ListOrderItem(
-                            id = "parental",
-                            title = "Parental Control",
-                            value = parentalRatingShortNames[target.parentalRating.coerceIn(0, 6)],
-                            icon = IconGlyphs.ShieldPerson
+                            id = "name",
+                            title = "Display Name",
+                            value = target.displayName,
+                            icon = IconGlyphs.TextFormat
                         )
                     )
-                    add(ListOrderItem(id = "delete", title = "Delete User", icon = IconGlyphs.DeleteForever))
+                    add(
+                        ListOrderItem(
+                            id = "avatar",
+                            title = "Profile Picture",
+                            value = target.avatarTitle.ifBlank { target.avatarId },
+                            icon = IconGlyphs.Wallpaper
+                        )
+                    )
+                    add(
+                        ListOrderItem(
+                            id = "pin",
+                            title = "PIN",
+                            value = if (target.pin.isNotBlank()) "Have PIN" else "No PIN",
+                            icon = IconGlyphs.Encrypted
+                        )
+                    )
+                    if (target.prefix.isEmpty() && isAdmin) {
+                        add(ListOrderItem(id = "manage", title = "Manage Users", icon = IconGlyphs.Build))
+                    } else if (isAdmin && target.prefix.isNotEmpty()) {
+                        add(
+                            ListOrderItem(
+                                id = "parental",
+                                title = "Parental Control",
+                                value = parentalRatingShortNames[target.parentalRating.coerceIn(0, 6)],
+                                icon = IconGlyphs.ShieldPerson
+                            )
+                        )
+                        add(ListOrderItem(id = "delete", title = "Delete User", icon = IconGlyphs.DeleteForever))
+                    }
                 }
             }
 
@@ -171,34 +173,35 @@ internal fun ProfileOptionsFlowDialog(
 
         is ProfileDialogStep.ManageUsers -> {
             val canAddNew = directory.profiles.size < 5
-            val nonAdminUsers = directory.profiles.filter { it.prefix.isNotBlank() }
-            val defaultUser = directory.defaultPrefix
-                ?.takeIf { it.isNotBlank() }
-                ?.let { prefix -> directory.profiles.firstOrNull { it.prefix == prefix } }
-
-            val items = buildList {
-                if (canAddNew) {
-                    add(ListOrderItem(id = "addnew", title = "Add New User", icon = IconGlyphs.Add))
-                }
-                if (directory.profiles.size > 1) {
-                    add(
-                        ListOrderItem(
-                            id = "default",
-                            title = "Default User",
-                            value = defaultUser?.displayName.orEmpty(),
-                            icon = IconGlyphs.Check
+            val items = remember(directory.profiles, directory.defaultPrefix) {
+                val nonAdminUsers = directory.profiles.filter { it.prefix.isNotBlank() }
+                val defaultUser = directory.defaultPrefix
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { prefix -> directory.profiles.firstOrNull { it.prefix == prefix } }
+                buildList {
+                    if (canAddNew) {
+                        add(ListOrderItem(id = "addnew", title = "Add New User", icon = IconGlyphs.Add))
+                    }
+                    if (directory.profiles.size > 1) {
+                        add(
+                            ListOrderItem(
+                                id = "default",
+                                title = "Default User",
+                                value = defaultUser?.displayName.orEmpty(),
+                                icon = IconGlyphs.Check
+                            )
                         )
-                    )
-                }
-                nonAdminUsers.forEach { user ->
-                    add(
-                        ListOrderItem(
-                            id = "user:${user.prefix}",
-                            title = user.displayName,
-                            avatarUrl = user.avatarUrl,
-                            avatarDrawable = if (user.avatarUrl.isNullOrBlank()) profileAvatarResource(user.avatarId) else null
+                    }
+                    nonAdminUsers.forEach { user ->
+                        add(
+                            ListOrderItem(
+                                id = "user:${user.prefix}",
+                                title = user.displayName,
+                                avatarUrl = user.avatarUrl,
+                                avatarDrawable = if (user.avatarUrl.isNullOrBlank()) profileAvatarResource(user.avatarId) else null
+                            )
                         )
-                    )
+                    }
                 }
             }
 
@@ -234,27 +237,29 @@ internal fun ProfileOptionsFlowDialog(
         }
 
         ProfileDialogStep.DefaultUser -> {
-            val nonAdminUsers = directory.profiles.filter { it.prefix.isNotBlank() }
             val currentDefault = directory.defaultPrefix?.takeIf { it.isNotBlank() }.orEmpty()
-            val items = buildList {
-                add(
-                    ListOrderItem(
-                        id = "",
-                        title = "Always show login screen",
-                        selected = currentDefault.isEmpty()
-                    )
-                )
-                nonAdminUsers.forEach { user ->
+            val items = remember(directory.profiles, currentDefault) {
+                val nonAdminUsers = directory.profiles.filter { it.prefix.isNotBlank() }
+                buildList {
                     add(
                         ListOrderItem(
-                            id = user.prefix,
-                            title = user.displayName,
-                            selected = currentDefault == user.prefix
+                            id = "",
+                            title = "Always show login screen",
+                            selected = currentDefault.isEmpty()
                         )
                     )
+                    nonAdminUsers.forEach { user ->
+                        add(
+                            ListOrderItem(
+                                id = user.prefix,
+                                title = user.displayName,
+                                selected = currentDefault == user.prefix
+                            )
+                        )
+                    }
                 }
             }
-            val initialIndex = items.indexOfFirst { it.selected }.coerceAtLeast(0)
+            val initialIndex = remember(items) { items.indexOfFirst { it.selected }.coerceAtLeast(0) }
             ListOrderDialog(
                 title = "Set Default User",
                 items = items,
@@ -304,42 +309,44 @@ internal fun ProfileOptionsFlowDialog(
                 }
             }
 
-            val rawItems = buildList {
-                remoteAvatars["-anilist"]?.takeIf { it.isNotBlank() }?.let { url ->
-                    add(
-                        ImgPickerItem(
-                            id = "-anilist",
-                            title = "AniList Avatar",
-                            imageUrl = url,
-                            selected = target.avatarId == "-anilist" || target.avatarUrl == url
+            val items = remember(remoteAvatars, target.avatarId, target.avatarUrl) {
+                val rawItems = buildList {
+                    remoteAvatars["-anilist"]?.takeIf { it.isNotBlank() }?.let { url ->
+                        add(
+                            ImgPickerItem(
+                                id = "-anilist",
+                                title = "AniList Avatar",
+                                imageUrl = url,
+                                selected = target.avatarId == "-anilist" || target.avatarUrl == url
+                            )
                         )
-                    )
-                }
-                remoteAvatars["-mal"]?.takeIf { it.isNotBlank() }?.let { url ->
-                    add(
-                        ImgPickerItem(
-                            id = "-mal",
-                            title = "MAL Avatar",
-                            imageUrl = url,
-                            selected = target.avatarId == "-mal" || target.avatarUrl == url
+                    }
+                    remoteAvatars["-mal"]?.takeIf { it.isNotBlank() }?.let { url ->
+                        add(
+                            ImgPickerItem(
+                                id = "-mal",
+                                title = "MAL Avatar",
+                                imageUrl = url,
+                                selected = target.avatarId == "-mal" || target.avatarUrl == url
+                            )
                         )
-                    )
-                }
-                profileAvatarOptions.forEach { (id, title) ->
-                    add(
-                        ImgPickerItem(
-                            id = id,
-                            title = title,
-                            drawableName = profileAvatarResource(id),
-                            selected = target.avatarId == id && target.avatarUrl.isNullOrBlank()
+                    }
+                    profileAvatarOptions.forEach { (id, title) ->
+                        add(
+                            ImgPickerItem(
+                                id = id,
+                                title = title,
+                                drawableName = profileAvatarResource(id),
+                                selected = target.avatarId == id && target.avatarUrl.isNullOrBlank()
+                            )
                         )
-                    )
+                    }
                 }
-            }
-            val items = if (rawItems.any { it.selected } || rawItems.isEmpty()) {
-                rawItems
-            } else {
-                rawItems.mapIndexed { idx, item -> if (idx == 0) item.copy(selected = true) else item }
+                if (rawItems.any { it.selected } || rawItems.isEmpty()) {
+                    rawItems
+                } else {
+                    rawItems.mapIndexed { idx, item -> if (idx == 0) item.copy(selected = true) else item }
+                }
             }
 
             ImgPickerDialog(
@@ -480,12 +487,14 @@ internal fun ProfileOptionsFlowDialog(
                 return
             }
             val currentRating = target.parentalRating.coerceIn(0, 6)
-            val items = parentalRatingDescriptions.mapIndexed { index, desc ->
-                ListOrderItem(
-                    id = index.toString(),
-                    title = desc,
-                    selected = index == currentRating
-                )
+            val items = remember(currentRating) {
+                parentalRatingDescriptions.mapIndexed { index, desc ->
+                    ListOrderItem(
+                        id = index.toString(),
+                        title = desc,
+                        selected = index == currentRating
+                    )
+                }
             }
             ListOrderDialog(
                 title = "Parental Control",

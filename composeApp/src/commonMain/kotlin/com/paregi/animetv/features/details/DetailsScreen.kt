@@ -50,6 +50,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -57,6 +58,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
+import coil3.size.Precision
 import com.paregi.animetv.LocalNavigationSound
 import com.paregi.animetv.PlatformBackHandler
 import com.paregi.animetv.core.theme.IconGlyphs
@@ -134,43 +138,86 @@ internal fun DetailsScreen(
     }
     val isLoading = loading || (details == null && fallbackLoading)
 
-    val detailAnime = details?.anime?.let { loaded ->
-        val mergedRating = normalizeAgeRating(loaded.rating) ?: normalizeAgeRating(anime.rating)
-        loaded.copy(
-            rating = mergedRating,
-            adult = loaded.adult || anime.adult || isAdultAgeRating(mergedRating)
-        )
-    } ?: anime
-    val episodes = details?.episodes.orEmpty()
-    val firstPlayableEpisode = episodes.firstOrNull { !skipFiller || !it.filler }
-    val recordedResumeEpisode = watchProgress?.let { progress ->
-        episodes.firstOrNull { it.id == progress.episodeId }
-            ?: progress.episodeId.takeIf { it.startsWith("${anime.id}|") }
-                ?.substringAfterLast('|')
-                ?.let { number -> episodes.firstOrNull { it.number == number } }
+    val detailAnime = remember(details?.anime, anime) {
+        details?.anime?.let { loaded ->
+            val mergedRating = normalizeAgeRating(loaded.rating) ?: normalizeAgeRating(anime.rating)
+            loaded.copy(
+                rating = mergedRating,
+                adult = loaded.adult || anime.adult || isAdultAgeRating(mergedRating)
+            )
+        } ?: anime
     }
-    val resumeEpisode = recordedResumeEpisode?.let { recorded ->
-        if (!skipFiller || !recorded.filler) recorded
-        else {
-            val index = episodes.indexOfFirst { it.id == recorded.id }
-            episodes.drop(index + 1).firstOrNull { !it.filler }
+    val episodes = details?.episodes.orEmpty()
+    val episodeIndexById = remember(episodes) {
+        HashMap<String, Int>(episodes.size).apply {
+            episodes.forEachIndexed { idx, ep -> put(ep.id, idx) }
         }
     }
-    val resumePositionMs = if (resumeEpisode?.id == recordedResumeEpisode?.id) {
-        watchProgress?.positionMs ?: 0L
-    } else 0L
-    val resumePercent = watchProgress?.takeIf {
-        resumeEpisode != null && it.durationMs > 0L && resumePositionMs > 0L
-    }?.let { (resumePositionMs.toDouble() * 100.0 / it.durationMs).toInt().coerceIn(0, 100) }
-    val resumeIndex = resumeEpisode?.let { ep -> episodes.indexOfFirst { it.id == ep.id } } ?: -1
-    val nextEpisode = if (resumeIndex >= 0) {
-        episodes.drop(resumeIndex + 1).firstOrNull { !skipFiller || !it.filler }
-    } else null
+    val episodeIndexByNumber = remember(episodes) {
+        HashMap<String, Int>(episodes.size).apply {
+            episodes.forEachIndexed { idx, ep -> putIfAbsent(ep.number, idx) }
+        }
+    }
+    val firstPlayableEpisode = remember(episodes, skipFiller) {
+        episodes.firstOrNull { !skipFiller || !it.filler }
+    }
+    val recordedResumeEpisode = remember(episodes, episodeIndexById, episodeIndexByNumber, watchProgress?.episodeId, anime.id) {
+        watchProgress?.let { progress ->
+            episodeIndexById[progress.episodeId]?.let { episodes.getOrNull(it) }
+                ?: progress.episodeId.takeIf { it.startsWith("${anime.id}|") }
+                    ?.substringAfterLast('|')
+                    ?.let { number -> episodeIndexByNumber[number]?.let { episodes.getOrNull(it) } }
+        }
+    }
+    val resumeInfo = remember(episodes, episodeIndexById, recordedResumeEpisode, watchProgress?.positionMs, watchProgress?.durationMs, skipFiller) {
+        val resumeEp = recordedResumeEpisode?.let { recorded ->
+            if (!skipFiller || !recorded.filler) recorded
+            else {
+                val index = episodeIndexById[recorded.id] ?: -1
+                if (index >= 0) {
+                    var found: Episode? = null
+                    for (i in (index + 1) until episodes.size) {
+                        val candidate = episodes[i]
+                        if (!candidate.filler) {
+                            found = candidate
+                            break
+                        }
+                    }
+                    found
+                } else null
+            }
+        }
+        val posMs = if (resumeEp?.id == recordedResumeEpisode?.id) {
+            watchProgress?.positionMs ?: 0L
+        } else 0L
+        val pct = watchProgress?.takeIf {
+            resumeEp != null && it.durationMs > 0L && posMs > 0L
+        }?.let { (posMs.toDouble() * 100.0 / it.durationMs).toInt().coerceIn(0, 100) }
+        val resumeIdx = resumeEp?.let { episodeIndexById[it.id] } ?: -1
+        val nextEp = if (resumeIdx >= 0) {
+            var found: Episode? = null
+            for (i in (resumeIdx + 1) until episodes.size) {
+                val candidate = episodes[i]
+                if (!skipFiller || !candidate.filler) {
+                    found = candidate
+                    break
+                }
+            }
+            found
+        } else null
+        ResumeEpisodeInfo(resumeEp, posMs, pct, nextEp)
+    }
+    val resumeEpisode = resumeInfo.resumeEpisode
+    val resumePositionMs = resumeInfo.positionMs
+    val resumePercent = resumeInfo.percent
+    val nextEpisode = resumeInfo.nextEpisode
 
-    var episodePickerId by remember(anime.id, episodes.map { it.id }, resumeEpisode?.id, skipFiller) {
+    var episodePickerId by remember(anime.id, episodes, resumeEpisode?.id, skipFiller) {
         mutableStateOf((resumeEpisode ?: firstPlayableEpisode ?: episodes.firstOrNull())?.id)
     }
-    val episodePickerIndex = episodes.indexOfFirst { it.id == episodePickerId }
+    val episodePickerIndex = remember(episodeIndexById, episodePickerId) {
+        episodePickerId?.let { episodeIndexById[it] } ?: -1
+    }
     val episodePickerEpisode = episodes.getOrNull(episodePickerIndex) ?: firstPlayableEpisode
     val previousPickerEpisode = if (episodePickerIndex > 0) episodes.getOrNull(episodePickerIndex - 1) else null
     val nextPickerEpisode = if (episodePickerIndex in 0 until episodes.lastIndex) episodes.getOrNull(episodePickerIndex + 1) else null
@@ -449,12 +496,28 @@ internal fun DetailsScreen(
 @Composable
 private fun DetailPoster(anime: Anime, modifier: Modifier) {
     val tokens = LocalAnimeTvTokens.current
-    val displayRating = displayRPlusRating(anime.rating, anime.adult)
+    val density = LocalDensity.current
+    val platformContext = LocalPlatformContext.current
+    val imageCdn = LocalImageCdn.current
+    val japaneseTitles = LocalJapaneseTitles.current
+    val displayRating = remember(anime.rating, anime.adult) { displayRPlusRating(anime.rating, anime.adult) }
+    val titleText = remember(anime.id, anime.title, anime.originalTitle, japaneseTitles) {
+        displayAnimeTitle(anime, japaneseTitles)
+    }
 
-    Box(modifier.background(Color.Black)) {
+    BoxWithConstraints(modifier.background(Color.Black)) {
+        val posterRequest = remember(anime.posterUrl, imageCdn, maxWidth, maxHeight, platformContext) {
+            val wPx = with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
+            val hPx = with(density) { maxHeight.roundToPx().coerceAtLeast(1) }
+            ImageRequest.Builder(platformContext)
+                .data(imageCdnUrl(anime.posterUrl, imageCdn))
+                .size(wPx, hPx)
+                .precision(Precision.INEXACT)
+                .build()
+        }
         AsyncImage(
-            model = imageCdnUrl(anime.posterUrl, LocalImageCdn.current),
-            contentDescription = displayAnimeTitle(anime, LocalJapaneseTitles.current),
+            model = posterRequest,
+            contentDescription = titleText,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
@@ -473,6 +536,13 @@ private fun DetailPoster(anime: Anime, modifier: Modifier) {
         }
     }
 }
+
+private data class ResumeEpisodeInfo(
+    val resumeEpisode: Episode?,
+    val positionMs: Long,
+    val percent: Int?,
+    val nextEpisode: Episode?
+)
 
 @Composable
 private fun FloatingMoreInfoButton(
@@ -981,13 +1051,38 @@ private fun DetailInformation(
     val colors = LocalAnimeTvColors.current
     val titleFontSize = fsSp(if (isPortrait) tokens.fs17 else tokens.fs14)
     val bodyFontSize = fsSp(tokens.fs11)
-    val rightLabel = when {
-        !anime.duration.isNullOrBlank() -> "Duration:" to anime.duration
-        !anime.format.isNullOrBlank() -> "Type:" to anime.format
-        else -> null
+    val rightLabel = remember(anime.duration, anime.format) {
+        when {
+            !anime.duration.isNullOrBlank() -> "Duration:" to anime.duration
+            !anime.format.isNullOrBlank() -> "Type:" to anime.format
+            else -> null
+        }
     }
-    val statusText = anime.status?.takeIf { it.isNotBlank() } ?: "-"
-    val genreText = anime.genres.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "-"
+    val statusText = remember(anime.status) { anime.status?.takeIf { it.isNotBlank() } ?: "-" }
+    val genreText = remember(anime.genres) { anime.genres.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "-" }
+    val formattedSynopsis = remember(synopsis) {
+        synopsis?.takeIf { it.isNotBlank() }?.let(::displayAnimeSynopsis) ?: " "
+    }
+    val statusAnnotated = remember(statusText, colors.accent1) {
+        buildAnnotatedString {
+            withStyle(SpanStyle(color = Color.White)) { append("Status: ") }
+            withStyle(SpanStyle(color = colors.accent1)) { append(statusText) }
+        }
+    }
+    val rightAnnotated = remember(rightLabel, colors.accent1) {
+        rightLabel?.let { (label, value) ->
+            buildAnnotatedString {
+                withStyle(SpanStyle(color = Color.White)) { append("$label ") }
+                withStyle(SpanStyle(color = colors.accent1)) { append(value) }
+            }
+        }
+    }
+    val genreAnnotated = remember(genreText, colors.accent1) {
+        buildAnnotatedString {
+            withStyle(SpanStyle(color = Color.White)) { append("Genre: ") }
+            withStyle(SpanStyle(color = colors.accent1)) { append(genreText) }
+        }
+    }
 
     Box(
         modifier = modifier
@@ -1017,7 +1112,7 @@ private fun DetailInformation(
             )
 
             Text(
-                text = synopsis?.takeIf { it.isNotBlank() }?.let(::displayAnimeSynopsis) ?: " ",
+                text = formattedSynopsis,
                 color = Color(0xFFAAAAAA),
                 fontSize = bodyFontSize,
                 lineHeight = bodyFontSize * (if (isPortrait) 1.5f else 1.2f),
@@ -1036,22 +1131,16 @@ private fun DetailInformation(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = buildAnnotatedString {
-                        withStyle(SpanStyle(color = Color.White)) { append("Status: ") }
-                        withStyle(SpanStyle(color = colors.accent1)) { append(statusText) }
-                    },
+                    text = statusAnnotated,
                     fontSize = bodyFontSize,
                     lineHeight = bodyFontSize * 1.4f,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
-                rightLabel?.let { (label, value) ->
+                rightAnnotated?.let { labelText ->
                     Text(
-                        text = buildAnnotatedString {
-                            withStyle(SpanStyle(color = Color.White)) { append("$label ") }
-                            withStyle(SpanStyle(color = colors.accent1)) { append(value) }
-                        },
+                        text = labelText,
                         fontSize = bodyFontSize,
                         lineHeight = bodyFontSize * 1.4f,
                         maxLines = 1,
@@ -1062,10 +1151,7 @@ private fun DetailInformation(
             }
 
             Text(
-                text = buildAnnotatedString {
-                    withStyle(SpanStyle(color = Color.White)) { append("Genre: ") }
-                    withStyle(SpanStyle(color = colors.accent1)) { append(genreText) }
-                },
+                text = genreAnnotated,
                 fontSize = bodyFontSize,
                 lineHeight = bodyFontSize * (if (isBigFont && !isPortrait) 1.2f else 1.4f),
                 maxLines = if (isBigFont && !isPortrait) 2 else 3,

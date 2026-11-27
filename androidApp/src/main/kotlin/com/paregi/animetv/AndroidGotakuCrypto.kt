@@ -1,6 +1,7 @@
 package com.paregi.animetv
 
 import android.util.Base64
+import android.util.LruCache
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
@@ -38,6 +39,31 @@ internal object AndroidGotakuCrypto {
     )
     private val manifestSeed = "458e5403c40a73332706df406193dd6b040a2ea97a6bb59b52b294a61006e6ef"
         .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    private val secureRandom = object : ThreadLocal<SecureRandom>() {
+        override fun initialValue(): SecureRandom = SecureRandom()
+    }
+    private val apiKeyCache = LruCache<DerivedKeyCacheKey, ByteArray>(16)
+
+    private class DerivedKeyCacheKey(
+        private val version: Int,
+        private val seed: ByteArray,
+        private val info: String
+    ) {
+        override fun equals(other: Any?): Boolean =
+            this === other || (
+                other is DerivedKeyCacheKey &&
+                    version == other.version &&
+                    info == other.info &&
+                    seed.contentEquals(other.seed)
+                )
+
+        override fun hashCode(): Int {
+            var result = version
+            result = 31 * result + seed.contentHashCode()
+            result = 31 * result + info.hashCode()
+            return result
+        }
+    }
 
     fun decryptApi(
         body: ByteArray,
@@ -65,16 +91,16 @@ internal object AndroidGotakuCrypto {
             else -> apiSeed
         }
         val iv = blob.copyOfRange(1, 13)
-        val key = hkdf(seed, ByteArray(0), hkdfInfo.toByteArray(StandardCharsets.UTF_8), 32) ?: return null
-        val compressed = gcm(Cipher.DECRYPT_MODE, key, iv, blob.copyOfRange(13, blob.size)) ?: return null
+        val key = cachedApiKey(blobVersion, seed, hkdfInfo) ?: return null
+        val compressed = gcmSlice(Cipher.DECRYPT_MODE, key, iv, blob, 13, blob.size - 13) ?: return null
         return inflate(compressed)
     }
 
-    fun newNonce(): ByteArray = ByteArray(16).also(SecureRandom()::nextBytes)
+    fun newNonce(): ByteArray = ByteArray(16).also { requireNotNull(secureRandom.get()).nextBytes(it) }
 
     fun encryptManifest(stamp: String, nonce: ByteArray): String? {
         val payload = """{"nonce":"${encodeUrlSafe(nonce)}","stamp":"$stamp"}"""
-        val iv = ByteArray(12).also(SecureRandom()::nextBytes)
+        val iv = ByteArray(12).also { requireNotNull(secureRandom.get()).nextBytes(it) }
         val encrypted = gcm(Cipher.ENCRYPT_MODE, manifestSeed, iv, payload.toByteArray(StandardCharsets.UTF_8)) ?: return null
         return encodeUrlSafe(iv + encrypted)
     }
@@ -83,8 +109,16 @@ internal object AndroidGotakuCrypto {
         val blob = decodeUrlSafe(body) ?: return null
         if (blob.size < 28) return null
         val key = hkdf(manifestSeed, nonce, "manifest-resp|v1".toByteArray(StandardCharsets.UTF_8), 32) ?: return null
-        return gcm(Cipher.DECRYPT_MODE, key, blob.copyOfRange(0, 12), blob.copyOfRange(12, blob.size))
+        return gcmSlice(Cipher.DECRYPT_MODE, key, blob.copyOfRange(0, 12), blob, 12, blob.size - 12)
             ?.toString(StandardCharsets.UTF_8)
+    }
+
+    private fun cachedApiKey(version: Int, seed: ByteArray, info: String): ByteArray? {
+        val key = DerivedKeyCacheKey(version, seed, info)
+        apiKeyCache.get(key)?.let { return it }
+        val derived = hkdf(seed, ByteArray(0), info.toByteArray(StandardCharsets.UTF_8), 32) ?: return null
+        apiKeyCache.put(key, derived)
+        return derived
     }
 
     internal fun decodeUrlSafe(value: String): ByteArray? = runCatching {
@@ -118,12 +152,21 @@ internal object AndroidGotakuCrypto {
     }.getOrNull()
 
     internal fun gcm(mode: Int, key: ByteArray, iv: ByteArray, data: ByteArray): ByteArray? =
-        runCatching {
-            Cipher.getInstance("AES/GCM/NoPadding").run {
-                init(mode, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
-                doFinal(data)
-            }
-        }.getOrNull()
+        gcmSlice(mode, key, iv, data, 0, data.size)
+
+    private fun gcmSlice(
+        mode: Int,
+        key: ByteArray,
+        iv: ByteArray,
+        data: ByteArray,
+        offset: Int,
+        length: Int
+    ): ByteArray? = runCatching {
+        Cipher.getInstance("AES/GCM/NoPadding").run {
+            init(mode, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
+            doFinal(data, offset, length)
+        }
+    }.getOrNull()
 
     private fun inflate(data: ByteArray): String? = runCatching {
         InflaterInputStream(ByteArrayInputStream(data)).use { input ->

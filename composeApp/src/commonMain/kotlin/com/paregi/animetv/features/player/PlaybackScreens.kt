@@ -3,7 +3,6 @@ package com.paregi.animetv.features.player
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.animateColor
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.LinearEasing
@@ -63,16 +62,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,7 +82,9 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -119,6 +121,9 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
+import coil3.size.Precision
 import com.paregi.animetv.LocalNavigationSound
 import com.paregi.animetv.PlatformBackHandler
 import com.paregi.animetv.PlatformPlayer
@@ -156,6 +161,7 @@ import com.paregi.animetv.navigationFocusable
 import com.paregi.animetv.platformSubtitleFontFamily
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import kotlin.math.abs
@@ -797,17 +803,25 @@ internal fun PlaybackOsdContent(
     metadataQuality: String? = null,
     metadataRating: String? = null,
     settingsOverlayOpen: Boolean = false,
-    subtitles: List<SubtitleTrack> = emptyList()
+    subtitles: List<SubtitleTrack> = emptyList(),
+    positionMsProvider: () -> Long = { positionMs },
+    durationMsProvider: () -> Long = { durationMs },
+    bufferedPositionMsProvider: () -> Long = { bufferedPositionMs }
 ) {
     val tokens = LocalAnimeTvTokens.current
     val colors = LocalAnimeTvColors.current
     val performanceEffects = LocalPerformanceEffects.current
     val textShadowDisabled = performanceEffects.getOrElse(4) { false }
-    val shadowsDisabled = performanceEffects.getOrElse(2) { false }
-    val maskDisabled = performanceEffects.getOrElse(3) { false }
+    val shadowsDisabled = performanceEffects.getOrElse(2) { true }
+    val maskDisabled = performanceEffects.getOrElse(3) { true }
     val playClickSound = LocalNavigationSound.current
     val density = LocalDensity.current
+    val platformContext = LocalPlatformContext.current
+    val imageCdn = LocalImageCdn.current
     val coroutineScope = rememberCoroutineScope()
+    val readPositionMs by rememberUpdatedState(positionMsProvider)
+    val readDurationMs by rememberUpdatedState(durationMsProvider)
+    val readBufferedPositionMs by rememberUpdatedState(bufferedPositionMsProvider)
 
     val hasError = !errorMessage.isNullOrBlank()
     val menuZones = remember(episodes.isNotEmpty(), seasons.isNotEmpty(), related.isNotEmpty(), recommendations.isNotEmpty()) {
@@ -916,11 +930,22 @@ internal fun PlaybackOsdContent(
         return false
     }
 
-    val activeSkip = if (hasError) null else skipRanges.firstOrNull { range ->
-        (range.kind == SkipRange.Kind.INTRO || range.kind == SkipRange.Kind.OUTRO) &&
-            positionMs > 3_000L &&
-            positionMs / 1000.0 >= range.startSeconds &&
-            positionMs / 1000.0 < range.endSeconds
+    val activeSkip by remember(hasError, skipRanges) {
+        derivedStateOf {
+            if (hasError) null
+            else {
+                val pos = readPositionMs()
+                if (pos <= 3_000L) null
+                else {
+                    val posSec = pos / 1000.0
+                    skipRanges.firstOrNull { range ->
+                        (range.kind == SkipRange.Kind.INTRO || range.kind == SkipRange.Kind.OUTRO) &&
+                            posSec >= range.startSeconds &&
+                            posSec < range.endSeconds
+                    }
+                }
+            }
+        }
     }
 
     LaunchedEffect(activeSkip, osdVisible, autoSkipIntro) {
@@ -932,8 +957,6 @@ internal fun PlaybackOsdContent(
     }
 
     // Track accumulated gesture seek position via fresh state refs so pointerInput never sees stale times.
-    val currentPosState by rememberUpdatedState(positionMs)
-    val currentDurState by rememberUpdatedState(durationMs)
     val currentSeekSeconds by rememberUpdatedState(seekSeconds)
     val currentOsdVisible by rememberUpdatedState(osdVisible)
     val currentSettingsOverlayOpen by rememberUpdatedState(settingsOverlayOpen)
@@ -953,14 +976,14 @@ internal fun PlaybackOsdContent(
     }
     val gestureClock = remember { TimeSource.Monotonic.markNow() }
     var gestureSeekMs by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(positionMs) {
-        if (gestureSeekMs != null && abs(positionMs - (gestureSeekMs ?: positionMs)) < 1_000L) {
-            gestureSeekMs = null
-        }
+    LaunchedEffect(gestureSeekMs) {
+        val target = gestureSeekMs ?: return@LaunchedEffect
+        snapshotFlow { readPositionMs() }.first { abs(it - target) < 1_000L }
+        gestureSeekMs = null
     }
     fun performDeltaSeek(direction: Int) {
-        val end = currentDurState.coerceAtLeast(0L)
-        val base = gestureSeekMs ?: currentPosState
+        val end = readDurationMs().coerceAtLeast(0L)
+        val base = gestureSeekMs ?: readPositionMs()
         val deltaMs = direction * currentSeekSeconds.coerceAtLeast(1) * 1_000L
         val target = (base + deltaMs).let { if (end > 0L) it.coerceIn(0L, end) else it.coerceAtLeast(0L) }
         gestureSeekMs = target
@@ -1397,6 +1420,7 @@ internal fun PlaybackOsdContent(
             }
     ) {
         val screenHeightPx = with(density) { maxHeight.toPx() }.roundToInt().coerceAtLeast(1)
+        val screenWidthPx = with(density) { maxWidth.toPx() }.roundToInt().coerceAtLeast(1)
 
         // Video player surface sits at the bottom of the stack.
         videoContent()
@@ -1404,10 +1428,20 @@ internal fun PlaybackOsdContent(
         // Banner/poster backdrop stays visible until the first video frame renders (or on error).
         if (!firstFrameRendered || hasError) {
             Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-                val model = imageCdnUrl(artworkUrl, LocalImageCdn.current)
-                if (!model.isNullOrBlank()) {
+                val modelUrl = imageCdnUrl(artworkUrl, imageCdn)
+                val backdropReqW = screenWidthPx.coerceAtMost(1280)
+                val backdropReqH = screenHeightPx.coerceAtMost(1280)
+                val backdropRequest = remember(modelUrl, backdropReqW, backdropReqH, platformContext) {
+                    if (modelUrl.isNullOrBlank()) null
+                    else ImageRequest.Builder(platformContext)
+                        .data(modelUrl)
+                        .size(backdropReqW, backdropReqH)
+                        .precision(Precision.INEXACT)
+                        .build()
+                }
+                if (backdropRequest != null) {
                     AsyncImage(
-                        model = model,
+                        model = backdropRequest,
                         contentDescription = metadataTitle,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
@@ -1496,9 +1530,12 @@ internal fun PlaybackOsdContent(
             menuZones = menuZones,
             screenHeightPx = screenHeightPx,
             episodeLabel = episodeLabel,
-            positionMs = gestureSeekMs ?: positionMs,
-            durationMs = durationMs,
-            bufferedPositionMs = bufferedPositionMs,
+            positionMs = 0L,
+            durationMs = 0L,
+            bufferedPositionMs = 0L,
+            positionMsProvider = { gestureSeekMs ?: readPositionMs() },
+            durationMsProvider = { readDurationMs() },
+            bufferedPositionMsProvider = { readBufferedPositionMs() },
             isPlaying = isPlaying,
             isLoading = isLoading,
             isEnded = isEnded,
@@ -1549,6 +1586,7 @@ internal fun PlaybackOsdContent(
             },
             tokens = tokens,
             colors = colors,
+            shadowsDisabled = shadowsDisabled,
             maskDisabled = maskDisabled,
             textShadowDisabled = textShadowDisabled
         )
@@ -1579,7 +1617,8 @@ internal fun PlaybackOsdContent(
                                 top = tokens.u * 3f + (if (tokens.portrait) tokens.sysStatHeight else 0.dp)
                             )
                     )
-                    val showCenterTouchControls = !(isLoading && durationMs <= 0L) && !hasError
+                    val hasDuration by remember { derivedStateOf { readDurationMs() > 0L } }
+                    val showCenterTouchControls = !(isLoading && !hasDuration) && !hasError
                     if (showCenterTouchControls) {
                         val sideButtonSize = tokens.fs30 + tokens.u * 3f
                         Row(
@@ -1889,8 +1928,8 @@ private fun PlaybackMetaLayer(
     val colors = LocalAnimeTvColors.current
     val performanceEffects = LocalPerformanceEffects.current
     val textShadowDisabled = performanceEffects.getOrElse(4) { false }
-    val shadowsDisabled = performanceEffects.getOrElse(2) { false }
-    val maskDisabled = performanceEffects.getOrElse(3) { false }
+    val shadowsDisabled = performanceEffects.getOrElse(2) { true }
+    val maskDisabled = performanceEffects.getOrElse(3) { true }
 
     val metaAlpha by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
@@ -2414,8 +2453,12 @@ private fun PlaybackActionsLayer(
     onAnimeSelected: (Anime) -> Unit,
     tokens: AnimeTvTokens,
     colors: AnimeTvThemeColors,
+    shadowsDisabled: Boolean = true,
     maskDisabled: Boolean,
-    textShadowDisabled: Boolean
+    textShadowDisabled: Boolean,
+    positionMsProvider: () -> Long = { positionMs },
+    durationMsProvider: () -> Long = { durationMs },
+    bufferedPositionMsProvider: () -> Long = { bufferedPositionMs }
 ) {
     val density = LocalDensity.current
     val hasError = !errorMessage.isNullOrBlank()
@@ -2549,6 +2592,9 @@ private fun PlaybackActionsLayer(
                 positionMs = positionMs,
                 durationMs = durationMs,
                 bufferedPositionMs = bufferedPositionMs,
+                positionMsProvider = positionMsProvider,
+                durationMsProvider = durationMsProvider,
+                bufferedPositionMsProvider = bufferedPositionMsProvider,
                 isPlaying = isPlaying,
                 isLoading = isLoading,
                 isEnded = isEnded,
@@ -2563,6 +2609,7 @@ private fun PlaybackActionsLayer(
                 onTogglePlay = onTogglePlay,
                 tokens = tokens,
                 colors = colors,
+                shadowsDisabled = shadowsDisabled,
                 textShadowDisabled = textShadowDisabled,
                 modifier = Modifier.onSizeChanged { tracksHeightPx = it.height }
             )
@@ -2663,6 +2710,82 @@ private fun PlaybackActionsLayer(
 }
 
 @Composable
+private fun rememberLoadingSpinAngle(spinning: Boolean): State<Float>? {
+    if (!spinning) return null
+    val infiniteSpin = rememberInfiniteTransition(label = "pb-track-spin")
+    return infiniteSpin.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(4_000, easing = LinearEasing), RepeatMode.Restart),
+        label = "pb-track-spin-deg"
+    )
+}
+
+@Composable
+private fun PlaybackPositionText(
+    hasError: Boolean,
+    statusTextOverride: String?,
+    isLoading: Boolean,
+    hasDuration: Boolean,
+    readPositionMs: () -> Long,
+    readDurationMs: () -> Long,
+    tokens: AnimeTvTokens,
+    trackTextShadow: Shadow?,
+    modifier: Modifier = Modifier
+) {
+    val displayPosText by remember(hasError, statusTextOverride, isLoading, hasDuration) {
+        derivedStateOf {
+            when {
+                hasError -> "PLAYBACK ERROR"
+                !statusTextOverride.isNullOrBlank() -> statusTextOverride
+                !hasDuration -> if (isLoading) "LOADING SERVER" else "-"
+                else -> formatPlaybackTime(
+                    (readPositionMs().coerceAtLeast(0L) / 1000L) * 1000L,
+                    readDurationMs()
+                )
+            }
+        }
+    }
+    Text(
+        text = displayPosText,
+        color = Color.White,
+        fontSize = fsSp(tokens.fs13),
+        fontWeight = FontWeight.Bold,
+        lineHeight = fsSp(tokens.fs13) * 1.1f,
+        letterSpacing = 0.sp,
+        style = LocalTextStyle.current.copy(shadow = trackTextShadow),
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun PlaybackDurationText(
+    readDurationMs: () -> Long,
+    tokens: AnimeTvTokens,
+    trackTextShadow: Shadow?,
+    modifier: Modifier = Modifier
+) {
+    val displayDurText by remember {
+        derivedStateOf {
+            val dur = readDurationMs()
+            if (dur > 0L) formatPlaybackTime(dur, dur) else ""
+        }
+    }
+    if (displayDurText.isNotEmpty()) {
+        Text(
+            text = displayDurText,
+            color = Color.White,
+            fontSize = fsSp(tokens.fs13),
+            fontWeight = FontWeight.Bold,
+            lineHeight = fsSp(tokens.fs13) * 1.1f,
+            letterSpacing = 0.sp,
+            style = LocalTextStyle.current.copy(shadow = trackTextShadow),
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
 private fun PlaybackTracksSection(
     osdVisible: Boolean,
     active: Boolean,
@@ -2685,31 +2808,25 @@ private fun PlaybackTracksSection(
     onTogglePlay: () -> Unit,
     tokens: AnimeTvTokens,
     colors: AnimeTvThemeColors,
+    shadowsDisabled: Boolean = true,
     textShadowDisabled: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    positionMsProvider: () -> Long = { positionMs },
+    durationMsProvider: () -> Long = { durationMs },
+    bufferedPositionMsProvider: () -> Long = { bufferedPositionMs }
 ) {
-    val trackTextShadow = if (!textShadowDisabled) {
-        Shadow(Color.Black, Offset(1f, 1f), 4f)
-    } else null
-
-    val infiniteSpin = rememberInfiniteTransition(label = "pb-track-spin")
-    val spinAngle by infiniteSpin.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(4_000, easing = LinearEasing), RepeatMode.Restart),
-        label = "pb-track-spin-deg"
-    )
+    val trackTextShadow = remember(textShadowDisabled) {
+        if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
+    }
+    val readPositionMs by rememberUpdatedState(positionMsProvider)
+    val readDurationMs by rememberUpdatedState(durationMsProvider)
+    val readBufferedPositionMs by rememberUpdatedState(bufferedPositionMsProvider)
+    val hasDuration by remember { derivedStateOf { readDurationMs() > 0L } }
+    val isSpinning = !hasError && isLoading && !hasDuration
+    val spinAngleState = rememberLoadingSpinAngle(spinning = isSpinning && tokens.tim10s > 0)
 
     val currentOnActivate by rememberUpdatedState(onActivate)
     val currentOnSeekTarget by rememberUpdatedState(onSeekTarget)
-    val currentDurationMs by rememberUpdatedState(durationMs)
-    val displayPosText = when {
-        hasError -> "PLAYBACK ERROR"
-        !statusTextOverride.isNullOrBlank() -> statusTextOverride
-        durationMs <= 0L -> if (isLoading) "LOADING SERVER" else "-"
-        else -> formatPlaybackTime(positionMs, durationMs)
-    }
-    val displayDurText = if (durationMs > 0L) formatPlaybackTime(durationMs, durationMs) else ""
 
     Box(
         modifier = modifier
@@ -2734,7 +2851,7 @@ private fun PlaybackTracksSection(
                         var cancelled = false
 
                         fun seekAt(x: Float) {
-                            val dur = currentDurationMs
+                            val dur = readDurationMs()
                             if (dur > 0L && size.width > 0) {
                                 val pct = (x / size.width).coerceIn(0f, 1f)
                                 currentOnSeekTarget((pct * dur).toLong())
@@ -2800,18 +2917,19 @@ private fun PlaybackTracksSection(
                 ) {
                     val ctlIcon = when {
                         hasError -> IconGlyphs.Warning
-                        isLoading && durationMs <= 0L -> IconGlyphs.ProgressActivity
+                        isLoading && !hasDuration -> IconGlyphs.ProgressActivity
                         isEnded -> IconGlyphs.Replay
                         isPlaying -> IconGlyphs.Pause
                         else -> IconGlyphs.Play
                     }
-                    val isSpinning = !hasError && isLoading && durationMs <= 0L
                     val density = LocalDensity.current
                     val ctlSize = tokens.u * 2f
                     Box(
                         modifier = Modifier
                             .size(ctlSize)
-                            .graphicsLayer { if (isSpinning) rotationZ = spinAngle },
+                            .graphicsLayer {
+                                if (isSpinning && spinAngleState != null) rotationZ = spinAngleState.value
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         if (active && !textShadowDisabled) {
@@ -2869,14 +2987,15 @@ private fun PlaybackTracksSection(
                             )
                         )
                     }
-                    Text(
-                        text = displayPosText,
-                        color = Color.White,
-                        fontSize = fsSp(tokens.fs13),
-                        fontWeight = FontWeight.Bold,
-                        lineHeight = fsSp(tokens.fs13) * 1.1f,
-                        letterSpacing = 0.sp,
-                        style = LocalTextStyle.current.copy(shadow = trackTextShadow),
+                    PlaybackPositionText(
+                        hasError = hasError,
+                        statusTextOverride = statusTextOverride,
+                        isLoading = isLoading,
+                        hasDuration = hasDuration,
+                        readPositionMs = { readPositionMs() },
+                        readDurationMs = { readDurationMs() },
+                        tokens = tokens,
+                        trackTextShadow = trackTextShadow,
                         modifier = Modifier.padding(start = tokens.vw * 0.5f)
                     )
                 }
@@ -2898,26 +3017,31 @@ private fun PlaybackTracksSection(
                         .padding(horizontal = tokens.vw * 15f)
                 )
 
-                if (displayDurText.isNotEmpty()) {
-                    Text(
-                        text = displayDurText,
-                        color = Color.White,
-                        fontSize = fsSp(tokens.fs13),
-                        fontWeight = FontWeight.Bold,
-                        lineHeight = fsSp(tokens.fs13) * 1.1f,
-                        letterSpacing = 0.sp,
-                        style = LocalTextStyle.current.copy(shadow = trackTextShadow),
-                        modifier = Modifier.align(Alignment.CenterEnd)
-                    )
-                }
+                PlaybackDurationText(
+                    readDurationMs = { readDurationMs() },
+                    tokens = tokens,
+                    trackTextShadow = trackTextShadow,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                )
             }
 
             // #pb_track seek bar at padding(top = 2.5vw), sitting cleanly inside 4vw collapsed peek.
             val outlineWidth = (tokens.vw * if (active) 0.1f else 0.05f).coerceAtLeast(0.5.dp)
-            val outlineShape = RoundedCornerShape(tokens.vw * 0.6f)
-            val barShape = RoundedCornerShape(tokens.vw * 0.5f)
+            val outlineShape = remember(tokens.vw) { RoundedCornerShape(tokens.vw * 0.6f) }
+            val barShape = remember(tokens.vw) { RoundedCornerShape(tokens.vw * 0.5f) }
             val trackTopBase = if (tokens.portrait) tokens.u * 2.7f else tokens.vw * 2.5f
-            BoxWithConstraints(
+            val visibleSkipRanges = remember(skipRanges) {
+                skipRanges.filter { it.kind == SkipRange.Kind.INTRO || it.kind == SkipRange.Kind.OUTRO }.take(2)
+            }
+            val fillBrush = remember(active, colors) {
+                if (active) Brush.verticalGradient(listOf(colors.primary3, colors.primary1))
+                else Brush.verticalGradient(listOf(colors.dimm1, colors.dimm1))
+            }
+            val trackBgColor = Color.White.copy(alpha = if (active) 0.9f else 0.5f)
+            val bufferColor = colors.accent1.copy(alpha = 0.5f)
+            val skipColor = colors.primaryBg.copy(alpha = 0.6f)
+            val cornerPx = with(LocalDensity.current) { (tokens.vw * 0.5f).toPx() }
+            Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
@@ -2948,8 +3072,10 @@ private fun PlaybackTracksSection(
                     }
                     .navigationFocusable(enabled = focusEnabled)
                     .then(
-                        if (active) Modifier.shadow(tokens.vw * 0.56f, outlineShape, clip = false)
-                        else Modifier.shadow(tokens.vw * 0.03f, outlineShape, clip = false)
+                        if (!shadowsDisabled) {
+                            if (active) Modifier.shadow(tokens.vw * 0.56f, outlineShape, clip = false)
+                            else Modifier.shadow(tokens.vw * 0.03f, outlineShape, clip = false)
+                        } else Modifier
                     )
                     .border(
                         width = outlineWidth,
@@ -2958,63 +3084,47 @@ private fun PlaybackTracksSection(
                     )
                     .padding(outlineWidth)
             ) {
-                val trackWidth = maxWidth
-                val safeDuration = durationMs.coerceAtLeast(1L)
-                val progressPct = if (durationMs > 0L) (positionMs.toFloat() / safeDuration).coerceIn(0f, 1f) else 0f
-                val bufferPct = if (durationMs > 0L) (bufferedPositionMs.toFloat() / safeDuration).coerceIn(0f, 1f) else 0f
-
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(tokens.vw * 0.6f)
                         .clip(barShape)
-                        .background(Color.White.copy(alpha = if (active) 0.9f else 0.5f))
-                ) {
-                    // z = 1: buffer bar
-                    if (bufferPct > 0f) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .fillMaxWidth(bufferPct)
-                                .clip(barShape)
-                                .background(colors.accent1.copy(alpha = 0.5f))
-                        )
-                    }
-                    // z = 2: progress fill
-                    if (progressPct > 0f) {
-                        val fillBrush = if (active) {
-                            Brush.verticalGradient(listOf(colors.primary3, colors.primary1))
-                        } else {
-                            Brush.verticalGradient(listOf(colors.dimm1, colors.dimm1))
-                        }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .fillMaxWidth(progressPct)
-                                .clip(barShape)
-                                .background(fillBrush)
-                        )
-                    }
-                    // z = 3: skip markers rendered ON TOP of progress fill
-                    if (durationMs > 0L) {
-                        skipRanges.filter { it.kind == SkipRange.Kind.INTRO || it.kind == SkipRange.Kind.OUTRO }
-                            .take(2)
-                            .forEach { range ->
-                                val startPct = (range.startSeconds * 1000.0 / safeDuration).toFloat().coerceIn(0f, 1f)
-                                val endPct = (range.endSeconds * 1000.0 / safeDuration).toFloat().coerceIn(0f, 1f)
-                                val widthPct = (endPct - startPct).coerceAtLeast(0f)
-                                if (widthPct > 0f) {
-                                    Box(
-                                        modifier = Modifier
-                                            .offset(x = trackWidth * startPct)
-                                            .width(trackWidth * widthPct)
-                                            .fillMaxHeight()
-                                            .background(colors.primaryBg.copy(alpha = 0.6f))
+                        .drawBehind {
+                            drawRect(trackBgColor)
+                            val dur = readDurationMs()
+                            if (dur > 0L) {
+                                val safeDur = dur.toFloat()
+                                val bufferPct = (readBufferedPositionMs().toFloat() / safeDur).coerceIn(0f, 1f)
+                                if (bufferPct > 0f) {
+                                    drawRoundRect(
+                                        color = bufferColor,
+                                        size = Size(size.width * bufferPct, size.height),
+                                        cornerRadius = CornerRadius(cornerPx, cornerPx)
                                     )
                                 }
+                                val progressPct = (readPositionMs().toFloat() / safeDur).coerceIn(0f, 1f)
+                                if (progressPct > 0f) {
+                                    drawRoundRect(
+                                        brush = fillBrush,
+                                        size = Size(size.width * progressPct, size.height),
+                                        cornerRadius = CornerRadius(cornerPx, cornerPx)
+                                    )
+                                }
+                                for (range in visibleSkipRanges) {
+                                    val startPct = (range.startSeconds * 1000.0 / dur).toFloat().coerceIn(0f, 1f)
+                                    val endPct = (range.endSeconds * 1000.0 / dur).toFloat().coerceIn(0f, 1f)
+                                    val widthPct = (endPct - startPct).coerceAtLeast(0f)
+                                    if (widthPct > 0f) {
+                                        drawRect(
+                                            color = skipColor,
+                                            topLeft = Offset(size.width * startPct, 0f),
+                                            size = Size(size.width * widthPct, size.height)
+                                        )
+                                    }
+                                }
                             }
-                    }
-                }
+                        }
+                )
             }
         }
     }
@@ -3088,19 +3198,22 @@ private fun PlaybackEpisodesSection(
         }
     }
 
-    val playingTransition = rememberInfiniteTransition(label = "pb-ep-playing")
-    val playingColor by playingTransition.animateColor(
-        initialValue = Color.White,
-        targetValue = Color(0xFF33FF33),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = tokens.tim10s.coerceAtLeast(300), easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pb-ep-playing-color"
-    )
-    val shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
+    val shadow = remember(textShadowDisabled) {
+        if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
+    }
     val density = LocalDensity.current
     val hintSlidePx = with(density) { (tokens.vw * 10f).roundToPx() }
+    val platformContext = LocalPlatformContext.current
+    val imageCdn = LocalImageCdn.current
+    val epThumbW = with(density) { (tokens.vw * 10f).roundToPx() }.coerceAtLeast(1)
+    val epThumbH = with(density) { (tokens.vw * 6f).roundToPx() }.coerceAtLeast(1)
+    val epShape = remember(tokens.vw) { RoundedCornerShape(tokens.vw * 0.2f) }
+    val epScrimBrush = remember {
+        Brush.verticalGradient(
+            0f to Color.Black.copy(alpha = 0.1f),
+            1f to Color.Black.copy(alpha = 0.6f)
+        )
+    }
 
     Column(
         modifier = modifier
@@ -3196,11 +3309,11 @@ private fun PlaybackEpisodesSection(
                         modifier = Modifier
                             .width(tokens.vw * 10f)
                             .height(tokens.vw * 6f)
-                            .clip(RoundedCornerShape(tokens.vw * 0.2f))
+                            .clip(epShape)
                             .background(tileBg)
                             .then(
                                 if (!ep.imageUrl.isNullOrBlank() && focused) {
-                                    Modifier.border(tokens.vw * 0.15f, Color.White, RoundedCornerShape(tokens.vw * 0.2f))
+                                    Modifier.border(tokens.vw * 0.15f, Color.White, epShape)
                                 } else Modifier
                             )
                             .hoverable(interactionSource)
@@ -3229,21 +3342,23 @@ private fun PlaybackEpisodesSection(
                             .navigationFocusable(enabled = focusEnabled),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (!ep.imageUrl.isNullOrBlank()) {
+                        val thumbModel = remember(ep.imageUrl, imageCdn, epThumbW, epThumbH, platformContext) {
+                            val url = imageCdnUrl(ep.imageUrl, imageCdn)
+                            if (url.isNullOrBlank()) null
+                            else ImageRequest.Builder(platformContext)
+                                .data(url)
+                                .size(epThumbW, epThumbH)
+                                .precision(Precision.INEXACT)
+                                .build()
+                        }
+                        if (thumbModel != null) {
                             AsyncImage(
-                                model = imageCdnUrl(ep.imageUrl, LocalImageCdn.current),
+                                model = thumbModel,
                                 contentDescription = ep.title ?: "Episode ${ep.number}",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
                             )
-                            Box(
-                                Modifier.fillMaxSize().background(
-                                    Brush.verticalGradient(
-                                        0f to Color.Black.copy(alpha = 0.1f),
-                                        1f to Color.Black.copy(alpha = 0.6f)
-                                    )
-                                )
-                            )
+                            Box(Modifier.fillMaxSize().background(epScrimBrush))
                         }
 
                         Text(
@@ -3318,7 +3433,7 @@ private fun PlaybackEpisodesSection(
                     if (isPlaying) {
                         Text(
                             text = "PLAYING",
-                            color = playingColor,
+                            color = Color(0xFF33FF33),
                             fontSize = fsSp(tokens.fs10),
                             fontWeight = FontWeight.Bold,
                             lineHeight = fsSp(tokens.fs10) * 1.15f,
@@ -3620,46 +3735,50 @@ private fun PlaybackSkipEventPill(
     onSkip: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var pillAlpha by remember(skipRange) { mutableFloatStateOf(1f) }
-    var rippleProgress by remember(skipRange, autoSkip) { mutableFloatStateOf(0f) }
+    val pillAlphaAnim = remember(skipRange) { Animatable(1f) }
+    val rippleAnim = remember(skipRange, autoSkip) { Animatable(0f) }
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
+    val isHoveredState = rememberUpdatedState(hovered)
 
-    LaunchedEffect(skipRange, tokens.isTouch) {
-        pillAlpha = 1f
+    LaunchedEffect(skipRange, tokens.isTouch, tokens.tim5s) {
+        pillAlphaAnim.snapTo(1f)
         delay(3_200L)
         val endAlpha = if (tokens.isTouch) 0.3f else 0f
-        val steps = 16
-        repeat(steps) { idx ->
-            delay(50L)
-            val t = (idx + 1).toFloat() / steps
-            pillAlpha = 1f + (endAlpha - 1f) * t
+        if (tokens.tim5s == 0) {
+            pillAlphaAnim.snapTo(endAlpha)
+        } else {
+            pillAlphaAnim.animateTo(endAlpha, tween(durationMillis = 800, easing = LinearEasing))
         }
     }
 
-    LaunchedEffect(skipRange, autoSkip) {
+    LaunchedEffect(skipRange, autoSkip, tokens.tim5s) {
         if (autoSkip) {
-            rippleProgress = 0f
-            val steps = 40
-            repeat(steps) { idx ->
-                delay(50L)
-                rippleProgress = (idx + 1).toFloat() / steps
+            rippleAnim.snapTo(0f)
+            if (tokens.tim5s == 0) {
+                rippleAnim.snapTo(1f)
+            } else {
+                rippleAnim.animateTo(1f, tween(durationMillis = 2_000, easing = LinearEasing))
             }
         } else {
-            rippleProgress = 0f
+            rippleAnim.snapTo(0f)
         }
     }
 
-    val interactive = hovered || pillAlpha > 0.02f || tokens.isTouch
-    val displayAlpha = if (hovered) 1f else pillAlpha
+    val interactive by remember(tokens.isTouch) {
+        derivedStateOf { hovered || tokens.isTouch || pillAlphaAnim.value > 0.02f }
+    }
     val pillBg = if (hovered) Color(200, 200, 200).copy(alpha = 0.7f) else Color.White.copy(alpha = 0.4f)
-    val shape = RoundedCornerShape(tokens.vw * 0.3f)
-    val shadow = if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
+    val shape = remember(tokens.vw) { RoundedCornerShape(tokens.vw * 0.3f) }
+    val shadow = remember(textShadowDisabled) {
+        if (!textShadowDisabled) Shadow(Color.Black, Offset(1f, 1f), 4f) else null
+    }
     val label = if (skipRange.kind == SkipRange.Kind.INTRO) "SKIP INTRO" else "SKIP OUTRO"
+    val baseRadiusPx = with(LocalDensity.current) { (tokens.vw * 5f).toPx() }
 
     Box(
         modifier = modifier
-            .graphicsLayer { alpha = displayAlpha }
+            .graphicsLayer { alpha = if (isHoveredState.value) 1f else pillAlphaAnim.value }
             .then(if (!shadowsDisabled) Modifier.shadow(tokens.vw * 0.3f, shape, clip = false) else Modifier)
             .clip(shape)
             .background(pillBg)
@@ -3668,18 +3787,21 @@ private fun PlaybackSkipEventPill(
             .navigationClickable(enabled = interactive, onClick = onSkip)
             .navigationFocusable(enabled = interactive)
     ) {
-        if (autoSkip && rippleProgress > 0f) {
-            val circleScale = 3f * rippleProgress
-            val circleAlpha = if (rippleProgress < 0.5f) rippleProgress * 2f else 1f
+        if (autoSkip) {
             Box(
                 modifier = Modifier
                     .matchParentSize()
                     .drawWithContent {
-                        drawCircle(
-                            color = colors.primary2.copy(alpha = circleAlpha),
-                            radius = (tokens.vw * 5f).toPx() * circleScale,
-                            center = Offset.Zero
-                        )
+                        val p = rippleAnim.value
+                        if (p > 0f) {
+                            val circleScale = 3f * p
+                            val circleAlpha = if (p < 0.5f) p * 2f else 1f
+                            drawCircle(
+                                color = colors.primary2.copy(alpha = circleAlpha),
+                                radius = baseRadiusPx * circleScale,
+                                center = Offset.Zero
+                            )
+                        }
                         drawContent()
                     }
             )
@@ -4085,23 +4207,27 @@ internal fun VttSubtitleCueOverlay(
 
     val density = LocalDensity.current
     val outlineStrokePx = with(density) { (tokens.vw * outlineVw).toPx() }
-    val dropShadow = Shadow(
-        color = if (outlineIndex == 0) outlineColor else Color(0x800A0A0A),
-        offset = if (outlineIndex == 0) Offset.Zero else with(density) {
-            val d = tokens.vw * (0.1f + outlineIndex * 0.0375f)
-            Offset(d.toPx(), d.toPx())
-        },
-        blurRadius = with(density) { (tokens.vw * 0.1f).toPx() }.coerceAtLeast(1f)
-    )
+    val dropShadow = remember(outlineIndex, outlineColor, tokens.vw, density) {
+        Shadow(
+            color = if (outlineIndex == 0) outlineColor else Color(0x800A0A0A),
+            offset = if (outlineIndex == 0) Offset.Zero else with(density) {
+                val d = tokens.vw * (0.1f + outlineIndex * 0.0375f)
+                Offset(d.toPx(), d.toPx())
+            },
+            blurRadius = with(density) { (tokens.vw * 0.1f).toPx() }.coerceAtLeast(1f)
+        )
+    }
 
-    val baseStyle = TextStyle(
-        fontFamily = fontFamily,
-        fontSize = fontSize,
-        fontWeight = fontWeight,
-        textAlign = TextAlign.Center,
-        lineHeight = fontSize * lineHeightMultiplier,
-        letterSpacing = 0.sp
-    )
+    val baseStyle = remember(fontFamily, fontSize, fontWeight, lineHeightMultiplier) {
+        TextStyle(
+            fontFamily = fontFamily,
+            fontSize = fontSize,
+            fontWeight = fontWeight,
+            textAlign = TextAlign.Center,
+            lineHeight = fontSize * lineHeightMultiplier,
+            letterSpacing = 0.sp
+        )
+    }
 
     ProvideTightPlaybackTextStyle {
         Box(

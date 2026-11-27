@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/wallpaper_gallery_*,@drawable/wallpaper_thumb_*,@drawable/asset_*,@drawable/zoro,@drawable/chainsaw,@drawable/pochita,@drawable/reze,@drawable/sukuna,@drawable/gotouhitori,@drawable/saber,@drawable/nobara,@drawable/power,@drawable/ryo,@drawable/igris,@drawable/sungjinwoo,@drawable/chopper,@drawable/faputa,@drawable/pain,@drawable/noimg,@drawable/app_banner_paregi,@drawable/ic_*,@font/paregi_icons,@font/firac" />

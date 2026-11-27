@@ -1,7 +1,5 @@
 package com.paregi.animetv.features.settings
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
@@ -27,11 +25,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -54,7 +49,6 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -104,6 +98,58 @@ import kotlinx.coroutines.yield
 
 private const val ICON_SUBTITLES = "\uE048"
 
+private val VIDEO_SCALING_OPTIONS = listOf("Normal", "Cover", "Stretch")
+private val VIDEO_QUALITY_OPTIONS = listOf("Auto", "High", "Medium", "Low")
+private val VIDEO_BUFFER_OPTIONS = listOf(
+    "30 Seconds (Low RAM)",
+    "1 Minute",
+    "2 Minutes (Recommended)",
+    "5 Minutes",
+    "10 Minutes (High RAM)"
+)
+private val CLOSE_CONFIRM_OPTIONS = listOf("Double Back", "Close Confirmation", "Close Directly")
+private val FONT_SIZE_OPTIONS = listOf("Small", "Medium", "Large", "Larger")
+private val LOGIN_STYLE_OPTIONS = listOf("Static Style", "Follow User Theme", "Follow User Theme and Wallpaper")
+private val ANIMATION_OPTIONS = listOf("Normal", "Fast", "Faster", "No Transition")
+private val EXIT_MODE_OPTIONS = listOf(
+    "Exit directly",
+    "Confirm to exit",
+    "Back to login screen",
+    "Open sidebar before exit",
+    "Sidebar to login screen"
+)
+private val TRAILER_OPTIONS = listOf("No trailer", "Trailer without sound", "Trailer with sound")
+private val HTTP_CLIENT_OPTIONS = listOf(
+    "OkHttp with DoH Support",
+    "Generic HttpClient",
+    "Cronet - Chromium Networking"
+)
+private val PROGRESS_MODE_OPTIONS = listOf(
+    "Start playing",
+    "Watched 25%",
+    "Watched 50%",
+    "Watched 75%",
+    "Finish watching"
+)
+private val AUTO_TRACKING_OPTIONS = listOf(
+    "Do nothing",
+    "Show tracking dialog",
+    "Auto add to AniList",
+    "Auto add to MAL",
+    "Auto add to AniList and MAL"
+)
+private val PERFORMANCE_FULL_NAMES = listOf("Blur Effect", "Scale Effect", "Drop Shadow", "Mask Effect", "Text Shadow")
+private val PERFORMANCE_SHORT_NAMES = listOf("Blur", "Scale", "Shadow", "Mask", "Text")
+private val PERFORMANCE_ICONS = listOf(
+    IconGlyphs.BlurOn,
+    IconGlyphs.Resize,
+    IconGlyphs.ShadowIcon,
+    IconGlyphs.Gradient,
+    IconGlyphs.TextFormat
+)
+private val PERFORMANCE_DEFAULTS = listOf(true, false, true, true, false)
+private val CACHE_SIZES_MB = listOf(5, 10, 20, 30, 50, 80, 100, 120, 150)
+
 private enum class ValuePickerType {
     VIDEO_SCALING,
     VIDEO_QUALITY,
@@ -150,18 +196,12 @@ internal fun SettingsScreen(
     val uriHandler = LocalUriHandler.current
     val firstItemRequester = remember { FocusRequester() }
 
-    var entered by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        entered = true
         if (!tokens.isTouch) {
             yield()
             runCatching { firstItemRequester.requestFocus() }
         }
     }
-    val slideProgress by animateFloatAsState(
-        targetValue = if (entered) 1f else 0f,
-        animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
-    )
 
     var needReload by remember { mutableStateOf(false) }
     val currentOnReloadNeeded by rememberUpdatedState(onReloadNeeded)
@@ -287,70 +327,25 @@ internal fun SettingsScreen(
         }
     }
 
-    val videoScalingOptions = listOf("Normal", "Cover", "Stretch")
-    val videoQualityOptions = listOf("Auto", "High", "Medium", "Low")
-    val videoBufferOptions = listOf(
-        "30 Seconds (Low RAM)",
-        "1 Minute",
-        "2 Minutes (Recommended)",
-        "5 Minutes",
-        "10 Minutes (High RAM)"
-    )
-    val closeConfirmOptions = listOf("Double Back", "Close Confirmation", "Close Directly")
-    val fontSizeOptions = listOf("Small", "Medium", "Large", "Larger")
-    val loginStyleOptions = listOf("Static Style", "Follow User Theme", "Follow User Theme and Wallpaper")
-    val animationOptions = listOf("Normal", "Fast", "Faster", "No Transition")
-    val exitModeOptions = listOf(
-        "Exit directly",
-        "Confirm to exit",
-        "Back to login screen",
-        "Open sidebar before exit",
-        "Sidebar to login screen"
-    )
-    val trailerOptions = listOf("No trailer", "Trailer without sound", "Trailer with sound")
-    val httpClientOptions = listOf(
-        "OkHttp with DoH Support",
-        "Generic HttpClient",
-        "Cronet - Chromium Networking"
-    )
-    val progressModeOptions = listOf(
-        "Start playing",
-        "Watched 25%",
-        "Watched 50%",
-        "Watched 75%",
-        "Finish watching"
-    )
-    val autoTrackingOptions = listOf(
-        "Do nothing",
-        "Show tracking dialog",
-        "Auto add to AniList",
-        "Auto add to MAL",
-        "Auto add to AniList and MAL"
-    )
-
-    val performanceFullNames = listOf("Blur Effect", "Scale Effect", "Drop Shadow", "Mask Effect", "Text Shadow")
-    val performanceShortNames = listOf("Blur", "Scale", "Shadow", "Mask", "Text")
-    val performanceIcons = listOf(
-        IconGlyphs.BlurOn,
-        IconGlyphs.Resize,
-        IconGlyphs.ShadowIcon,
-        IconGlyphs.Gradient,
-        IconGlyphs.TextFormat
-    )
-    val performanceDefaults = listOf(true, false, true, true, false)
-    val performanceFlags = List(performanceFullNames.size) { index ->
-        settings.performanceEffects.getOrElse(index) { performanceDefaults[index] }
+    val performanceFlags = remember(settings.performanceEffects) {
+        List(PERFORMANCE_FULL_NAMES.size) { index ->
+            settings.performanceEffects.getOrElse(index) { PERFORMANCE_DEFAULTS[index] }
+        }
     }
-    val activeVisualEffects = performanceFlags.indices.filter { !performanceFlags[it] }
-    val performanceSummary = when (activeVisualEffects.size) {
-        0 -> "Full performance"
-        performanceShortNames.size -> "Full effects"
-        else -> activeVisualEffects.joinToString(", ") { performanceShortNames[it] }
+    val performanceSummary = remember(performanceFlags) {
+        val activeVisualEffects = performanceFlags.indices.filter { !performanceFlags[it] }
+        when (activeVisualEffects.size) {
+            0 -> "Full performance"
+            PERFORMANCE_SHORT_NAMES.size -> "Full effects"
+            else -> activeVisualEffects.joinToString(", ") { PERFORMANCE_SHORT_NAMES[it] }
+        }
     }
 
-    val selectedSubtitleLanguage = SubtitleLanguageCatalog.all.firstOrNull {
-        it.code == settings.subtitleLanguage
-    } ?: SubtitleLanguageCatalog.all.first()
+    val selectedSubtitleLanguage = remember(settings.subtitleLanguage) {
+        SubtitleLanguageCatalog.all.firstOrNull {
+            it.code == settings.subtitleLanguage
+        } ?: SubtitleLanguageCatalog.all.first()
+    }
     val subtitleLangCode = selectedSubtitleLanguage.code
     val subtitleValueIcon = if (subtitleLangCode.isNotBlank() && subtitleLangCode != "hard" && subtitleLangCode != "nosub") {
         IconGlyphs.ClosedCaption
@@ -359,45 +354,67 @@ internal fun SettingsScreen(
         it.isNotBlank() && it != "hard" && it != "nosub"
     }?.uppercase()
 
-    val selectedAudioLanguage = AudioLanguageCatalog.all.firstOrNull {
-        it.code == settings.audioLanguage
-    } ?: AudioLanguageCatalog.all.first()
-
-    val playbackToggles = listOf(
-        SettingToggle("Auto Next", settings.autoNext) { onChange(settings.copy(autoNext = it)) },
-        SettingToggle("Auto Skip Intro", settings.autoSkipIntro) { onChange(settings.copy(autoSkipIntro = it)) },
-        SettingToggle("Skip Filler", settings.skipFiller) { onChange(settings.copy(skipFiller = it)) }
-    )
-    val preferDubToggle = SettingToggle("Prefer DUB Stream", settings.preferDub) {
-        onChange(settings.copy(preferDub = it))
-    }
-    val disableTouchToggle = SettingToggle("Disable Touch Gesture", settings.disableTouchGestures) {
-        onChange(settings.copy(disableTouchGestures = it))
-    }
-    val preloadNextToggle = SettingToggle("Preload Next Episode", settings.preloadNextEpisode) {
-        onChange(settings.copy(preloadNextEpisode = it))
+    val selectedAudioLanguage = remember(settings.audioLanguage) {
+        AudioLanguageCatalog.all.firstOrNull {
+            it.code == settings.audioLanguage
+        } ?: AudioLanguageCatalog.all.first()
     }
 
-    val uiToggles = listOf(
-        SettingToggle("MyList Main Page", settings.homeWatchlist) { onChange(settings.copy(homeWatchlist = it)) },
-        SettingToggle("Show Clock", settings.showClock) { onChange(settings.copy(showClock = it)) },
-        SettingToggle("Switch page on select", settings.directPageSwitch) { onChange(settings.copy(directPageSwitch = it)) },
-        SettingToggle("Show sidebar directly", settings.directSidebar) { onChange(settings.copy(directSidebar = it)) }
-    )
+    val currentSettings by rememberUpdatedState(settings)
+    val currentOnChange by rememberUpdatedState(onChange)
+
+    val playbackToggles = remember(settings.autoNext, settings.autoSkipIntro, settings.skipFiller) {
+        listOf(
+            SettingToggle("Auto Next", settings.autoNext) { currentOnChange(currentSettings.copy(autoNext = it)) },
+            SettingToggle("Auto Skip Intro", settings.autoSkipIntro) { currentOnChange(currentSettings.copy(autoSkipIntro = it)) },
+            SettingToggle("Skip Filler", settings.skipFiller) { currentOnChange(currentSettings.copy(skipFiller = it)) }
+        )
+    }
+    val preferDubToggle = remember(settings.preferDub) {
+        SettingToggle("Prefer DUB Stream", settings.preferDub) {
+            currentOnChange(currentSettings.copy(preferDub = it))
+        }
+    }
+    val disableTouchToggle = remember(settings.disableTouchGestures) {
+        SettingToggle("Disable Touch Gesture", settings.disableTouchGestures) {
+            currentOnChange(currentSettings.copy(disableTouchGestures = it))
+        }
+    }
+    val preloadNextToggle = remember(settings.preloadNextEpisode) {
+        SettingToggle("Preload Next Episode", settings.preloadNextEpisode) {
+            currentOnChange(currentSettings.copy(preloadNextEpisode = it))
+        }
+    }
+
+    val uiToggles = remember(
+        settings.homeWatchlist,
+        settings.showClock,
+        settings.directPageSwitch,
+        settings.directSidebar
+    ) {
+        listOf(
+            SettingToggle("MyList Main Page", settings.homeWatchlist) { currentOnChange(currentSettings.copy(homeWatchlist = it)) },
+            SettingToggle("Show Clock", settings.showClock) { currentOnChange(currentSettings.copy(showClock = it)) },
+            SettingToggle("Switch page on select", settings.directPageSwitch) { currentOnChange(currentSettings.copy(directPageSwitch = it)) },
+            SettingToggle("Show sidebar directly", settings.directSidebar) { currentOnChange(currentSettings.copy(directSidebar = it)) }
+        )
+    }
 
     val listState = rememberLazyListState()
     val playClickSound = LocalNavigationSound.current
     val groupRequesters = remember { List(8) { if (it == 0) firstItemRequester else FocusRequester() } }
     var focusedGroupIndex by remember { mutableIntStateOf(0) }
-    val g0Header = 0
-    val g1Header = 6
-    val g2Header = g1Header + 10 + (if (tokens.isTouch) 1 else 0) + 1
-    val g3Header = g2Header + 5 + (if (isAdminProfile) 1 else 0) + 1
-    val g4Header = g3Header + 8 + (if (isAdminProfile) 1 else 0) + 1
-    val g5Header = g4Header + 6 + 1
-    val g6Header = g5Header + 7 + (if (isAdminProfile) 2 else 0) + 1
-    val g7Header = g6Header + 2
-    val groupHeaderIndices = listOf(g0Header, g1Header, g2Header, g3Header, g4Header, g5Header, g6Header, g7Header)
+    val groupHeaderIndices = remember(tokens.isTouch, isAdminProfile) {
+        val g0Header = 0
+        val g1Header = 6
+        val g2Header = g1Header + 10 + (if (tokens.isTouch) 1 else 0) + 1
+        val g3Header = g2Header + 5 + (if (isAdminProfile) 1 else 0) + 1
+        val g4Header = g3Header + 8 + (if (isAdminProfile) 1 else 0) + 1
+        val g5Header = g4Header + 6 + 1
+        val g6Header = g5Header + 7 + (if (isAdminProfile) 2 else 0) + 1
+        val g7Header = g6Header + 2
+        listOf(g0Header, g1Header, g2Header, g3Header, g4Header, g5Header, g6Header, g7Header)
+    }
 
     fun jumpToSettingsGroup(delta: Int) {
         val nextGroup = (focusedGroupIndex + delta + groupHeaderIndices.size) % groupHeaderIndices.size
@@ -429,10 +446,6 @@ internal fun SettingsScreen(
                     else -> false
                 }
             }
-            .graphicsLayer {
-                translationX = (1f - slideProgress) * size.width * 0.5f
-                alpha = slideProgress
-            }
             .background(Color(0xFF222222))
     ) {
         SettingsPanelHeader(
@@ -451,8 +464,8 @@ internal fun SettingsScreen(
                 .weight(1f),
             contentPadding = PaddingValues(bottom = tokens.sysNavHeight)
         ) {
-            item { SettingsGroupTitle("Subtitle & Languages") }
-            item {
+            item(key = "header_subtitles", contentType = "header") { SettingsGroupTitle("Subtitle & Languages") }
+            item(key = "row_sub_lang", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue(
                         label = "Subtitle Language",
@@ -465,7 +478,7 @@ internal fun SettingsScreen(
                         .onFocusChanged { if (it.hasFocus) focusedGroupIndex = 0 }
                 )
             }
-            item {
+            item(key = "row_sub_style", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue("Subtitle Style", SubtitleStyleCatalog.summary(settings.subtitleStyle)) {
                         subtitleStyleDialog = true
@@ -473,13 +486,13 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 0 }
                 )
             }
-            item {
+            item(key = "row_prefer_dub", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = preferDubToggle,
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 0 }
                 )
             }
-            item {
+            item(key = "row_audio_lang", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue("Audio Language", selectedAudioLanguage.label) {
                         audioLanguageDialog = true
@@ -487,33 +500,37 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 0 }
                 )
             }
-            item { Spacer(Modifier.height(tokens.u * 0.5f)) }
+            item(key = "spacer_subtitles", contentType = "spacer") { Spacer(Modifier.height(tokens.u * 0.5f)) }
 
-            item { SettingsGroupTitle("Playback") }
-            itemsIndexed(playbackToggles) { idx, toggle ->
+            item(key = "header_playback", contentType = "header") { SettingsGroupTitle("Playback") }
+            itemsIndexed(
+                playbackToggles,
+                key = { _, toggle -> "row_${toggle.label}" },
+                contentType = { _, _ -> "toggle_row" }
+            ) { idx, toggle ->
                 SettingToggleRow(
                     item = toggle,
                     modifier = (if (idx == 0) Modifier.focusRequester(groupRequesters[1]) else Modifier)
                         .onFocusChanged { if (it.hasFocus) focusedGroupIndex = 1 }
                 )
             }
-            item {
+            item(key = "row_video_scaling", contentType = "value_row") {
                 SettingValueRow(
-                    item = SettingValue("Video Scaling", videoScalingOptions[settings.videoScale.coerceIn(0, 2)]) {
+                    item = SettingValue("Video Scaling", VIDEO_SCALING_OPTIONS[settings.videoScale.coerceIn(0, 2)]) {
                         activeValuePicker = ValuePickerType.VIDEO_SCALING
                     },
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 1 }
                 )
             }
-            item {
+            item(key = "row_video_quality", contentType = "value_row") {
                 SettingValueRow(
-                    item = SettingValue("Video Quality", videoQualityOptions[settings.playbackQuality.coerceIn(0, 3)]) {
+                    item = SettingValue("Video Quality", VIDEO_QUALITY_OPTIONS[settings.playbackQuality.coerceIn(0, 3)]) {
                         activeValuePicker = ValuePickerType.VIDEO_QUALITY
                     },
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 1 }
                 )
             }
-            item {
+            item(key = "row_seek_value", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue("Seek Value", "${settings.seekSeconds} seconds") {
                         activeValuePicker = ValuePickerType.SEEK_VALUE
@@ -521,42 +538,42 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 1 }
                 )
             }
-            item {
+            item(key = "row_video_buffer", contentType = "value_row") {
                 SettingValueRow(
-                    item = SettingValue("Video Buffer", videoBufferOptions[settings.videoBuffer.coerceIn(0, 4)]) {
+                    item = SettingValue("Video Buffer", VIDEO_BUFFER_OPTIONS[settings.videoBuffer.coerceIn(0, 4)]) {
                         activeValuePicker = ValuePickerType.VIDEO_BUFFER
                     },
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 1 }
                 )
             }
-            item {
+            item(key = "row_close_confirm", contentType = "value_row") {
                 SettingValueRow(
-                    item = SettingValue("Close Confirmation", closeConfirmOptions[settings.closeConfirmation.coerceIn(0, 2)]) {
+                    item = SettingValue("Close Confirmation", CLOSE_CONFIRM_OPTIONS[settings.closeConfirmation.coerceIn(0, 2)]) {
                         activeValuePicker = ValuePickerType.CLOSE_CONFIRMATION
                     },
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 1 }
                 )
             }
             if (tokens.isTouch) {
-                item {
+                item(key = "row_disable_touch", contentType = "toggle_row") {
                     SettingToggleRow(
                         item = disableTouchToggle,
                         modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 1 }
                     )
                 }
             }
-            item {
+            item(key = "row_preload_next", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = preloadNextToggle,
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 1 }
                 )
             }
-            item { Spacer(Modifier.height(tokens.u * 0.5f)) }
+            item(key = "spacer_playback", contentType = "spacer") { Spacer(Modifier.height(tokens.u * 0.5f)) }
 
-            item { SettingsGroupTitle("Styling") }
-            item {
+            item(key = "header_styling", contentType = "header") { SettingsGroupTitle("Styling") }
+            item(key = "row_font_size", contentType = "value_row") {
                 SettingValueRow(
-                    item = SettingValue("Font Size", fontSizeOptions[settings.fontSize.coerceIn(0, 3)]) {
+                    item = SettingValue("Font Size", FONT_SIZE_OPTIONS[settings.fontSize.coerceIn(0, 3)]) {
                         activeValuePicker = ValuePickerType.FONT_SIZE
                     },
                     modifier = Modifier
@@ -564,7 +581,7 @@ internal fun SettingsScreen(
                         .onFocusChanged { if (it.hasFocus) focusedGroupIndex = 2 }
                 )
             }
-            item {
+            item(key = "row_interface_color", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue("Interface Color", formatThemeName(settings.theme)) {
                         activeValuePicker = ValuePickerType.INTERFACE_COLOR
@@ -572,7 +589,7 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 2 }
                 )
             }
-            item {
+            item(key = "row_wallpaper", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue("Wallpaper", settings.wallpaperTitle.ifBlank { "No Wallpaper" }) {
                         wallpaperDialog = true
@@ -580,28 +597,28 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 2 }
                 )
             }
-            item {
+            item(key = "row_large_ui", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle("Large UI", settings.largeUi) { onChange(settings.copy(largeUi = it)) },
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 2 }
                 )
             }
             if (isAdminProfile) {
-                item {
+                item(key = "row_login_style", contentType = "value_row") {
                     SettingValueRow(
-                        item = SettingValue("Login Style", loginStyleOptions[settings.loginScreenStyle.coerceIn(0, 2)]) {
+                        item = SettingValue("Login Style", LOGIN_STYLE_OPTIONS[settings.loginScreenStyle.coerceIn(0, 2)]) {
                             activeValuePicker = ValuePickerType.LOGIN_STYLE
                         },
                         modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 2 }
                     )
                 }
             }
-            item { Spacer(Modifier.height(tokens.u * 0.5f)) }
+            item(key = "spacer_styling", contentType = "spacer") { Spacer(Modifier.height(tokens.u * 0.5f)) }
 
-            item { SettingsGroupTitle("UI & Performance") }
-            item {
+            item(key = "header_ui_perf", contentType = "header") { SettingsGroupTitle("UI & Performance") }
+            item(key = "row_transition_anim", contentType = "value_row") {
                 SettingValueRow(
-                    item = SettingValue("Transition Animation", animationOptions[settings.animation.coerceIn(0, 3)]) {
+                    item = SettingValue("Transition Animation", ANIMATION_OPTIONS[settings.animation.coerceIn(0, 3)]) {
                         activeValuePicker = ValuePickerType.TRANSITION_ANIMATION
                     },
                     modifier = Modifier
@@ -609,7 +626,7 @@ internal fun SettingsScreen(
                         .onFocusChanged { if (it.hasFocus) focusedGroupIndex = 3 }
                 )
             }
-            item {
+            item(key = "row_performance_ui", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue("Performance UI", performanceSummary) {
                         performanceDialog = true
@@ -617,7 +634,7 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 3 }
                 )
             }
-            item {
+            item(key = "row_nav_sound", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle("Navigation Sound", settings.navigationSound) {
                         onChange(settings.copy(navigationSound = it))
@@ -625,26 +642,30 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 3 }
                 )
             }
-            items(uiToggles) {
+            items(
+                uiToggles,
+                key = { "row_${it.label}" },
+                contentType = { "toggle_row" }
+            ) {
                 SettingToggleRow(
                     item = it,
                     modifier = Modifier.onFocusChanged { st -> if (st.hasFocus) focusedGroupIndex = 3 }
                 )
             }
             if (isAdminProfile) {
-                item {
+                item(key = "row_exit_mode", contentType = "value_row") {
                     SettingValueRow(
-                        item = SettingValue("Exit Mode", exitModeOptions[settings.exitMode.coerceIn(0, 4)]) {
+                        item = SettingValue("Exit Mode", EXIT_MODE_OPTIONS[settings.exitMode.coerceIn(0, 4)]) {
                             activeValuePicker = ValuePickerType.EXIT_MODE
                         },
                         modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 3 }
                     )
                 }
             }
-            item { Spacer(Modifier.height(tokens.u * 0.5f)) }
+            item(key = "spacer_ui_perf", contentType = "spacer") { Spacer(Modifier.height(tokens.u * 0.5f)) }
 
-            item { SettingsGroupTitle("Others") }
-            item {
+            item(key = "header_others", contentType = "header") { SettingsGroupTitle("Others") }
+            item(key = "row_anilist_slideshow", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle("AniList Slideshow", settings.aniListSlideshow) {
                         needReload = true
@@ -655,7 +676,7 @@ internal fun SettingsScreen(
                         .onFocusChanged { if (it.hasFocus) focusedGroupIndex = 4 }
                 )
             }
-            item {
+            item(key = "row_hires_banner", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle("HiRes AniList Banner", settings.highResolutionBanners) {
                         needReload = true
@@ -664,15 +685,15 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 4 }
                 )
             }
-            item {
+            item(key = "row_play_trailer", contentType = "value_row") {
                 SettingValueRow(
-                    item = SettingValue("Play Trailer", trailerOptions[settings.trailerMode.coerceIn(0, 2)]) {
+                    item = SettingValue("Play Trailer", TRAILER_OPTIONS[settings.trailerMode.coerceIn(0, 2)]) {
                         activeValuePicker = ValuePickerType.PLAY_TRAILER
                     },
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 4 }
                 )
             }
-            item {
+            item(key = "row_chinese_anime", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle("Chinese Anime", settings.includeChineseAnime) {
                         needReload = true
@@ -681,7 +702,7 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 4 }
                 )
             }
-            item {
+            item(key = "row_japanese_titles", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle("Japanese Titles", settings.japaneseTitles) {
                         onChange(settings.copy(japaneseTitles = it))
@@ -689,12 +710,12 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 4 }
                 )
             }
-            item { Spacer(Modifier.height(tokens.u * 0.5f)) }
+            item(key = "spacer_others", contentType = "spacer") { Spacer(Modifier.height(tokens.u * 0.5f)) }
 
-            item { SettingsGroupTitle("Networks") }
-            item {
+            item(key = "header_networks", contentType = "header") { SettingsGroupTitle("Networks") }
+            item(key = "row_http_client", contentType = "value_row") {
                 SettingValueRow(
-                    item = SettingValue("HTTP Client", httpClientOptions[settings.httpClient.coerceIn(0, 2)]) {
+                    item = SettingValue("HTTP Client", HTTP_CLIENT_OPTIONS[settings.httpClient.coerceIn(0, 2)]) {
                         activeValuePicker = ValuePickerType.HTTP_CLIENT
                     },
                     modifier = Modifier
@@ -702,7 +723,7 @@ internal fun SettingsScreen(
                         .onFocusChanged { if (it.hasFocus) focusedGroupIndex = 5 }
                 )
             }
-            item {
+            item(key = "row_use_doh", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle(
                         label = "Use DoH",
@@ -715,7 +736,7 @@ internal fun SettingsScreen(
                 )
             }
             if (isAdminProfile) {
-                item {
+                item(key = "row_cache_size", contentType = "value_row") {
                     SettingValueRow(
                         item = SettingValue("Cache Size", "${settings.cacheSizeMb} MB") {
                             activeValuePicker = ValuePickerType.CACHE_SIZE
@@ -724,7 +745,7 @@ internal fun SettingsScreen(
                     )
                 }
             }
-            item {
+            item(key = "row_progressive_cache", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle("Progressive Cache", settings.progressiveCache) {
                         onChange(settings.copy(progressiveCache = it))
@@ -733,7 +754,7 @@ internal fun SettingsScreen(
                 )
             }
             if (isAdminProfile) {
-                item {
+                item(key = "row_image_cdn", contentType = "toggle_row") {
                     SettingToggleRow(
                         item = SettingToggle("Use Image CDN", settings.useImageCdn) {
                             onChange(settings.copy(useImageCdn = it))
@@ -742,7 +763,7 @@ internal fun SettingsScreen(
                     )
                 }
             }
-            item {
+            item(key = "row_hls_proxy", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle("HLS Stream Proxy", settings.hlsProxy) {
                         onChange(settings.copy(hlsProxy = it))
@@ -750,7 +771,7 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 5 }
                 )
             }
-            item {
+            item(key = "row_debug_logging", contentType = "toggle_row") {
                 SettingToggleRow(
                     item = SettingToggle("Debug Logging", debugLogging) { enabled ->
                         debugLogRepository.setEnabled(enabled)
@@ -759,15 +780,15 @@ internal fun SettingsScreen(
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 5 }
                 )
             }
-            item {
+            item(key = "row_view_logs", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue("View Logs", "") { loadDiagnosticLogs() },
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 5 }
                 )
             }
-            item { Spacer(Modifier.height(tokens.u * 0.5f)) }
+            item(key = "spacer_networks", contentType = "spacer") { Spacer(Modifier.height(tokens.u * 0.5f)) }
 
-            item {
+            item(key = "group_integration", contentType = "integration_group") {
                 Box(
                     modifier = Modifier
                         .focusRequester(groupRequesters[6])
@@ -778,11 +799,11 @@ internal fun SettingsScreen(
                         accountState = accountState,
                         progressSetting = SettingValue(
                             "Update watch progress",
-                            progressModeOptions[settings.listProgressMode.coerceIn(0, 4)]
+                            PROGRESS_MODE_OPTIONS[settings.listProgressMode.coerceIn(0, 4)]
                         ) { activeValuePicker = ValuePickerType.WATCH_PROGRESS },
                         trackingSetting = SettingValue(
                             "Auto Tracking",
-                            autoTrackingOptions[settings.malTrackingDialog.coerceIn(0, 4)]
+                            AUTO_TRACKING_OPTIONS[settings.malTrackingDialog.coerceIn(0, 4)]
                         ) { activeValuePicker = ValuePickerType.AUTO_TRACKING },
                         onConnect = { provider ->
                             if (provider == AccountProvider.MAL) {
@@ -795,10 +816,10 @@ internal fun SettingsScreen(
                     )
                 }
             }
-            item { Spacer(Modifier.height(tokens.u * 0.5f)) }
+            item(key = "spacer_integration", contentType = "spacer") { Spacer(Modifier.height(tokens.u * 0.5f)) }
 
-            item { SettingsGroupTitle("About") }
-            item {
+            item(key = "header_about", contentType = "header") { SettingsGroupTitle("About") }
+            item(key = "row_donation", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue("Donation", "") { aboutUri = "https://ko-fi.com/paregi" },
                     modifier = Modifier
@@ -806,14 +827,14 @@ internal fun SettingsScreen(
                         .onFocusChanged { if (it.hasFocus) focusedGroupIndex = 7 }
                 )
             }
-            item {
+            item(key = "row_discord", contentType = "value_row") {
                 SettingValueRow(
                     item = SettingValue("Discord Server", "") { aboutUri = "https://discord.gg/M76sBtFpH" },
                     modifier = Modifier.onFocusChanged { if (it.hasFocus) focusedGroupIndex = 7 }
                 )
             }
             if (isAdminProfile) {
-                item {
+                item(key = "row_check_update", contentType = "value_row") {
                     SettingValueRow(
                         item = SettingValue(
                             label = "Check for Update",
@@ -824,7 +845,7 @@ internal fun SettingsScreen(
                     )
                 }
             }
-            item { Spacer(Modifier.height(tokens.u * 0.5f)) }
+            item(key = "spacer_about", contentType = "spacer") { Spacer(Modifier.height(tokens.u * 0.5f)) }
         }
     }
 
@@ -832,19 +853,21 @@ internal fun SettingsScreen(
         when (picker) {
             ValuePickerType.INTERFACE_COLOR -> {
                 val selectedThemeId = normalizeThemeId(settings.theme)
-                val themeItems = ANIME_TV_THEME_IDS.map { (id, name) ->
-                    val themeColors = animeTvThemeColorsFor(id)
-                    ListOrderItem(
-                        id = id,
-                        title = name,
-                        selected = id == selectedThemeId,
-                        swatches = listOf(
-                            themeColors.primary1,
-                            themeColors.primary2,
-                            themeColors.primary3,
-                            themeColors.accent1
+                val themeItems = remember(selectedThemeId) {
+                    ANIME_TV_THEME_IDS.map { (id, name) ->
+                        val themeColors = animeTvThemeColorsFor(id)
+                        ListOrderItem(
+                            id = id,
+                            title = name,
+                            selected = id == selectedThemeId,
+                            swatches = listOf(
+                                themeColors.primary1,
+                                themeColors.primary2,
+                                themeColors.primary3,
+                                themeColors.accent1
+                            )
                         )
-                    )
+                    }
                 }
                 ListOrderDialog(
                     title = "Interface Color",
@@ -859,24 +882,25 @@ internal fun SettingsScreen(
                 )
             }
             ValuePickerType.CACHE_SIZE -> {
-                val cacheSizes = listOf(5, 10, 20, 30, 50, 80, 100, 120, 150)
-                val currentIdx = cacheSizes.indexOf(settings.cacheSizeMb)
-                val items = buildList {
-                    add(
-                        ListOrderItem(
-                            id = "clear",
-                            title = "Clear Cache",
-                            icon = IconGlyphs.DeleteForever
-                        )
-                    )
-                    cacheSizes.forEach { size ->
+                val currentIdx = CACHE_SIZES_MB.indexOf(settings.cacheSizeMb)
+                val items = remember(settings.cacheSizeMb) {
+                    buildList {
                         add(
                             ListOrderItem(
-                                id = size.toString(),
-                                title = "$size MB",
-                                selected = settings.cacheSizeMb == size
+                                id = "clear",
+                                title = "Clear Cache",
+                                icon = IconGlyphs.DeleteForever
                             )
                         )
+                        CACHE_SIZES_MB.forEach { size ->
+                            add(
+                                ListOrderItem(
+                                    id = size.toString(),
+                                    title = "$size MB",
+                                    selected = settings.cacheSizeMb == size
+                                )
+                            )
+                        }
                     }
                 }
                 ListOrderDialog(
@@ -900,39 +924,41 @@ internal fun SettingsScreen(
             else -> {
                 val (title, options, selectedIndex) = when (picker) {
                     ValuePickerType.VIDEO_SCALING ->
-                        Triple("Video Scaling", videoScalingOptions, settings.videoScale.coerceIn(0, 2))
+                        Triple("Video Scaling", VIDEO_SCALING_OPTIONS, settings.videoScale.coerceIn(0, 2))
                     ValuePickerType.VIDEO_QUALITY ->
-                        Triple("Video Quality", videoQualityOptions, settings.playbackQuality.coerceIn(0, 3))
+                        Triple("Video Quality", VIDEO_QUALITY_OPTIONS, settings.playbackQuality.coerceIn(0, 3))
                     ValuePickerType.VIDEO_BUFFER ->
-                        Triple("Video Buffer", videoBufferOptions, settings.videoBuffer.coerceIn(0, 4))
+                        Triple("Video Buffer", VIDEO_BUFFER_OPTIONS, settings.videoBuffer.coerceIn(0, 4))
                     ValuePickerType.CLOSE_CONFIRMATION ->
-                        Triple("Close Confirmation", closeConfirmOptions, settings.closeConfirmation.coerceIn(0, 2))
+                        Triple("Close Confirmation", CLOSE_CONFIRM_OPTIONS, settings.closeConfirmation.coerceIn(0, 2))
                     ValuePickerType.FONT_SIZE ->
-                        Triple("Font Size", fontSizeOptions, settings.fontSize.coerceIn(0, 3))
+                        Triple("Font Size", FONT_SIZE_OPTIONS, settings.fontSize.coerceIn(0, 3))
                     ValuePickerType.LOGIN_STYLE ->
-                        Triple("Login Screen Style", loginStyleOptions, settings.loginScreenStyle.coerceIn(0, 2))
+                        Triple("Login Screen Style", LOGIN_STYLE_OPTIONS, settings.loginScreenStyle.coerceIn(0, 2))
                     ValuePickerType.TRANSITION_ANIMATION ->
-                        Triple("Transition Animation", animationOptions, settings.animation.coerceIn(0, 3))
+                        Triple("Transition Animation", ANIMATION_OPTIONS, settings.animation.coerceIn(0, 3))
                     ValuePickerType.EXIT_MODE ->
-                        Triple("Exit Mode", exitModeOptions, settings.exitMode.coerceIn(0, 4))
+                        Triple("Exit Mode", EXIT_MODE_OPTIONS, settings.exitMode.coerceIn(0, 4))
                     ValuePickerType.PLAY_TRAILER ->
-                        Triple("Play Trailer", trailerOptions, settings.trailerMode.coerceIn(0, 2))
+                        Triple("Play Trailer", TRAILER_OPTIONS, settings.trailerMode.coerceIn(0, 2))
                     ValuePickerType.HTTP_CLIENT ->
-                        Triple("HTTP Client", httpClientOptions, settings.httpClient.coerceIn(0, 2))
+                        Triple("HTTP Client", HTTP_CLIENT_OPTIONS, settings.httpClient.coerceIn(0, 2))
                     ValuePickerType.WATCH_PROGRESS ->
-                        Triple("Update watch progress", progressModeOptions, settings.listProgressMode.coerceIn(0, 4))
+                        Triple("Update watch progress", PROGRESS_MODE_OPTIONS, settings.listProgressMode.coerceIn(0, 4))
                     ValuePickerType.AUTO_TRACKING ->
-                        Triple("Auto Tracking", autoTrackingOptions, settings.malTrackingDialog.coerceIn(0, 4))
+                        Triple("Auto Tracking", AUTO_TRACKING_OPTIONS, settings.malTrackingDialog.coerceIn(0, 4))
                     ValuePickerType.SEEK_VALUE ->
                         Triple("Seek Value", (2..20).map { "$it seconds" }, (settings.seekSeconds - 2).coerceIn(0, 18))
                     ValuePickerType.INTERFACE_COLOR, ValuePickerType.CACHE_SIZE -> error("Handled above")
                 }
-                val items = options.mapIndexed { idx, label ->
-                    ListOrderItem(
-                        id = idx.toString(),
-                        title = label,
-                        selected = idx == selectedIndex
-                    )
+                val items = remember(options, selectedIndex) {
+                    options.mapIndexed { idx, label ->
+                        ListOrderItem(
+                            id = idx.toString(),
+                            title = label,
+                            selected = idx == selectedIndex
+                        )
+                    }
                 }
                 ListOrderDialog(
                     title = title,
@@ -967,13 +993,15 @@ internal fun SettingsScreen(
 
     if (performanceDialog) {
         // Inverted parity with AnimeTV's rev=true: checked row = visual effect active (performanceFlags[i] == false).
-        val items = performanceFullNames.mapIndexed { index, name ->
-            ListOrderItem(
-                id = "perf_$index",
-                title = name,
-                icon = performanceIcons[index],
-                selected = !performanceFlags[index]
-            )
+        val items = remember(performanceFlags) {
+            PERFORMANCE_FULL_NAMES.mapIndexed { index, name ->
+                ListOrderItem(
+                    id = "perf_$index",
+                    title = name,
+                    icon = PERFORMANCE_ICONS[index],
+                    selected = !performanceFlags[index]
+                )
+            }
         }
         ListOrderDialog(
             title = "Performance UI",
@@ -1223,22 +1251,24 @@ private fun DiagnosticLogsDialog(
     onDismiss: () -> Unit
 ) {
     val tokens = LocalAnimeTvTokens.current
-    val colors = LocalAnimeTvColors.current
     val playClickSound = LocalNavigationSound.current
     val shadowsDisabled = LocalPerformanceEffects.current.getOrElse(2) { false }
-    val scrollState = rememberScrollState()
+    val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val closeFocusRequester = remember { FocusRequester() }
+    val logLines = remember(logs, loading) {
+        if (loading) emptyList() else logs.lines()
+    }
 
     LaunchedEffect(Unit) {
         yield()
         runCatching { closeFocusRequester.requestFocus() }
     }
 
-    LaunchedEffect(loading, logs) {
-        if (!loading) {
+    LaunchedEffect(loading, logLines.size) {
+        if (!loading && logLines.isNotEmpty()) {
             yield()
-            scrollState.scrollTo(scrollState.maxValue)
+            listState.scrollToItem(logLines.lastIndex)
         }
     }
 
@@ -1281,19 +1311,19 @@ private fun DiagnosticLogsDialog(
                                 true
                             }
                             Key.DirectionUp -> {
-                                scope.launch { scrollState.scrollBy(-180f) }
+                                scope.launch { listState.scrollBy(-180f) }
                                 true
                             }
                             Key.DirectionDown -> {
-                                scope.launch { scrollState.scrollBy(180f) }
+                                scope.launch { listState.scrollBy(180f) }
                                 true
                             }
                             Key.PageUp -> {
-                                scope.launch { scrollState.scrollBy(-600f) }
+                                scope.launch { listState.scrollBy(-600f) }
                                 true
                             }
                             Key.PageDown -> {
-                                scope.launch { scrollState.scrollBy(600f) }
+                                scope.launch { listState.scrollBy(600f) }
                                 true
                             }
                             else -> false
@@ -1321,22 +1351,44 @@ private fun DiagnosticLogsDialog(
                 }
                 HorizontalDivider(thickness = borderThickness, color = Color.White.copy(alpha = 0.10f))
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = (tokens.vh * 30f).coerceAtMost(250.dp), max = tokens.vh * 52f)
-                        .background(Color(0xFF0D0E12))
-                        .verticalScroll(scrollState)
-                        .padding(horizontal = tokens.u * 1.5f, vertical = tokens.u * 1f)
-                ) {
-                    SelectionContainer {
+                if (loading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = (tokens.vh * 30f).coerceAtMost(250.dp), max = tokens.vh * 52f)
+                            .background(Color(0xFF0D0E12))
+                            .padding(horizontal = tokens.u * 1.5f, vertical = tokens.u * 1f)
+                    ) {
                         Text(
-                            text = if (loading) "Loading logs..." else logs,
+                            text = "Loading logs...",
                             color = Color(0xFFD1D5DB),
                             fontFamily = FontFamily.Monospace,
                             fontSize = fsSp(tokens.fs10),
                             lineHeight = fsSp(tokens.fs10) * 1.4f
                         )
+                    }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = (tokens.vh * 30f).coerceAtMost(250.dp), max = tokens.vh * 52f)
+                            .background(Color(0xFF0D0E12)),
+                        contentPadding = PaddingValues(horizontal = tokens.u * 1.5f, vertical = tokens.u * 1f)
+                    ) {
+                        itemsIndexed(
+                            logLines,
+                            key = { idx, _ -> idx },
+                            contentType = { _, _ -> "log_line" }
+                        ) { _, line ->
+                            Text(
+                                text = line,
+                                color = Color(0xFFD1D5DB),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = fsSp(tokens.fs10),
+                                lineHeight = fsSp(tokens.fs10) * 1.4f
+                            )
+                        }
                     }
                 }
 

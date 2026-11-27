@@ -1,5 +1,6 @@
 package com.paregi.animetv
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.SharedPreferences
 import com.paregi.animetv.domain.AppSettings
@@ -32,14 +33,18 @@ class AndroidSettingsRepository(
     private val appContext = context.applicationContext
     private val preferences: SharedPreferences =
         appContext.getSharedPreferences("SERVER", Context.MODE_PRIVATE)
+    private val isLowRamDevice: Boolean by lazy {
+        (appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)?.isLowRamDevice == true
+    }
 
-    override suspend fun readSettings(): AppSettings {
+    override suspend fun readSettings(): AppSettings = withContext(Dispatchers.IO) {
+        val lowRam = isLowRamDevice
         val config = runCatching {
             JSONObject(preferences.getString(namespace.storeKey("pb_cfg"), "{}") ?: "{}")
         }.getOrDefault(JSONObject())
         val performance = config.optJSONArray("performance")?.let { values ->
             (0 until values.length()).map { values.optBoolean(it) }
-        } ?: listOf(true, false, true, true, false)
+        } ?: listOf(true, false, true, true, lowRam)
         val subtitleVariants = mutableMapOf<String, String>()
         config.optJSONObject("subvariants")?.let { values ->
             val keys = values.keys()
@@ -93,12 +98,12 @@ class AndroidSettingsRepository(
             playbackQuality = config.optInt("quality", 0).coerceIn(0, 3),
             videoScale = config.optInt("scale", 0).coerceIn(0, 2),
             seekSeconds = config.optInt("seekvalue", 10).coerceIn(2, 20),
-            videoBuffer = config.optInt("videobuffer", 2).coerceIn(0, 4),
+            videoBuffer = config.optInt("videobuffer", if (lowRam) 1 else 2).coerceIn(0, 4),
             httpClient = config.optInt("httpclient", 0).coerceIn(0, 2),
             mirrorServer = config.optInt("mirrorserver", 0),
             animation = config.optInt("animation", 0).coerceIn(0, 3),
             performanceEffects = performance,
-            trailerMode = config.optInt("trailer", 1).coerceIn(0, 2),
+            trailerMode = config.optInt("trailer", if (lowRam) 0 else 1).coerceIn(0, 2),
             listProgressMode = config.optInt("listprog", 0).coerceIn(0, 4),
             closeConfirmation = config.optInt("closeconfirm", 0).coerceIn(0, 2),
             exitMode = (preferences.getString("viewstorage_exitmode", "0") ?: "0")
@@ -115,83 +120,85 @@ class AndroidSettingsRepository(
             badgeStyle = config.optInt("badge_style", 0).coerceIn(0, 1)
         )
         networkStack.configure(settings.httpClient, settings.useDnsOverHttps, settings.cacheSizeMb)
-        return settings
+        settings
     }
 
     override suspend fun updateSettings(settings: AppSettings) {
-        val config = runCatching {
-            JSONObject(preferences.getString(namespace.storeKey("pb_cfg"), "{}") ?: "{}")
-        }.getOrDefault(JSONObject())
-        val wallpaper = config.optJSONObject("bgimg") ?: JSONObject()
-        wallpaper.put("src", settings.wallpaperUrl).put("title", settings.wallpaperTitle)
-        config
-            .put("lang", settings.subtitleLanguage)
-            .put("subvariant", settings.subtitleVariant)
-            .put("subvariants", JSONObject(settings.subtitleVariants))
-            .put("alang", settings.audioLanguage)
-            .put("ccstyle", settings.subtitleStyle)
-            .put("autonext", settings.autoNext)
-            .put("autoskip", settings.autoSkipIntro)
-            .put("skipfiller", settings.skipFiller)
-            .put("disablegesture", settings.disableTouchGestures)
-            .put("dubaudio", settings.preferDub)
-            .put("preloadep", settings.preloadNextEpisode)
-            .put("hlsproxy", settings.hlsProxy)
-            .put("jptitle", settings.japaneseTitles)
-            .put("progcache", settings.progressiveCache)
-            .put("usedoh", settings.useDnsOverHttps)
-            .put("nonjapan", settings.includeChineseAnime)
-            .put("alisthomess", settings.aniListSlideshow)
-            .put("alisthqbanner", settings.highResolutionBanners)
-            .put("homylist", settings.homeWatchlist)
-            .put("clksound", settings.navigationSound)
-            .put("showclock", settings.showClock)
-            .put("directpage", settings.directPageSwitch)
-            .put("directsidebar", settings.directSidebar)
-            .put("largeui", settings.largeUi)
-            .put("uifontsize", settings.fontSize)
-            .put("quality", settings.playbackQuality)
-            .put("scale", settings.videoScale)
-            .put("seekvalue", settings.seekSeconds)
-            .put("videobuffer", settings.videoBuffer)
-            .put("httpclient", settings.httpClient)
-            .put("mirrorserver", settings.mirrorServer)
-            .put("animation", settings.animation)
-            .put("performance", JSONArray(settings.performanceEffects))
-            .put("trailer", settings.trailerMode)
-            .put("listprog", settings.listProgressMode)
-            .put("closeconfirm", settings.closeConfirmation)
-            .put("maltrackdialog", settings.malTrackingDialog)
-            .put("mobilenav", settings.mobileNavStyle)
-            .put("mobilenav_glow", settings.mobileNavGlow)
-            .put("card_size", settings.cardSize)
-            .put("card_radius", settings.cardRadius)
-            .put("badge_style", settings.badgeStyle)
-            .put("bgimg", wallpaper)
+        withContext(Dispatchers.IO) {
+            val config = runCatching {
+                JSONObject(preferences.getString(namespace.storeKey("pb_cfg"), "{}") ?: "{}")
+            }.getOrDefault(JSONObject())
+            val wallpaper = config.optJSONObject("bgimg") ?: JSONObject()
+            wallpaper.put("src", settings.wallpaperUrl).put("title", settings.wallpaperTitle)
+            config
+                .put("lang", settings.subtitleLanguage)
+                .put("subvariant", settings.subtitleVariant)
+                .put("subvariants", JSONObject(settings.subtitleVariants))
+                .put("alang", settings.audioLanguage)
+                .put("ccstyle", settings.subtitleStyle)
+                .put("autonext", settings.autoNext)
+                .put("autoskip", settings.autoSkipIntro)
+                .put("skipfiller", settings.skipFiller)
+                .put("disablegesture", settings.disableTouchGestures)
+                .put("dubaudio", settings.preferDub)
+                .put("preloadep", settings.preloadNextEpisode)
+                .put("hlsproxy", settings.hlsProxy)
+                .put("jptitle", settings.japaneseTitles)
+                .put("progcache", settings.progressiveCache)
+                .put("usedoh", settings.useDnsOverHttps)
+                .put("nonjapan", settings.includeChineseAnime)
+                .put("alisthomess", settings.aniListSlideshow)
+                .put("alisthqbanner", settings.highResolutionBanners)
+                .put("homylist", settings.homeWatchlist)
+                .put("clksound", settings.navigationSound)
+                .put("showclock", settings.showClock)
+                .put("directpage", settings.directPageSwitch)
+                .put("directsidebar", settings.directSidebar)
+                .put("largeui", settings.largeUi)
+                .put("uifontsize", settings.fontSize)
+                .put("quality", settings.playbackQuality)
+                .put("scale", settings.videoScale)
+                .put("seekvalue", settings.seekSeconds)
+                .put("videobuffer", settings.videoBuffer)
+                .put("httpclient", settings.httpClient)
+                .put("mirrorserver", settings.mirrorServer)
+                .put("animation", settings.animation)
+                .put("performance", JSONArray(settings.performanceEffects))
+                .put("trailer", settings.trailerMode)
+                .put("listprog", settings.listProgressMode)
+                .put("closeconfirm", settings.closeConfirmation)
+                .put("maltrackdialog", settings.malTrackingDialog)
+                .put("mobilenav", settings.mobileNavStyle)
+                .put("mobilenav_glow", settings.mobileNavGlow)
+                .put("card_size", settings.cardSize)
+                .put("card_radius", settings.cardRadius)
+                .put("badge_style", settings.badgeStyle)
+                .put("bgimg", wallpaper)
 
-        val editor = preferences.edit()
-            .putString(namespace.storeKey("pb_cfg"), config.toString())
-            .putString(namespace.storeKey("theme"), settings.theme)
-            .putInt("source-domain", settings.selectedSource)
-            .putInt("cache-size", settings.cacheSizeMb)
-            .putString("viewstorage_exitmode", settings.exitMode.coerceIn(0, 4).toString())
-            .putString("viewstorage_loginstyle", settings.loginScreenStyle.coerceIn(0, 2).toString())
-            .putString("viewstorage_imgcdnl", if (settings.useImageCdn) "1" else "0")
+            val editor = preferences.edit()
+                .putString(namespace.storeKey("pb_cfg"), config.toString())
+                .putString(namespace.storeKey("theme"), settings.theme)
+                .putInt("source-domain", settings.selectedSource)
+                .putInt("cache-size", settings.cacheSizeMb)
+                .putString("viewstorage_exitmode", settings.exitMode.coerceIn(0, 4).toString())
+                .putString("viewstorage_loginstyle", settings.loginScreenStyle.coerceIn(0, 2).toString())
+                .putString("viewstorage_imgcdnl", if (settings.useImageCdn) "1" else "0")
 
-        for (source in SourceCatalog.sources) {
-            val domain = settings.sourceDomains[source.index]
-            val key = namespace.storeKey("sdomain_${source.index}")
-            val directKey = "sdomain_${source.index}"
-            if (!domain.isNullOrBlank()) {
-                editor.putString(key, domain)
-                editor.putString(directKey, domain)
-            } else {
-                editor.remove(key)
-                editor.remove(directKey)
+            for (source in SourceCatalog.sources) {
+                val domain = settings.sourceDomains[source.index]
+                val key = namespace.storeKey("sdomain_${source.index}")
+                val directKey = "sdomain_${source.index}"
+                if (!domain.isNullOrBlank()) {
+                    editor.putString(key, domain)
+                    editor.putString(directKey, domain)
+                } else {
+                    editor.remove(key)
+                    editor.remove(directKey)
+                }
             }
+            editor.apply()
+            networkStack.configure(settings.httpClient, settings.useDnsOverHttps, settings.cacheSizeMb)
         }
-        editor.apply()
-        networkStack.configure(settings.httpClient, settings.useDnsOverHttps, settings.cacheSizeMb)
     }
 
     override suspend fun readLoginScreenStyle(): Int = withContext(Dispatchers.IO) {

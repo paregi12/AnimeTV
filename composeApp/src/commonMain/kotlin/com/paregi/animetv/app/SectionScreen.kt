@@ -1,6 +1,7 @@
 package com.paregi.animetv.app
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.Dp
 import com.paregi.animetv.core.navigation.Section
 import com.paregi.animetv.domain.*
@@ -110,7 +111,9 @@ internal fun SectionScreen(
             profileRating = profileRating,
             myListLayout = myListLayout,
             onMyListLayoutChange = onMyListLayoutChange,
-            onOpenAnime = { anime -> onAnimeSelected(anime.copy(sourceIndex = settings.selectedSource)) },
+            onOpenAnime = remember(onAnimeSelected, settings.selectedSource) {
+                { anime -> onAnimeSelected(anime.copy(sourceIndex = settings.selectedSource)) }
+            },
             onRemoveFromWatchlist = onRemoveFromWatchlist,
             onHistorySelected = onHistorySelected,
             onClearWatchHistory = onClearWatchHistory,

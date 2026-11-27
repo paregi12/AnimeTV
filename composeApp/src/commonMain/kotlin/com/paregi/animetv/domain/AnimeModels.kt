@@ -1,5 +1,8 @@
 package com.paregi.animetv.domain
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class Anime(
     val id: String,
     val title: String,
@@ -79,6 +82,7 @@ fun Anime.isAllowedForParentalRating(parentalRating: Int): Boolean {
         )
 }
 
+@Immutable
 data class Episode(
     val id: String,
     val animeId: String,
@@ -92,6 +96,7 @@ data class Episode(
     val imageUrl: String? = null
 )
 
+@Immutable
 data class WatchProgress(
     val animeId: String,
     val episodeId: String,
@@ -102,12 +107,14 @@ data class WatchProgress(
     val episodeNumber: String? = null
 )
 
+@Immutable
 data class AiringEntry(
     val anime: Anime,
     val episodeNumber: String,
     val airingAtEpochSeconds: Long
 )
 
+@Immutable
 data class SearchFilters(
     val query: String = "",
     val types: Set<String> = emptySet(),
@@ -119,6 +126,7 @@ data class SearchFilters(
     val aniList: Boolean = false
 )
 
+@Immutable
 data class SubtitleTrack(
     val id: String,
     val language: String,
@@ -127,6 +135,7 @@ data class SubtitleTrack(
     val defaultSelected: Boolean = false
 )
 
+@Immutable
 data class SkipRange(
     val startSeconds: Double,
     val endSeconds: Double,
@@ -137,6 +146,7 @@ data class SkipRange(
 
 enum class PlaybackStreamType { SUB, SOFTSUB, DUB }
 
+@Immutable
 data class PlaybackChoice(
     val url: String,
     val headers: Map<String, String> = emptyMap(),
@@ -149,12 +159,14 @@ data class PlaybackChoice(
     val segmentBytes: Int = 0
 )
 
+@Immutable
 data class AniListReview(
     val score: Int?,
     val rating: Int?,
     val summary: String
 )
 
+@Immutable
 data class AniListAnimeInfo(
     val id: String,
     val malId: String? = null,

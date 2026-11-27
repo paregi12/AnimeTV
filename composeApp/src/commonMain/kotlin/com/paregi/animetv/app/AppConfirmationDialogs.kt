@@ -1,6 +1,7 @@
 package com.paregi.animetv.app
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import com.paregi.animetv.core.theme.IconGlyphs
 import com.paregi.animetv.core.ui.ConfirmDialog
 import com.paregi.animetv.core.ui.ListOrderDialog
@@ -16,28 +17,30 @@ internal fun TrackingPromptDialog(
     onTrackBoth: () -> Unit,
     onPlayWithoutTracking: () -> Unit
 ) {
-    val items = buildList {
-        add(ListOrderItem(id = "notrack", title = "Don't Track", icon = IconGlyphs.Close))
-        if (prompt.providers.size > 1) {
-            add(ListOrderItem(id = "trackall", title = "Track on AniList and MAL", icon = IconGlyphs.Done))
-        }
-        if (AccountProvider.ANILIST in prompt.providers) {
-            add(
-                ListOrderItem(
-                    id = "anilist",
-                    title = "Track on AniList",
-                    icon = IconGlyphs.PlaylistAddCheckCircle
+    val items = remember(prompt.providers) {
+        buildList {
+            add(ListOrderItem(id = "notrack", title = "Don't Track", icon = IconGlyphs.Close))
+            if (prompt.providers.size > 1) {
+                add(ListOrderItem(id = "trackall", title = "Track on AniList and MAL", icon = IconGlyphs.Done))
+            }
+            if (AccountProvider.ANILIST in prompt.providers) {
+                add(
+                    ListOrderItem(
+                        id = "anilist",
+                        title = "Track on AniList",
+                        icon = IconGlyphs.PlaylistAddCheckCircle
+                    )
                 )
-            )
-        }
-        if (AccountProvider.MAL in prompt.providers) {
-            add(
-                ListOrderItem(
-                    id = "mal",
-                    title = "Track on MAL",
-                    icon = IconGlyphs.PlaylistAddCheckCircle
+            }
+            if (AccountProvider.MAL in prompt.providers) {
+                add(
+                    ListOrderItem(
+                        id = "mal",
+                        title = "Track on MAL",
+                        icon = IconGlyphs.PlaylistAddCheckCircle
+                    )
                 )
-            )
+            }
         }
     }
 

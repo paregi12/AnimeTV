@@ -2,6 +2,7 @@ package com.paregi.animetv
 
 import android.content.Context
 import android.net.Uri
+import android.util.LruCache
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.AccountProvider
 import com.paregi.animetv.domain.AccountRepository
@@ -15,12 +16,13 @@ import com.paregi.animetv.domain.TrackedAnimeEntry
 import com.paregi.animetv.domain.TrackedAnimePage
 import com.paregi.animetv.domain.SourceCatalog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
-import java.util.concurrent.ConcurrentHashMap
 
 /** Account tokens and the existing QR authorization relay for AniList and MAL. */
 class AndroidAccountRepository(
@@ -31,7 +33,7 @@ class AndroidAccountRepository(
     private val preferences = context.applicationContext
         .getSharedPreferences("KMP_ACCOUNTS", Context.MODE_PRIVATE)
     private val http = AndroidAccountHttpClient(networkStack)
-    private val progressAttempts = ConcurrentHashMap.newKeySet<String>()
+    private val progressAttempts = LruCache<String, Boolean>(256)
 
     override suspend fun readAccounts(): AccountState = withContext(Dispatchers.IO) {
         AccountState(
@@ -41,32 +43,42 @@ class AndroidAccountRepository(
     }
 
     override suspend fun loadProfileAvatars(): Map<String, String> = withContext(Dispatchers.IO) {
-        buildMap {
-            accessToken(AccountProvider.ANILIST)?.let { token ->
-                runCatching {
-                    val response = postJson(
-                        "https://graphql.anilist.co",
-                        JSONObject().put("query", "query { Viewer { avatar { large } } }").toString(),
-                        mapOf("Authorization" to "Bearer $token", "Origin" to "https://anilist.co")
-                    )
-                    response.optJSONObject("data")?.optJSONObject("Viewer")
-                        ?.optJSONObject("avatar")?.optString("large")
-                        ?.takeIf { it.startsWith("http") }
-                }.getOrNull()?.let { put("-anilist", it) }
-            }
-            accessToken(AccountProvider.MAL)?.let { token ->
-                runCatching {
-                    JSONObject(
-                        getText(
-                            "https://api.myanimelist.net/v2/users/@me?fields=picture",
-                            mapOf(
-                                "Authorization" to "Bearer $token",
-                                "X-MAL-CLIENT-ID" to MAL_CLIENT_ID,
-                                "Accept" to "application/json"
-                            )
+        coroutineScope {
+            val aniListToken = accessToken(AccountProvider.ANILIST)
+            val malToken = accessToken(AccountProvider.MAL)
+            val aniListAvatar = aniListToken?.let { token ->
+                async {
+                    runCatching {
+                        val response = postJson(
+                            "https://graphql.anilist.co",
+                            JSONObject().put("query", "query { Viewer { avatar { large } } }").toString(),
+                            mapOf("Authorization" to "Bearer $token", "Origin" to "https://anilist.co")
                         )
-                    ).optString("picture").takeIf { it.startsWith("http") }
-                }.getOrNull()?.let { put("-mal", it) }
+                        response.optJSONObject("data")?.optJSONObject("Viewer")
+                            ?.optJSONObject("avatar")?.optString("large")
+                            ?.takeIf { it.startsWith("http") }
+                    }.getOrNull()
+                }
+            }
+            val malAvatar = malToken?.let { token ->
+                async {
+                    runCatching {
+                        JSONObject(
+                            getText(
+                                "https://api.myanimelist.net/v2/users/@me?fields=picture",
+                                mapOf(
+                                    "Authorization" to "Bearer $token",
+                                    "X-MAL-CLIENT-ID" to MAL_CLIENT_ID,
+                                    "Accept" to "application/json"
+                                )
+                            )
+                        ).optString("picture").takeIf { it.startsWith("http") }
+                    }.getOrNull()
+                }
+            }
+            buildMap {
+                aniListAvatar?.await()?.let { put("-anilist", it) }
+                malAvatar?.await()?.let { put("-mal", it) }
             }
         }
     }
@@ -119,7 +131,7 @@ class AndroidAccountRepository(
         val responseText = try {
             val status = response.responseCode
             val stream = if (status in 200..299) response.inputStream else response.errorStream
-            val text = stream?.use { it.readBytes().toString(Charsets.UTF_8) }.orEmpty()
+            val text = stream?.use { it.readBoundedBytes(1024 * 1024).toString(Charsets.UTF_8) }.orEmpty()
             if (status !in 200..299) {
                 val message = runCatching {
                     JSONObject(text).let { json ->
@@ -419,8 +431,15 @@ class AndroidAccountRepository(
             val media = resolveAniListMedia(anime, aniListToken)
             val resolvedAniListId = media?.optInt("id")?.takeIf { it > 0 } ?: mediaId
             val resolvedMalId = media?.optInt("idMal")?.takeIf { it > 0 }?.toLong() ?: malId
+            val initialAniListEntry = media?.optJSONObject("mediaListEntry")
             if (aniListToken != null && resolvedAniListId != null) {
-                syncAniListProgress(anime.id, resolvedAniListId, aniListToken, episodeNumber)
+                syncAniListProgress(
+                    animeKey = anime.id,
+                    mediaId = resolvedAniListId,
+                    token = aniListToken,
+                    episode = episodeNumber,
+                    initialEntry = initialAniListEntry
+                )
             }
             if (malToken != null && resolvedMalId != null) {
                 syncMalProgress(anime.id, resolvedMalId, malToken, episodeNumber)
@@ -428,20 +447,34 @@ class AndroidAccountRepository(
         }
     }
 
-    private fun syncAniListProgress(animeKey: String, mediaId: Int, token: String, episode: Int) {
+    private fun syncAniListProgress(
+        animeKey: String,
+        mediaId: Int,
+        token: String,
+        episode: Int,
+        initialEntry: JSONObject? = null
+    ) {
         val attemptKey = "${namespace.prefix}|anilist|$animeKey|$episode"
-        if (!progressAttempts.add(attemptKey)) return
+        val recorded = synchronized(progressAttempts) {
+            if (progressAttempts.get(attemptKey) != null) false
+            else {
+                progressAttempts.put(attemptKey, true)
+                true
+            }
+        }
+        if (!recorded) return
         try {
-            val lookup = postJson(
-                "https://graphql.anilist.co",
-                JSONObject().put(
-                    "query",
-                    "query(\$id:Int){Media(id:\$id,type:ANIME){mediaListEntry{id progress}}}"
-                ).put("variables", JSONObject().put("id", mediaId)).toString(),
-                mapOf("Authorization" to "Bearer $token", "Origin" to "https://anilist.co")
-            )
-            val entry = lookup.optJSONObject("data")?.optJSONObject("Media")?.optJSONObject("mediaListEntry")
-                ?: return
+            val entry = initialEntry ?: run {
+                val lookup = postJson(
+                    "https://graphql.anilist.co",
+                    JSONObject().put(
+                        "query",
+                        "query(\$id:Int){Media(id:\$id,type:ANIME){mediaListEntry{id progress}}}"
+                    ).put("variables", JSONObject().put("id", mediaId)).toString(),
+                    mapOf("Authorization" to "Bearer $token", "Origin" to "https://anilist.co")
+                )
+                lookup.optJSONObject("data")?.optJSONObject("Media")?.optJSONObject("mediaListEntry")
+            } ?: return
             val entryId = entry.optInt("id")
             if (entryId <= 0 || entry.optInt("progress") >= episode) return
             postJson(
@@ -547,9 +580,9 @@ class AndroidAccountRepository(
     }
 
     private fun legacySlugTitle(value: String): String = value.lowercase(java.util.Locale.ROOT)
-        .replace(Regex("[^A-Za-z0-9_]+"), " ")
+        .replace(SLUG_NON_WORD_REGEX, " ")
         .trim()
-        .replace(Regex(" +"), " ")
+        .replace(SLUG_MULTI_SPACE_REGEX, " ")
 
     private fun aniListRequest(body: String, token: String?): JSONObject {
         val headers = buildMap {
@@ -568,7 +601,14 @@ class AndroidAccountRepository(
 
     private fun syncMalProgress(animeKey: String, malId: Long, token: String, episode: Int) {
         val attemptKey = "${namespace.prefix}|mal|$animeKey|$episode"
-        if (!progressAttempts.add(attemptKey)) return
+        val recorded = synchronized(progressAttempts) {
+            if (progressAttempts.get(attemptKey) != null) false
+            else {
+                progressAttempts.put(attemptKey, true)
+                true
+            }
+        }
+        if (!recorded) return
         try {
             val status = JSONObject(
                 getText(
@@ -697,5 +737,7 @@ class AndroidAccountRepository(
         const val MAL_CLIENT_ID = "0e9466e5ec09684cc69da53f20b07af6"
         const val KEY_ANILIST = "anilist_auth"
         const val KEY_MAL = "mal_auth"
+        val SLUG_NON_WORD_REGEX = Regex("[^A-Za-z0-9_]+")
+        val SLUG_MULTI_SPACE_REGEX = Regex(" +")
     }
 }

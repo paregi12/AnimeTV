@@ -4,7 +4,10 @@ import android.net.Uri
 import android.util.Log
 import com.paregi.animetv.AndroidNetworkResponse
 import com.paregi.animetv.AndroidNetworkStack
+import com.paregi.animetv.readStreamBounded
 import java.io.BufferedInputStream
+import java.io.Closeable
+import java.io.IOException
 import java.io.OutputStream
 import java.net.SocketTimeoutException
 import java.net.URL
@@ -16,7 +19,9 @@ import java.util.Locale
 internal class ReAnimeHlsProxy(
     private val networkStack: AndroidNetworkStack,
     private val port: () -> Int,
-    private val mask: () -> ByteArray
+    private val mask: () -> ByteArray,
+    private val trackConnection: (Closeable) -> Unit = {},
+    private val untrackConnection: (Closeable) -> Unit = {}
 ) {
     fun servePlaylist(out: OutputStream, url: String, wPayload: String, root: Boolean) {
         val master = root || isMasterPlaylist(url)
@@ -31,14 +36,15 @@ internal class ReAnimeHlsProxy(
         while (text == null) {
             var connection: AndroidNetworkResponse? = null
             try {
-                connection = upstreamReAnime(fetchUrl)
+                connection = upstreamReAnime(fetchUrl).also(trackConnection)
                 val status = connection.responseCode
                 if (status !in 200..299) {
                     Log.w(TAG, "Playlist upstream HTTP $status: $fetchUrl")
                     return response(out, status, "Upstream Error", "text/plain", ByteArray(0))
                 }
-                text = connection.inputStream?.use { it.readBytes().toString(StandardCharsets.UTF_8) }
+                val body = connection.inputStream?.use { readStreamBounded(it, MAX_PLAYLIST_BYTES) }
                     ?: return response(out, 502, "Bad Gateway", "text/plain", ByteArray(0))
+                text = body.toString(StandardCharsets.UTF_8)
             } catch (e: SocketTimeoutException) {
                 attempt++
                 if (attempt >= MAX_PLAYLIST_ATTEMPTS) {
@@ -53,7 +59,10 @@ internal class ReAnimeHlsProxy(
                 }
                 Log.w(TAG, "Manifest timeout, retrying... (Attempt $attempt/$MAX_PLAYLIST_ATTEMPTS)")
             } finally {
-                connection?.close()
+                connection?.let {
+                    untrackConnection(it)
+                    it.close()
+                }
             }
         }
 
@@ -159,12 +168,21 @@ internal class ReAnimeHlsProxy(
         url
     }.getOrDefault(url)
 
-    fun serveSegment(out: OutputStream, url: String, rangeStart: Long, plain: Boolean = false) {
+    fun serveSegment(
+        out: OutputStream,
+        url: String,
+        rangeStart: Long,
+        rangeEnd: Long?,
+        sendRange: Boolean,
+        plain: Boolean = false
+    ) {
         var headersWritten = false
         var connection: AndroidNetworkResponse? = null
         try {
             val upstreamRange = if (plain) rangeStart else 0L
-            connection = upstreamReAnime(url, upstreamRange)
+            val upstreamEnd = if (plain) rangeEnd else null
+            val sendUpstreamRange = plain && sendRange && (upstreamRange > 0L || upstreamEnd != null)
+            connection = upstreamReAnime(url, upstreamRange, upstreamEnd, sendUpstreamRange).also(trackConnection)
             val status = connection.responseCode
             if (status !in 200..299) {
                 Log.w(TAG, "Segment upstream HTTP $status: $url")
@@ -184,11 +202,12 @@ internal class ReAnimeHlsProxy(
             val contentLength = connection.getHeaderFieldLong("Content-Length", -1)
             val outLength = if (contentLength >= 0) (contentLength - headerBytes).coerceAtLeast(0) else -1L
             val headers = StringBuilder("HTTP/1.1 ")
-                .append(if (status == 206 && upstreamRange > 0L) "206 Partial Content" else "200 OK").append("\r\n")
+                .append(if (status == 206 && sendUpstreamRange) "206 Partial Content" else "200 OK").append("\r\n")
                 .append("Content-Type: ").append(
                     if (headerBytes > 0) "video/mp2t"
                     else connection.getHeaderField("Content-Type") ?: "application/octet-stream"
                 ).append("\r\n")
+                .append("Connection: close\r\n")
             if (plain) headers.append("Accept-Ranges: bytes\r\n")
             if (outLength >= 0) headers.append("Content-Length: ").append(outLength).append("\r\n")
             if (plain) {
@@ -203,14 +222,19 @@ internal class ReAnimeHlsProxy(
                 if (count <= 0) { if (stream.read() < 0) break else skipped++ } else skipped += count
             }
             val mask = mask()
+            val maskLen = mask.size
             val buffer = ByteArray(8192)
-            var maskIndex = 0
+            var maskIdx = 0
             while (true) {
                 val count = stream.read(buffer)
                 if (count < 0) break
-                if (!plain && headerBytes > 0 && mask.isNotEmpty()) {
-                    repeat(count) { index ->
-                        buffer[index] = (buffer[index].toInt() xor mask[maskIndex++ % mask.size].toInt()).toByte()
+                if (!plain && headerBytes > 0 && maskLen > 0) {
+                    var i = 0
+                    while (i < count) {
+                        buffer[i] = (buffer[i].toInt() xor mask[maskIdx].toInt()).toByte()
+                        i++
+                        maskIdx++
+                        if (maskIdx == maskLen) maskIdx = 0
                     }
                 }
                 out.write(buffer, 0, count)
@@ -227,8 +251,16 @@ internal class ReAnimeHlsProxy(
                     (e.message ?: "Upstream timeout").toByteArray(StandardCharsets.UTF_8)
                 )
             }
+        } catch (e: IOException) {
+            if (!headersWritten) {
+                Log.w(TAG, "Segment stream failed", e)
+                runCatching { response(out, 502, "Bad Gateway", "text/plain", ByteArray(0)) }
+            }
         } finally {
-            connection?.close()
+            connection?.let {
+                untrackConnection(it)
+                it.close()
+            }
         }
     }
 
@@ -244,7 +276,12 @@ internal class ReAnimeHlsProxy(
         return 0
     }
 
-    private fun upstreamReAnime(url: String, rangeStart: Long = 0): AndroidNetworkResponse {
+    private fun upstreamReAnime(
+        url: String,
+        rangeStart: Long = 0,
+        rangeEnd: Long? = null,
+        sendRange: Boolean = rangeStart > 0L
+    ): AndroidNetworkResponse {
         val headers = buildMap {
             put("Accept", "*/*")
             put("User-Agent", USER_AGENT)
@@ -258,14 +295,17 @@ internal class ReAnimeHlsProxy(
                 put("Sec-Fetch-Mode", "cors")
                 put("Sec-Fetch-Site", "same-site")
             }
-            if (rangeStart > 0) put("Range", "bytes=" + rangeStart + "-")
+            if (sendRange && (rangeStart > 0L || rangeEnd != null)) {
+                val rangeValue = if (rangeEnd != null) "bytes=$rangeStart-$rangeEnd" else "bytes=$rangeStart-"
+                put("Range", rangeValue)
+            }
         }
         return networkStack.execute(url, headers = headers, connectTimeoutMs = 15_000, readTimeoutMs = 30_000)
     }
 
     private fun response(out: OutputStream, status: Int, label: String, type: String, body: ByteArray) {
         val header = "HTTP/1.1 " + status + " " + label + "\r\nContent-Type: " + type +
-            "\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + body.size + "\r\n\r\n"
+            "\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + body.size + "\r\n\r\n"
         out.write(header.toByteArray(StandardCharsets.UTF_8))
         out.write(body)
         out.flush()
@@ -274,6 +314,7 @@ internal class ReAnimeHlsProxy(
     private companion object {
         const val TAG = "ReAnimeHlsProxy"
         const val MAX_PLAYLIST_ATTEMPTS = 3
+        const val MAX_PLAYLIST_BYTES = 4 * 1024 * 1024
         const val USER_AGENT = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/136.0.0.0 Mobile Safari/537.36"
         val URI_REGEX = Regex("URI=\"([^\"]*)\"")
         val BANDWIDTH_REGEX = Regex("""(?<![A-Z-])BANDWIDTH=(\d+)""")

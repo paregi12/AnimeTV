@@ -1,16 +1,30 @@
 package com.paregi.animetv.core.ui
 
+import androidx.compose.runtime.Immutable
 import com.paregi.animetv.domain.Anime
 import com.paregi.animetv.domain.displayRPlusRating
 import kotlin.math.roundToInt
 
+private val IMAGE_CDN_HOSTS = listOf(
+    "img.flawlessfiles.com/",
+    "cdn.noitatnemucod.net/",
+    "img.zorores.com/"
+)
+private val SYNOPSIS_BREAK_REGEX = Regex("(?i)<br\\s*/?>|</(p|div|li)\\s*>")
+private val SYNOPSIS_TAG_REGEX = Regex("<[^>]*>")
+private val SYNOPSIS_NBSP_REGEX = Regex("(?i)&nbsp;")
+private val SYNOPSIS_AMP_REGEX = Regex("(?i)&amp;|&#38;")
+private val SYNOPSIS_QUOT_REGEX = Regex("(?i)&quot;|&#34;")
+private val SYNOPSIS_APOS_REGEX = Regex("(?i)&#39;|&apos;")
+private val SYNOPSIS_LT_REGEX = Regex("(?i)&lt;")
+private val SYNOPSIS_GT_REGEX = Regex("(?i)&gt;")
+private val SYNOPSIS_SPACES_REGEX = Regex("[ \\t]+")
+private val SYNOPSIS_NEWLINES_REGEX = Regex("\\n{2,}")
+private val DIGITS_REGEX = Regex("\\d+")
+
 internal fun imageCdnUrl(url: String?, enabled: Boolean): String? {
     if (url.isNullOrBlank() || !enabled || url.contains("wsrv.nl", ignoreCase = true)) return url
-    val supportedHost = listOf(
-        "img.flawlessfiles.com/",
-        "cdn.noitatnemucod.net/",
-        "img.zorores.com/"
-    ).any { url.contains(it, ignoreCase = true) }
+    val supportedHost = IMAGE_CDN_HOSTS.any { url.contains(it, ignoreCase = true) }
     if (!supportedHost) return url
     return "https://wsrv.nl/?url=${encodeURIComponent(url)}&w=256&we"
 }
@@ -34,16 +48,16 @@ internal fun displayAnimeTitle(anime: Anime, japaneseTitles: Boolean): String =
     if (japaneseTitles) anime.originalTitle?.takeIf { it.isNotBlank() } ?: anime.title else anime.title
 
 internal fun displayAnimeSynopsis(synopsis: String): String = synopsis
-    .replace(Regex("(?i)<br\\s*/?>|</(p|div|li)\\s*>"), "\n")
-    .replace(Regex("<[^>]*>"), "")
-    .replace(Regex("(?i)&nbsp;"), " ")
-    .replace(Regex("(?i)&amp;|&#38;"), "&")
-    .replace(Regex("(?i)&quot;|&#34;"), "\"")
-    .replace(Regex("(?i)&#39;|&apos;"), "'")
-    .replace(Regex("(?i)&lt;"), "<")
-    .replace(Regex("(?i)&gt;"), ">")
-    .replace(Regex("[ \\t]+"), " ")
-    .replace(Regex("\\n{2,}"), "\n")
+    .replace(SYNOPSIS_BREAK_REGEX, "\n")
+    .replace(SYNOPSIS_TAG_REGEX, "")
+    .replace(SYNOPSIS_NBSP_REGEX, " ")
+    .replace(SYNOPSIS_AMP_REGEX, "&")
+    .replace(SYNOPSIS_QUOT_REGEX, "\"")
+    .replace(SYNOPSIS_APOS_REGEX, "'")
+    .replace(SYNOPSIS_LT_REGEX, "<")
+    .replace(SYNOPSIS_GT_REGEX, ">")
+    .replace(SYNOPSIS_SPACES_REGEX, " ")
+    .replace(SYNOPSIS_NEWLINES_REGEX, "\n")
     .trim()
 
 internal enum class CardBadgeMode {
@@ -54,6 +68,7 @@ internal enum class CardBadgeMode {
     LocalMyList
 }
 
+@Immutable
 internal data class CardBadgeData(
     val format: String? = null,
     val subEpisode: Int? = null,
@@ -90,7 +105,7 @@ internal fun resolveCardBadges(
     val rPlusRating = displayRPlusRating(anime.rating, anime.adult)
     val isAdult = rPlusRating != null
     val nextAiredEp = anime.nextAiringEpisode?.let { it - 1 }?.takeIf { it > 0 }
-    val watchedNum = progressEpisode?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() } ?: 0
+    val watchedNum = progressEpisode?.let { DIGITS_REGEX.find(it)?.value?.toIntOrNull() } ?: 0
     val isAniList = anime.id.startsWith("anilist:")
 
     return when (mode) {
@@ -154,7 +169,7 @@ internal fun resolveCardBadges(
                 val allowBottom = showBottomBadges
                 val durationFormatted = if (allowBottom) {
                     anime.duration?.let { dur ->
-                        Regex("\\d+").find(dur)?.value?.let { "$it min" } ?: dur.lowercase()
+                        DIGITS_REGEX.find(dur)?.value?.let { "$it min" } ?: dur.lowercase()
                     }
                 } else null
                 val scoreVal = if (allowBottom) {

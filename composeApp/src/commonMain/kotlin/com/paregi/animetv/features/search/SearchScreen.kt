@@ -43,6 +43,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -103,7 +104,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
-import kotlin.math.roundToInt
 
 @Composable
 internal fun SearchScreen(
@@ -146,6 +146,7 @@ internal fun SearchScreen(
     var aniListSearch by remember { mutableStateOf(false) }
     var remoteTypingActive by remember { mutableStateOf(false) }
     var searchSubmitNonce by remember { mutableIntStateOf(0) }
+    var lastSubmittedNonce by remember { mutableIntStateOf(0) }
     var searchMuted by rememberSaveable { mutableStateOf(SearchRemotePadPrefs.muted) }
 
     var kwFocused by remember { mutableStateOf(false) }
@@ -199,12 +200,52 @@ internal fun SearchScreen(
         }
     }
 
+    val currentHistory by rememberUpdatedState(history)
     fun recordSearch(value: String) {
         val term = value.trim()
         if (term.isBlank()) return
         historyScope.launch {
             history = runCatching { searchHistoryRepository.record(term) }
-                .getOrDefault(history)
+                .getOrDefault(currentHistory)
+        }
+    }
+
+    val currentQuery by rememberUpdatedState(query)
+    val currentOnQueryChange by rememberUpdatedState(onQueryChange)
+    val currentIsTouch by rememberUpdatedState(isTouch)
+    val onRemoteKeyAction: (String) -> Unit = remember {
+        { key ->
+            remoteTypingActive = true
+            val q = currentQuery
+            val next = when (key) {
+                "backspace" -> q.dropLast(1)
+                "clear" -> ""
+                "space" -> "$q "
+                else -> q + key.lowercase()
+            }
+            currentOnQueryChange(next)
+            page = 1
+        }
+    }
+    val onRemoteSearch: () -> Unit = remember {
+        {
+            remoteTypingActive = false
+            val q = currentQuery
+            val cleaned = q.trim()
+            if (cleaned != q) currentOnQueryChange(cleaned)
+            if (cleaned.isNotBlank()) recordSearch(cleaned)
+            page = 1
+            searchSubmitNonce += 1
+            if (!currentIsTouch) {
+                runCatching { resultsRowRequester.requestFocus() }
+            }
+        }
+    }
+    val onToggleRemoteMute: () -> Unit = remember {
+        {
+            val next = !searchMuted
+            searchMuted = next
+            SearchRemotePadPrefs.muted = next
         }
     }
 
@@ -232,6 +273,7 @@ internal fun SearchScreen(
     ) {
         val trimmedQuery = query.trim()
         if (trimmedQuery.isBlank() && selectedFilterKeys.isEmpty()) {
+            lastSubmittedNonce = searchSubmitNonce
             results = emptyList()
             hasNextPage = false
             loading = false
@@ -239,7 +281,9 @@ internal fun SearchScreen(
             return@LaunchedEffect
         }
         if (remoteTypingActive && page == 1) return@LaunchedEffect
-        if (page == 1 && searchSubmitNonce == 0) {
+        val isExplicitSubmit = searchSubmitNonce != lastSubmittedNonce
+        lastSubmittedNonce = searchSubmitNonce
+        if (page == 1 && !isExplicitSubmit) {
             delay(350)
         }
         if (page == 1) {
@@ -306,18 +350,22 @@ internal fun SearchScreen(
         }
     }
 
-    val rootBackgroundModifier = if (portrait) {
-        Modifier.background(blendColors(colors.primary1, Color.Black, 0.25f))
-    } else {
-        Modifier.background(Brush.verticalGradient(listOf(Color.Black, colors.primaryBg)))
+    val rootBackgroundModifier = remember(portrait, colors.primary1, colors.primaryBg) {
+        if (portrait) {
+            Modifier.background(blendColors(colors.primary1, Color.Black, 0.25f))
+        } else {
+            Modifier.background(Brush.verticalGradient(listOf(Color.Black, colors.primaryBg)))
+        }
     }
 
-    val portraitHeaderColor = Color(
-        red = colors.primary1.red * 0.4f,
-        green = colors.primary1.green * 0.4f,
-        blue = colors.primary1.blue * 0.4f,
-        alpha = 0.88f
-    )
+    val portraitHeaderColor = remember(colors.primary1) {
+        Color(
+            red = colors.primary1.red * 0.4f,
+            green = colors.primary1.green * 0.4f,
+            blue = colors.primary1.blue * 0.4f,
+            alpha = 0.88f
+        )
+    }
 
     BoxWithConstraints(
         Modifier
@@ -335,12 +383,14 @@ internal fun SearchScreen(
                         playClickSound()
                         remoteTypingActive = true
                         onQueryChange(query + ch)
+                        page = 1
                         true
                     }
                     event.key == Key.Spacebar -> {
                         playClickSound()
                         remoteTypingActive = true
                         onQueryChange(query + " ")
+                        page = 1
                         true
                     }
                     event.key == Key.Backspace -> {
@@ -348,6 +398,7 @@ internal fun SearchScreen(
                             playClickSound()
                             remoteTypingActive = true
                             onQueryChange(query.dropLast(1))
+                            page = 1
                         }
                         true
                     }
@@ -356,9 +407,9 @@ internal fun SearchScreen(
             }
     ) {
         val cardDims = calculateCardDimensions(maxWidth, maxHeight, portrait, largeUi = effectiveLargeUi)
-        val headerShadow = if (!textShadowDisabled) {
-            Shadow(Color.Black, Offset(0f, 1.5f), 3f)
-        } else null
+        val headerShadow = remember(textShadowDisabled) {
+            if (!textShadowDisabled) Shadow(Color.Black, Offset(0f, 1.5f), 3f) else null
+        }
 
         Column(Modifier.fillMaxSize()) {
             Column(
@@ -537,13 +588,8 @@ internal fun SearchScreen(
                     )
 
                     SearchKeyboardTools(
-                        query = query,
-                        onRemoteQueryChange = { next ->
-                            remoteTypingActive = true
-                            onQueryChange(next)
-                            page = 1
-                        },
-                        onSearch = { triggerSearch(focusResults = true, recordQuery = true) },
+                        onKeyAction = onRemoteKeyAction,
+                        onSearch = onRemoteSearch,
                         muted = searchMuted,
                         initialFocusRequester = remoteKeyboardRequester,
                         modifier = Modifier.width(tokens.vw * 45f)
@@ -552,18 +598,9 @@ internal fun SearchScreen(
                     Spacer(Modifier.weight(1f))
 
                     SearchKeypadTools(
-                        query = query,
-                        onRemoteQueryChange = { next ->
-                            remoteTypingActive = true
-                            onQueryChange(next)
-                            page = 1
-                        },
+                        onKeyAction = onRemoteKeyAction,
                         muted = searchMuted,
-                        onToggleMute = {
-                            val next = !searchMuted
-                            searchMuted = next
-                            SearchRemotePadPrefs.muted = next
-                        },
+                        onToggleMute = onToggleRemoteMute,
                         modifier = Modifier.width(tokens.vw * 13f)
                     )
                 }
@@ -602,24 +639,23 @@ internal fun SearchScreen(
                     targetValue = if (hideGenres) 0f else 1f,
                     animationSpec = tween(durationMillis = tokens.tim2s, easing = tokens.easing)
                 )
-                val genreCollapseFraction by animateFloatAsState(
-                    targetValue = if (hideGenres) 0f else 1f,
-                    animationSpec = tween(durationMillis = tokens.tim3s, easing = tokens.easing)
-                )
 
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clipToBounds()
-                        .layout { measurable, constraints ->
-                            val placeable = measurable.measure(constraints)
-                            val collapsedHeight = (placeable.height * genreCollapseFraction).roundToInt().coerceAtLeast(1)
-                            layout(placeable.width, collapsedHeight) {
-                                placeable.placeRelative(0, collapsedHeight - placeable.height)
-                            }
-                        }
+                        .then(
+                            if (hideGenres) {
+                                Modifier.layout { measurable, constraints ->
+                                    val placeable = measurable.measure(constraints)
+                                    layout(placeable.width, 1) {
+                                        placeable.placeRelative(0, 1 - placeable.height)
+                                    }
+                                }
+                            } else Modifier
+                        )
                         .graphicsLayer { alpha = genreAlpha }
-                        .padding(bottom = tokens.u * 1f)
+                        .padding(bottom = if (hideGenres) 0.dp else tokens.u * 1f)
                 ) {
                     Text(
                         text = "Type & Genres",
@@ -648,7 +684,7 @@ internal fun SearchScreen(
                         contentPadding = PaddingValues(horizontal = tokens.vw * 5f),
                         horizontalArrangement = Arrangement.spacedBy(tokens.u * 0.5f)
                     ) {
-                        items(filterOptions, key = { it.key }) { option ->
+                        items(filterOptions, key = { it.key }, contentType = { "filter_chip" }) { option ->
                             FilterChip(
                                 label = option.label,
                                 value = "",
@@ -711,7 +747,7 @@ internal fun SearchScreen(
                             contentPadding = PaddingValues(horizontal = tokens.vw * 5f),
                             horizontalArrangement = Arrangement.spacedBy(cardDims.cardGap)
                         ) {
-                            items(allowedResults, key = { it.id }) { anime ->
+                            items(allowedResults, key = { it.id }, contentType = { "anime_card" }) { anime ->
                                 FocusCard(
                                     anime = anime,
                                     cardWidth = cardDims.cardWidth,
@@ -1194,7 +1230,7 @@ private fun TouchHistoryStrip(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (query.isNotBlank()) {
-                    item(key = "__reset__") {
+                    item(key = "__reset__", contentType = "history_reset") {
                         val interactionSource = remember { MutableInteractionSource() }
                         val hovered by interactionSource.collectIsHoveredAsState()
                         Row(
@@ -1222,7 +1258,7 @@ private fun TouchHistoryStrip(
                     }
                 }
 
-                items(history, key = { it }) { term ->
+                items(history, key = { it }, contentType = { "history_chip" }) { term ->
                     val interactionSource = remember { MutableInteractionSource() }
                     val hovered by interactionSource.collectIsHoveredAsState()
                     Row(
@@ -1257,7 +1293,7 @@ private fun TouchHistoryStrip(
                 }
 
                 if (query.isBlank() && hasAnyHistory) {
-                    item(key = "__clear_all__") {
+                    item(key = "__clear_all__", contentType = "history_clear") {
                         val interactionSource = remember { MutableInteractionSource() }
                         val hovered by interactionSource.collectIsHoveredAsState()
                         Row(
@@ -1289,6 +1325,9 @@ private fun TouchHistoryStrip(
     }
 }
 
+private val NON_WORD_REGEX = Regex("[^\\w]+")
+private val MULTI_SPACE_REGEX = Regex(" {2,}")
+
 private fun resolveSearchFilterKey(raw: String, options: List<SearchFilterOption>): String? {
     val trimmed = raw.trim()
     if (trimmed.isEmpty()) return null
@@ -1305,8 +1344,8 @@ private fun resolveSearchFilterKey(raw: String, options: List<SearchFilterOption
 
 private fun sanitizeRemoteQuery(raw: String): String = raw
     .lowercase()
-    .replace(Regex("[^\\w]+"), " ")
-    .replace(Regex(" {2,}"), " ")
+    .replace(NON_WORD_REGEX, " ")
+    .replace(MULTI_SPACE_REGEX, " ")
 
 private fun hardwareKeyChar(key: Key): Char? = when (key) {
     Key.A -> 'a'; Key.B -> 'b'; Key.C -> 'c'; Key.D -> 'd'; Key.E -> 'e'

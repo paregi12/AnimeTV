@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.security.MessageDigest
 
 /** Uses the same Google Translate service as the original app for summaries and soft subtitles. */
@@ -43,19 +44,23 @@ class AndroidTranslationRepository(
         val cacheKey = sha256("${track.url}\n$targetLanguage")
         val outputExtension = if (extension == "srt") "vtt" else extension
         val subtitleFile = translatedSubtitleDirectory.resolve("$cacheKey.$outputExtension")
-        if (!subtitleFile.isFile || subtitleFile.length() == 0L) {
+        if (subtitleFile.isFile && subtitleFile.length() > 0L) {
+            subtitleFile.setLastModified(System.currentTimeMillis())
+        } else {
             val requestHeaders = headers + mapOf(
                 "Accept" to "text/vtt, application/x-subrip, text/plain, */*",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36"
             )
             val document = networkStack.execute(track.url, headers = requestHeaders).use { response ->
                 check(response.responseCode in 200..299) { "Subtitle request failed (${response.responseCode})" }
-                response.inputStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-                    ?: error("Subtitle response was empty")
+                response.inputStream?.use {
+                    it.readBoundedBytes(MAX_SUBTITLE_BYTES).toString(Charsets.UTF_8)
+                } ?: error("Subtitle response was empty")
             }
             val translatedDocument = translateSubtitleDocument(document, extension, targetLanguage)
                 ?: return@withContext null
             subtitleFile.writeText(translatedDocument, Charsets.UTF_8)
+            pruneSubtitleCache()
         }
         val languageLabel = SubtitleLanguageCatalog.all.firstOrNull { it.code == targetLanguage }?.label
             ?: targetLanguage
@@ -77,7 +82,7 @@ class AndroidTranslationRepository(
         if (extension == "ass" || extension == "ssa") {
             return translateAssDocument(cleanDocument, targetLanguage)
         }
-        val blocks = cleanDocument.split(Regex("\n[ \t]*\n+"))
+        val blocks = cleanDocument.split(BLANK_LINE_REGEX)
         val cueBlocks = blocks.map { block ->
             val lines = block.split('\n')
             val timestampIndex = lines.indexOfFirst { it.contains("-->") }
@@ -104,41 +109,77 @@ class AndroidTranslationRepository(
     private suspend fun translateAssDocument(document: String, targetLanguage: String): String? {
         var inEvents = false
         var format = emptyList<String>()
-        var translatedCount = 0
-        val translatedLines = document.split('\n').map { line ->
+        val rawLines = document.split('\n')
+        val parsedEntries = ArrayList<Any>(rawLines.size)
+        val dialogueEntries = ArrayList<AssDialogueEntry>()
+        for (line in rawLines) {
             val trimmed = line.trim()
             if (trimmed.startsWith("[")) {
                 inEvents = trimmed.equals("[Events]", ignoreCase = true)
-                return@map line
+                parsedEntries += line
+                continue
             }
-            if (!inEvents) return@map line
+            if (!inEvents) {
+                parsedEntries += line
+                continue
+            }
             if (trimmed.startsWith("Format:", ignoreCase = true)) {
                 format = trimmed.substringAfter(':').split(',').map { it.trim().lowercase() }
-                return@map line
+                parsedEntries += line
+                continue
             }
-            if (!trimmed.startsWith("Dialogue:", ignoreCase = true)) return@map line
+            if (!trimmed.startsWith("Dialogue:", ignoreCase = true)) {
+                parsedEntries += line
+                continue
+            }
             val colonIndex = line.indexOf(':')
             val fields = line.substring(colonIndex + 1).split(',', limit = format.size.coerceAtLeast(1)).toMutableList()
             val textIndex = format.indexOf("text").takeIf { it >= 0 } ?: fields.lastIndex
-            if (textIndex !in fields.indices) return@map line
-            fields[textIndex] = translateAssText(fields[textIndex], targetLanguage)
-            translatedCount++
-            line.substring(0, colonIndex + 1) + fields.joinToString(",")
+            if (textIndex !in fields.indices) {
+                parsedEntries += line
+                continue
+            }
+            val originalText = fields[textIndex]
+            if (ASS_TAG_REGEX.replace(originalText, "").isBlank()) {
+                parsedEntries += line
+                continue
+            }
+            val protectedTokens = mutableListOf<Pair<String, String>>()
+            val safeText = ASS_TAG_REGEX.replace(originalText) { match ->
+                val marker = "ZXQASS${protectedTokens.size}TOKENZXQ"
+                protectedTokens += marker to match.value
+                marker
+            }
+            val entry = AssDialogueEntry(
+                linePrefix = line.substring(0, colonIndex + 1),
+                fields = fields,
+                textIndex = textIndex,
+                originalText = originalText,
+                safeText = safeText,
+                protectedTokens = protectedTokens
+            )
+            parsedEntries += entry
+            dialogueEntries += entry
         }
-        if (translatedCount == 0) return null
-        return translatedLines.joinToString("\n")
-    }
+        if (dialogueEntries.isEmpty()) return null
 
-    private suspend fun translateAssText(text: String, targetLanguage: String): String {
-        val protectedTokens = mutableListOf<Pair<String, String>>()
-        val safeText = Regex("\\{[^}]*}|\\\\[Nn]").replace(text) { match ->
-            val marker = "ZXQASS${protectedTokens.size}TOKENZXQ"
-            protectedTokens += marker to match.value
-            marker
+        val translatedCaptions = translateCueCaptions(dialogueEntries.map { it.safeText }, targetLanguage)
+        dialogueEntries.forEachIndexed { index, entry ->
+            val translated = translatedCaptions[index]
+            val restored = if (entry.protectedTokens.any { (marker, _) -> !translated.contains(marker) }) {
+                entry.originalText
+            } else {
+                entry.protectedTokens.fold(translated) { value, (marker, original) -> value.replace(marker, original) }
+            }
+            entry.fields[entry.textIndex] = restored
         }
-        val translated = translateText(safeText, targetLanguage)
-        if (protectedTokens.any { (marker, _) -> !translated.contains(marker) }) return text
-        return protectedTokens.fold(translated) { value, (marker, original) -> value.replace(marker, original) }
+        return parsedEntries.joinToString("\n") { item ->
+            when (item) {
+                is String -> item
+                is AssDialogueEntry -> item.linePrefix + item.fields.joinToString(",")
+                else -> ""
+            }
+        }
     }
 
     private suspend fun translateCueCaptions(captions: List<String>, targetLanguage: String): List<String> {
@@ -197,13 +238,12 @@ class AndroidTranslationRepository(
                     )
                 ).use { response ->
                     check(response.responseCode in 200..299) { "Translation request failed (${response.responseCode})" }
-                    response.inputStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-                        ?: error("Translation response was empty")
+                    response.inputStream?.use {
+                        it.readBoundedBytes(MAX_TRANSLATION_HTML_BYTES).toString(Charsets.UTF_8)
+                    } ?: error("Translation response was empty")
                 }
-                val resultHtml = Regex(
-                    "<div[^>]*class=[\"'][^\"']*result-container[^\"']*[\"'][^>]*>(.*?)</div>",
-                    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-                ).find(page)?.groupValues?.get(1) ?: error("Translation result was missing")
+                val resultHtml = RESULT_CONTAINER_REGEX.find(page)?.groupValues?.get(1)
+                    ?: error("Translation result was missing")
                 val translated = HtmlCompat.fromHtml(resultHtml, HtmlCompat.FROM_HTML_MODE_LEGACY)
                     .toString()
                     .trim()
@@ -233,10 +273,68 @@ class AndroidTranslationRepository(
         return chunks
     }
 
-    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
+    private fun sha256(value: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+        val chars = CharArray(digest.size * 2)
+        digest.forEachIndexed { index, byte ->
+            val v = byte.toInt() and 0xFF
+            chars[index * 2] = HEX_DIGITS[v ushr 4]
+            chars[index * 2 + 1] = HEX_DIGITS[v and 0x0F]
+        }
+        return String(chars)
+    }
 
+    private fun pruneSubtitleCache() {
+        runCatching {
+            val now = System.currentTimeMillis()
+            val files = translatedSubtitleDirectory.listFiles()?.filter(File::isFile).orEmpty()
+            val kept = ArrayList<File>(files.size)
+            var totalBytes = 0L
+            for (file in files) {
+                if (now - file.lastModified() > MAX_SUBTITLE_CACHE_AGE_MS) {
+                    file.delete()
+                } else {
+                    kept += file
+                    totalBytes += file.length()
+                }
+            }
+            if (kept.size <= MAX_SUBTITLE_CACHE_FILES && totalBytes <= MAX_SUBTITLE_CACHE_BYTES) return
+            kept.sortBy(File::lastModified)
+            var remainingCount = kept.size
+            for (file in kept) {
+                if (remainingCount <= MAX_SUBTITLE_CACHE_FILES && totalBytes <= MAX_SUBTITLE_CACHE_BYTES) break
+                val size = file.length()
+                if (file.delete()) {
+                    remainingCount--
+                    totalBytes -= size
+                }
+            }
+        }
+    }
+
+    private data class AssDialogueEntry(
+        val linePrefix: String,
+        val fields: MutableList<String>,
+        val textIndex: Int,
+        val originalText: String,
+        val safeText: String,
+        val protectedTokens: List<Pair<String, String>>
+    )
     private data class CueBlock(val raw: String, val cue: CueContent?)
     private data class CueContent(val headerLines: List<String>, val caption: String)
+
+    private companion object {
+        const val MAX_SUBTITLE_BYTES = 4 * 1024 * 1024
+        const val MAX_TRANSLATION_HTML_BYTES = 2 * 1024 * 1024
+        const val MAX_SUBTITLE_CACHE_FILES = 60
+        const val MAX_SUBTITLE_CACHE_BYTES = 10L * 1024 * 1024
+        const val MAX_SUBTITLE_CACHE_AGE_MS = 7L * 24 * 60 * 60 * 1000
+        val HEX_DIGITS = "0123456789abcdef".toCharArray()
+        val BLANK_LINE_REGEX = Regex("\n[ \t]*\n+")
+        val ASS_TAG_REGEX = Regex("\\{[^}]*}|\\\\[Nn]")
+        val RESULT_CONTAINER_REGEX = Regex(
+            "<div[^>]*class=[\"'][^\"']*result-container[^\"']*[\"'][^>]*>(.*?)</div>",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+    }
 }

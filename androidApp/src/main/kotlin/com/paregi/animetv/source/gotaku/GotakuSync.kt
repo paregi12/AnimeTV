@@ -14,9 +14,11 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.paregi.animetv.AndroidGotakuCrypto
 import com.paregi.animetv.AndroidNetworkStack
+import com.paregi.animetv.readBoundedBytes
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.io.ByteArrayInputStream
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -102,8 +104,9 @@ internal class GotakuSync(private val networkStack: AndroidNetworkStack) {
             if (initialSyncBaseUrl == normalized) return
             initialSyncBaseUrl = normalized
         }
+        if (readStoredCredentials() != null) return
         Thread({
-            runCatching { sync(normalized, force = true, replaceStored = false) }
+            runCatching { sync(normalized, force = false, replaceStored = false) }
         }, "GotakuCredSync").apply {
             isDaemon = true
             start()
@@ -278,6 +281,8 @@ internal class GotakuSync(private val networkStack: AndroidNetworkStack) {
         view.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
+            loadsImagesAutomatically = false
+            blockNetworkImage = true
             allowFileAccess = false
             allowContentAccess = false
             setSupportMultipleWindows(false)
@@ -329,10 +334,10 @@ internal class GotakuSync(private val networkStack: AndroidNetworkStack) {
                 if (request == null) return null
                 val reqUrl = request.url.toString()
                 val reqHeaders: Map<String, String>? = request.requestHeaders
+                val dest = reqHeaders?.entries
+                    ?.firstOrNull { it.key.equals("Sec-Fetch-Dest", ignoreCase = true) }
+                    ?.value?.lowercase(Locale.ROOT)
                 if (!request.isForMainFrame) {
-                    val dest = reqHeaders?.entries
-                        ?.firstOrNull { it.key.equals("Sec-Fetch-Dest", ignoreCase = true) }
-                        ?.value
                     if ((dest == "iframe" || dest == "frame") && !isTrustedPageUrl(reqUrl, trustedHost)) {
                         Log.w(TAG, "Blocked untrusted frame document during sync: $reqUrl")
                         return WebResourceResponse(
@@ -343,6 +348,11 @@ internal class GotakuSync(private val networkStack: AndroidNetworkStack) {
                             emptyMap(),
                             ByteArrayInputStream(ByteArray(0)),
                         )
+                    }
+                    val path = reqUrl.substringBefore('?').substringBefore('#').lowercase(Locale.ROOT)
+                    if ((dest != null && dest in BLOCKED_FETCH_DESTS) || BLOCKED_ASSET_EXTENSIONS.any(path::endsWith)) {
+                        val mime = if (dest == "style" || path.endsWith(".css")) "text/css" else "text/plain"
+                        return WebResourceResponse(mime, "utf-8", ByteArrayInputStream(ByteArray(0)))
                     }
                 }
 
@@ -390,7 +400,7 @@ internal class GotakuSync(private val networkStack: AndroidNetworkStack) {
                 readTimeoutMs = 10_000,
             ).use { response ->
                 if (response.responseCode !in 200..299) return@use false
-                val bytes = response.inputStream?.use { it.readBytes() } ?: return@use false
+                val bytes = response.inputStream?.use { it.readBoundedBytes(4 * 1024 * 1024) } ?: return@use false
                 AndroidGotakuCrypto.decryptApi(bytes, creds.version, creds.seed, creds.info) != null
             }
         }.getOrDefault(false)
@@ -451,6 +461,11 @@ internal class GotakuSync(private val networkStack: AndroidNetworkStack) {
         const val PREF_API_VERSION_KEY = "gotaku_api_version"
         const val PREF_HKDF_INFO_KEY = "gotaku_hkdf_info"
         const val USER_AGENT = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/136.0.0.0 Mobile Safari/537.36"
+        val BLOCKED_FETCH_DESTS = setOf("image", "style", "font", "media", "audio", "video", "track", "manifest")
+        val BLOCKED_ASSET_EXTENSIONS = listOf(
+            ".css", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".ico", ".bmp", ".avif",
+            ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp4", ".webm", ".mp3", ".ogg", ".m4a"
+        )
 
         val HOOK_SCRIPT_TEMPLATE = """
             (function() {

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -34,6 +35,7 @@ class AndroidAppUpdateRepository(
     private val activityRef = WeakReference(activity)
     private val preferences = appContext.getSharedPreferences("SERVER", Context.MODE_PRIVATE)
     private val downloading = AtomicBoolean(false)
+    private val cachedPackageInfo: PackageInfo? by lazy { loadPackageInfo() }
 
     override fun currentVersionName(): String = readPackageInfo()?.versionName.orEmpty()
 
@@ -63,12 +65,11 @@ class AndroidAppUpdateRepository(
                         return@use AppUpdateCheckResult.Error("Update check failed (HTTP $status)")
                     }
                     val body = response.inputStream?.use {
-                        it.readBytes().toString(StandardCharsets.UTF_8)
+                        it.readBoundedBytes(MAX_METADATA_BYTES).toString(StandardCharsets.UTF_8)
                     }.orEmpty()
                     if (body.isBlank()) {
                         return@use AppUpdateCheckResult.Error("Update metadata response was empty")
                     }
-                    saveServerJsonIfChanged(body)
                     parseUpdateResponse(
                         body = body,
                         installedVersionCode = currentVersionCode(),
@@ -143,7 +144,9 @@ class AndroidAppUpdateRepository(
         }
     }
 
-    private fun readPackageInfo() = runCatching {
+    private fun readPackageInfo(): PackageInfo? = cachedPackageInfo
+
+    private fun loadPackageInfo(): PackageInfo? = runCatching {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             appContext.packageManager.getPackageInfo(
                 appContext.packageName,
@@ -158,13 +161,6 @@ class AndroidAppUpdateRepository(
     private fun cleanupUpdateFiles() {
         runCatching { File(appContext.filesDir, UPDATE_APK_NAME).delete() }
         runCatching { File(appContext.filesDir, UPDATE_PART_NAME).delete() }
-    }
-
-    private fun saveServerJsonIfChanged(body: String) {
-        val current = preferences.getString(PREF_SERVER_JSON, null)
-        if (current != body) {
-            preferences.edit().putString(PREF_SERVER_JSON, body).apply()
-        }
     }
 
     private fun launchApkInstaller(apkFile: File) {
@@ -213,8 +209,8 @@ class AndroidAppUpdateRepository(
     companion object {
         const val SERVER_JSON_URL =
             "https://raw.githubusercontent.com/paregi12/AnimeTV/kmp/server.json"
-        private const val PREF_SERVER_JSON = "server-json"
         private const val PREF_UPDATE_DISABLE = "update-disable"
+        private const val MAX_METADATA_BYTES = 2 * 1024 * 1024
         private const val UPDATE_APK_NAME = "update.apk"
         private const val UPDATE_PART_NAME = "update.apk.part"
         private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
